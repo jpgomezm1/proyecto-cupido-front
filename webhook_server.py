@@ -5,12 +5,26 @@ Servidor Flask para recibir webhooks de UltraMSG
 """
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import os
 import json
 from datetime import datetime
 from whatsapp_bot import WhatsAppBot
+from api_properties import api_bp
 
 app = Flask(__name__)
+
+# Habilitar CORS para permitir peticiones desde el frontend
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:8080", "http://localhost:5173", "*"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+
+# Registrar blueprint de la API
+app.register_blueprint(api_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
@@ -44,11 +58,22 @@ def home():
     return jsonify({
         'status': 'running',
         'service': 'WhatsApp Bot - TU360 Property Search',
-        'version': '1.0.0',
+        'version': '2.0.0',
         'endpoints': {
-            'webhook': '/webhook (POST)',
-            'health': '/health (GET)',
-            'test': '/test (POST)'
+            'whatsapp': {
+                'webhook': '/webhook (POST)',
+                'health': '/health (GET)',
+                'test': '/test (POST)',
+                'send': '/send (POST)',
+                'search': '/search (POST)'
+            },
+            'api': {
+                'properties': '/api/properties (GET)',
+                'property_by_slug': '/api/properties/:slug (GET)',
+                'property_images': '/api/property-images (GET)',
+                'property_images_by_id': '/api/property-images/:property_id (GET)',
+                'health': '/api/health (GET)'
+            }
         }
     })
 
