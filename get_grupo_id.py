@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Script para ayudar a obtener el ID del grupo de Cupido
+"""
+
+print("=" * 70)
+print("  🔍 OBTENER ID DEL GRUPO DE CUPIDO")
+print("=" * 70)
+print()
+print("Este script te ayudará a obtener el ID del grupo de WhatsApp.")
+print()
+print("📋 PASOS:")
+print()
+print("1. Asegúrate de que el servidor webhook esté corriendo:")
+print("   python webhook_server.py")
+print()
+print("2. Envía un mensaje cualquiera en el grupo de Cupido")
+print("   (por ejemplo: 'test')")
+print()
+print("3. Revisa la consola del servidor webhook")
+print()
+print("4. Busca una línea que muestre:")
+print("   📩 Mensaje recibido de: XXXXXXXXXX@g.us")
+print()
+print("5. Copia el número completo que termina en @g.us")
+print()
+print("6. Pégalo en el archivo .env en la línea:")
+print("   GRUPO_CUPIDO_ID=XXXXXXXXXX@g.us")
+print()
+print("=" * 70)
+print()
+print("💡 TIP: El ID del grupo tiene un formato como:")
+print("   573001234567-1234567890@g.us")
+print()
+print("=" * 70)
+print()
+input("Presiona Enter para continuar...")
