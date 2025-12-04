@@ -22,6 +22,7 @@ lxml==4.9.3
 
 # AI - Anthropic Claude
 anthropic==0.18.1
+httpx==0.24.1
 
 # Authentication
 PyJWT==2.8.0
