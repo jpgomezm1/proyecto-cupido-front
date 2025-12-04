@@ -32,10 +32,10 @@ class DatabaseManager:
         try:
             self.conn = psycopg2.connect(self.database_url)
             self.cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            print("✅ Conexión a Neon PostgreSQL establecida")
+            print("[OK] Conexion a Neon PostgreSQL establecida")
             return True
         except Exception as e:
-            print(f"❌ Error al conectar con la base de datos: {e}")
+            print(f"[ERROR] Error al conectar con la base de datos: {e}")
             return False
 
     def disconnect(self):
@@ -44,7 +44,7 @@ class DatabaseManager:
             self.cursor.close()
         if self.conn:
             self.conn.close()
-        print("🔌 Conexión cerrada")
+        print("[OK] Conexion cerrada")
 
     def create_tables(self):
         """Crea las tablas si no existen"""
@@ -62,7 +62,7 @@ class DatabaseManager:
 
     def insert_property(self, property_data):
         """
-        Inserta una propiedad en la base de datos
+        Inserta una propiedad en la base de datos (con soporte para campos AI)
 
         Args:
             property_data (dict): Diccionario con los datos de la propiedad
@@ -71,74 +71,56 @@ class DatabaseManager:
             int: ID de la propiedad insertada o None si hubo error
         """
         try:
-            query = """
-                INSERT INTO propiedades (
-                    codigo_propiedad, fuente, url,
-                    titulo, precio, precio_texto, tipo_propiedad, estado,
-                    pais, departamento, ciudad, zona, direccion_completa,
-                    latitud, longitud,
-                    area_construida, habitaciones, banos, parqueaderos,
-                    estrato, piso, ano_construccion, caracteristicas_adicionales,
-                    administracion, predial,
-                    amenidades_internas, amenidades_externas, total_amenidades,
-                    asesor, telefono, inmobiliaria,
-                    imagenes_urls, total_imagenes, imagen_principal,
-                    imagenes_hd_count, imagenes_thumb_count,
-                    descripcion, descripcion_length,
-                    fecha_extraccion
-                ) VALUES (
-                    %(codigo_propiedad)s, %(fuente)s, %(url)s,
-                    %(titulo)s, %(precio)s, %(precio_texto)s, %(tipo_propiedad)s, %(estado)s,
-                    %(pais)s, %(departamento)s, %(ciudad)s, %(zona)s, %(direccion_completa)s,
-                    %(latitud)s, %(longitud)s,
-                    %(area_construida)s, %(habitaciones)s, %(banos)s, %(parqueaderos)s,
-                    %(estrato)s, %(piso)s, %(ano_construccion)s, %(caracteristicas_adicionales)s,
-                    %(administracion)s, %(predial)s,
-                    %(amenidades_internas)s, %(amenidades_externas)s, %(total_amenidades)s,
-                    %(asesor)s, %(telefono)s, %(inmobiliaria)s,
-                    %(imagenes_urls)s, %(total_imagenes)s, %(imagen_principal)s,
-                    %(imagenes_hd_count)s, %(imagenes_thumb_count)s,
-                    %(descripcion)s, %(descripcion_length)s,
-                    %(fecha_extraccion)s
-                )
+            # Campos básicos (siempre presentes)
+            basic_fields = [
+                'codigo_propiedad', 'fuente', 'url',
+                'titulo', 'precio', 'precio_texto', 'tipo_propiedad', 'estado',
+                'pais', 'departamento', 'ciudad', 'zona', 'direccion_completa',
+                'latitud', 'longitud',
+                'area_construida', 'habitaciones', 'banos', 'parqueaderos',
+                'estrato', 'piso', 'ano_construccion', 'caracteristicas_adicionales',
+                'administracion', 'predial',
+                'amenidades_internas', 'amenidades_externas', 'total_amenidades',
+                'asesor', 'telefono', 'inmobiliaria',
+                'imagenes_urls', 'total_imagenes', 'imagen_principal',
+                'imagenes_hd_count', 'imagenes_thumb_count',
+                'descripcion', 'descripcion_length',
+                'fecha_extraccion'
+            ]
+
+            # Campos AI enriquecidos (opcionales)
+            ai_fields = [
+                'barrio_normalizado', 'distancia_metro_mas_cercano_m',
+                'puntos_interes_cercanos', 'walkability_score',
+                'precio_m2', 'precio_comparativo_zona', 'valor_rentabilidad_estimada',
+                'segmento_mercado', 'descripcion_resumida', 'keywords_extraidas',
+                'estilo_arquitectonico', 'estado_conservacion', 'target_buyer_profile',
+                'amenidades_destacadas', 'amenidades_lujo', 'amenidades_familia',
+                'amenidades_mascota_friendly', 'amenidades_seguridad',
+                'overall_quality_score', 'recommended_for', 'unique_selling_points',
+                'ventajas_competitivas', 'desventajas',
+                'ai_analysis_version', 'ai_analysis_timestamp', 'ai_confidence_score',
+                'ai_model_used', 'ai_processing_time_ms',
+                'iluminacion_natural', 'ventilacion', 'vista', 'nivel_ruido',
+                'accesibilidad_movilidad_reducida'
+            ]
+
+            # Determinar qué campos están presentes en property_data
+            available_fields = [f for f in basic_fields + ai_fields if f in property_data]
+
+            # Construir query dinámicamente
+            fields_str = ', '.join(available_fields)
+            placeholders = ', '.join([f'%({f})s' for f in available_fields])
+
+            # Construir cláusula UPDATE para ON CONFLICT
+            update_clauses = ', '.join([f'{f} = EXCLUDED.{f}' for f in available_fields if f != 'codigo_propiedad'])
+
+            query = f"""
+                INSERT INTO propiedades ({fields_str})
+                VALUES ({placeholders})
                 ON CONFLICT (codigo_propiedad)
                 DO UPDATE SET
-                    titulo = EXCLUDED.titulo,
-                    precio = EXCLUDED.precio,
-                    precio_texto = EXCLUDED.precio_texto,
-                    tipo_propiedad = EXCLUDED.tipo_propiedad,
-                    estado = EXCLUDED.estado,
-                    pais = EXCLUDED.pais,
-                    departamento = EXCLUDED.departamento,
-                    ciudad = EXCLUDED.ciudad,
-                    zona = EXCLUDED.zona,
-                    direccion_completa = EXCLUDED.direccion_completa,
-                    latitud = EXCLUDED.latitud,
-                    longitud = EXCLUDED.longitud,
-                    area_construida = EXCLUDED.area_construida,
-                    habitaciones = EXCLUDED.habitaciones,
-                    banos = EXCLUDED.banos,
-                    parqueaderos = EXCLUDED.parqueaderos,
-                    estrato = EXCLUDED.estrato,
-                    piso = EXCLUDED.piso,
-                    ano_construccion = EXCLUDED.ano_construccion,
-                    caracteristicas_adicionales = EXCLUDED.caracteristicas_adicionales,
-                    administracion = EXCLUDED.administracion,
-                    predial = EXCLUDED.predial,
-                    amenidades_internas = EXCLUDED.amenidades_internas,
-                    amenidades_externas = EXCLUDED.amenidades_externas,
-                    total_amenidades = EXCLUDED.total_amenidades,
-                    asesor = EXCLUDED.asesor,
-                    telefono = EXCLUDED.telefono,
-                    inmobiliaria = EXCLUDED.inmobiliaria,
-                    imagenes_urls = EXCLUDED.imagenes_urls,
-                    total_imagenes = EXCLUDED.total_imagenes,
-                    imagen_principal = EXCLUDED.imagen_principal,
-                    imagenes_hd_count = EXCLUDED.imagenes_hd_count,
-                    imagenes_thumb_count = EXCLUDED.imagenes_thumb_count,
-                    descripcion = EXCLUDED.descripcion,
-                    descripcion_length = EXCLUDED.descripcion_length,
-                    fecha_extraccion = EXCLUDED.fecha_extraccion,
+                    {update_clauses},
                     fecha_actualizacion = CURRENT_TIMESTAMP
                 RETURNING id;
             """
@@ -149,7 +131,9 @@ class DatabaseManager:
 
             property_id = result['id'] if result else None
             codigo = property_data.get('codigo_propiedad', 'N/A')
-            print(f"✅ Propiedad {codigo} guardada en DB (ID: {property_id})")
+            has_ai = 'ai_analysis_version' in property_data
+            emoji = "🤖" if has_ai else "✅"
+            print(f"{emoji} Propiedad {codigo} guardada en DB (ID: {property_id})")
             return property_id
 
         except psycopg2.IntegrityError as e:
@@ -159,6 +143,8 @@ class DatabaseManager:
         except Exception as e:
             self.conn.rollback()
             print(f"❌ Error al insertar propiedad: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def get_property_by_code(self, codigo_propiedad):

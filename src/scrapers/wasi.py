@@ -15,26 +15,46 @@ from datetime import datetime
 from tqdm import tqdm
 import os
 
+# Importar sistema de logging
+try:
+    from src.core.logger import get_scraper_logger
+    scraper_log = get_scraper_logger()
+except ImportError:
+    scraper_log = None
+
 
 class WasiScraper:
-    """Clase para scrapear propiedades de Wasi"""
+    """Clase para scrapear propiedades de Wasi con enriquecimiento AI"""
 
-    def __init__(self, delay=2, verbose=False):
+    def __init__(self, delay=2, verbose=False, enable_ai_enrichment=True):
         """
         Inicializa el scraper
 
         Args:
             delay (int): Segundos de espera entre requests
             verbose (bool): Modo detallado de logging
+            enable_ai_enrichment (bool): Si True, enriquece con AI
         """
         self.delay = delay
         self.verbose = verbose
+        self.enable_ai_enrichment = enable_ai_enrichment
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         self.properties_data = []
         self.errors = []
+
+        # Inicializar AI enricher si está habilitado
+        self.enricher = None
+        if self.enable_ai_enrichment:
+            try:
+                from property_ai_enricher import PropertyAIEnricher
+                self.enricher = PropertyAIEnricher(verbose=self.verbose)
+                self.log("✅ AI Enrichment activado")
+            except Exception as e:
+                self.log(f"⚠️  No se pudo activar AI Enrichment: {e}")
+                self.enable_ai_enrichment = False
 
     def log(self, message):
         """Imprime mensaje si verbose está activado"""
@@ -51,10 +71,23 @@ class WasiScraper:
         Returns:
             dict: Diccionario con toda la información extraída
         """
+        total_start = time.time()
+
+        # Iniciar tracking del scrape
+        if scraper_log:
+            scraper_log.start_scrape(url, 'Wasi')
+
         try:
             self.log(f"Obteniendo página: {url}")
+
+            # Descargar página
+            download_start = time.time()
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
+            download_elapsed = (time.time() - download_start) * 1000
+
+            if scraper_log:
+                scraper_log.log_page_download(url, response.status_code, download_elapsed)
 
             soup = BeautifulSoup(response.content, 'lxml')
 
@@ -66,45 +99,81 @@ class WasiScraper:
             }
 
             # === INFORMACIÓN BÁSICA ===
-            data.update(self._extract_basic_info(soup))
+            basic_info = self._extract_basic_info(soup)
+            data.update(basic_info)
+            if scraper_log:
+                scraper_log.log_data_extraction('titulo', basic_info.get('titulo'), bool(basic_info.get('titulo')))
+                scraper_log.log_data_extraction('precio', basic_info.get('precio'), bool(basic_info.get('precio')))
+                scraper_log.log_data_extraction('codigo_propiedad', basic_info.get('codigo_propiedad'), bool(basic_info.get('codigo_propiedad')))
 
             # === UBICACIÓN ===
-            data.update(self._extract_location(soup))
+            location = self._extract_location(soup)
+            data.update(location)
+            if scraper_log:
+                scraper_log.log_data_extraction('ciudad', location.get('ciudad'), bool(location.get('ciudad')))
+                scraper_log.log_data_extraction('zona', location.get('zona'), bool(location.get('zona')))
 
             # === CARACTERÍSTICAS FÍSICAS ===
-            data.update(self._extract_physical_features(soup))
+            features = self._extract_physical_features(soup)
+            data.update(features)
+            if scraper_log:
+                scraper_log.log_data_extraction('habitaciones', features.get('habitaciones'), features.get('habitaciones') is not None)
+                scraper_log.log_data_extraction('area_construida', features.get('area_construida'), features.get('area_construida') is not None)
 
             # === COSTOS ===
-            data.update(self._extract_costs(soup))
+            costs = self._extract_costs(soup)
+            data.update(costs)
+            if scraper_log:
+                scraper_log.log_data_extraction('administracion', costs.get('administracion'), costs.get('administracion') is not None)
 
             # === AMENIDADES ===
-            data.update(self._extract_amenities(soup))
+            amenities = self._extract_amenities(soup)
+            data.update(amenities)
+            if scraper_log:
+                scraper_log.log_data_extraction('amenidades', amenities.get('total_amenidades'), amenities.get('total_amenidades', 0) > 0)
 
             # === CONTACTO ===
-            data.update(self._extract_contact(soup))
+            contact = self._extract_contact(soup)
+            data.update(contact)
 
             # === IMÁGENES ===
-            data.update(self._extract_images(soup))
+            images = self._extract_images(soup)
+            data.update(images)
+            if scraper_log:
+                scraper_log.log_images_extracted(images.get('total_imagenes', 0), images.get('imagenes_hd_count', 0))
 
             # === DESCRIPCIÓN ===
-            data.update(self._extract_description(soup))
+            desc = self._extract_description(soup)
+            data.update(desc)
 
+            total_elapsed = (time.time() - total_start) * 1000
             self.log(f"✓ Datos extraídos exitosamente de {url}")
+
+            if scraper_log:
+                scraper_log.log_complete(data.get('codigo_propiedad', 'unknown'), total_elapsed)
+
             return data
 
         except Exception as e:
             error_msg = f"Error procesando {url}: {str(e)}"
             self.log(f"✗ {error_msg}")
             self.errors.append({'url': url, 'error': str(e), 'timestamp': datetime.now()})
+
+            if scraper_log:
+                scraper_log.log_error(str(e), 'extraction')
+
             return None
 
     def _extract_basic_info(self, soup):
         """Extrae información básica de la propiedad"""
+        from src.scrapers.utils import PropertyNormalizer
+
         data = {}
 
-        # Título
+        # Título - limpiar con AI para quitar "Venta", "Arriendo", etc.
         title_tag = soup.find('h1', class_='title') or soup.find('h1')
-        data['titulo'] = title_tag.text.strip() if title_tag else None
+        titulo_raw = title_tag.text.strip() if title_tag else None
+        data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(titulo_raw) if titulo_raw else None
 
         # Precio - usando selector correcto
         price_tag = soup.find('p', class_='pr1')
@@ -475,6 +544,8 @@ class WasiScraper:
             file_path (str): Ruta al archivo con URLs
         """
         print(f"\n🚀 Iniciando scraper de Wasi")
+        if self.enable_ai_enrichment:
+            print(f"🤖 AI Enrichment: ACTIVADO")
         print(f"📁 Leyendo URLs desde: {file_path}\n")
 
         # Leer URLs del archivo
@@ -496,6 +567,22 @@ class WasiScraper:
         print(f"\n✓ Scraping completado!")
         print(f"  • Propiedades extraídas: {len(self.properties_data)}")
         print(f"  • Errores: {len(self.errors)}")
+
+        # Enriquecer con AI si está habilitado
+        if self.enable_ai_enrichment and self.enricher and self.properties_data:
+            print(f"\n🤖 Iniciando enriquecimiento AI de {len(self.properties_data)} propiedades...")
+            print(f"⏱️  Esto puede tomar varios minutos...\n")
+
+            try:
+                enriched_properties = self.enricher.enrich_batch(
+                    self.properties_data,
+                    delay=1.0  # Delay entre llamadas a Claude
+                )
+                self.properties_data = enriched_properties
+                print(f"\n✅ Enriquecimiento AI completado!")
+            except Exception as e:
+                print(f"\n⚠️  Error en enriquecimiento AI: {e}")
+                print(f"Las propiedades se guardarán sin enriquecimiento")
 
     def save_data(self, output_dir='data', save_to_db=True):
         """

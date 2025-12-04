@@ -9,6 +9,7 @@ y encontrar propiedades que coincidan con los criterios de los agentes inmobilia
 import os
 import re
 import json
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
@@ -20,10 +21,14 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
     print("⚠️  Módulo 'anthropic' no instalado. Ejecuta: pip install anthropic")
 
-from database import DatabaseManager
+from src.db.database import DatabaseManager
+from src.core.logger import get_search_logger, log_execution_time
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Logger especializado para búsquedas
+search_log = get_search_logger()
 
 # Configuración
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
@@ -65,17 +70,17 @@ class PropertySearchAgent:
                     max_tokens=10,
                     messages=[{"role": "user", "content": "test"}]
                 )
-                print(f"✅ Usando modelo: {model}")
+                print(f"[OK] Usando modelo: {model}")
                 return model
             except anthropic.NotFoundError:
                 continue
             except Exception as e:
                 # Otros errores (rate limit, etc.) - el modelo existe
-                print(f"⚠️  Modelo {model} existe pero error: {e}")
+                print(f"[WARN] Modelo {model} existe pero error: {e}")
                 return model
 
         # Si ninguno funciona, usar el primero como fallback
-        print(f"⚠️  No se pudo detectar modelo, usando: {FALLBACK_MODELS[0]}")
+        print(f"[WARN] No se pudo detectar modelo, usando: {FALLBACK_MODELS[0]}")
         return FALLBACK_MODELS[0]
 
     def _extract_search_criteria(self, query: str) -> Dict[str, Any]:
@@ -128,6 +133,8 @@ Responde SOLO con un JSON válido, sin texto adicional."""
 Responde SOLO con el JSON de criterios."""
 
         try:
+            start_time = time.time()
+
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=1024,
@@ -148,13 +155,18 @@ Responde SOLO con el JSON de criterios."""
 
             criteria = json.loads(response_text)
 
+            elapsed_ms = (time.time() - start_time) * 1000
+            search_log.log_criteria_extraction(criteria, elapsed_ms)
+
             return criteria
 
         except json.JSONDecodeError as e:
+            search_log.log_error(f"Error al parsear JSON: {e}", "criteria_extraction")
             print(f"⚠️  Error al parsear JSON: {e}")
             print(f"Respuesta: {response_text}")
             return {}
         except Exception as e:
+            search_log.log_error(str(e), "criteria_extraction")
             print(f"❌ Error al extraer criterios: {e}")
             return {}
 
@@ -268,6 +280,7 @@ Responde SOLO con el JSON de criterios."""
     def _rank_results(self, results: List[Dict], criteria: Dict[str, Any]) -> List[Dict]:
         """
         Rankea los resultados según qué tan bien coinciden con los criterios
+        Versión mejorada que usa campos AI enriquecidos
 
         Args:
             results: Lista de propiedades encontradas
@@ -281,27 +294,82 @@ Responde SOLO con el JSON de criterios."""
             score = 0
             reasons = []
 
-            # Coincidencia de ubicación
+            # ===== SCORING BASADO EN AI ENRICHMENT =====
+
+            # 1. Overall Quality Score (base score from AI)
+            overall_quality = result.get('overall_quality_score', 50)
+            if isinstance(overall_quality, (int, float)):
+                # Usar el quality score de AI como base (normalizado a 0-20 pts)
+                score += int(overall_quality * 0.2)
+                if overall_quality >= 80:
+                    reasons.append(f"Calidad excepcional ({overall_quality}/100)")
+                elif overall_quality >= 70:
+                    reasons.append(f"Alta calidad ({overall_quality}/100)")
+
+            # 2. Target Buyer Profile Match
+            if criteria.get('target_buyer_profile'):
+                target_profiles = result.get('target_buyer_profile', [])
+                if isinstance(target_profiles, list):
+                    for profile in criteria['target_buyer_profile']:
+                        if any(profile.lower() in tp.lower() for tp in target_profiles):
+                            score += 15
+                            reasons.append(f"Ideal para: {profile}")
+                            break
+
+            # 3. Segmento de mercado adecuado
+            segmento = result.get('segmento_mercado', '')
+            if criteria.get('precio_max'):
+                precio_max = criteria['precio_max']
+                # Dar bonus si el segmento es apropiado al presupuesto
+                if precio_max >= 1_000_000_000 and segmento in ['Lujo', 'Premium']:
+                    score += 10
+                    reasons.append(f"Segmento {segmento}")
+                elif 400_000_000 <= precio_max < 1_000_000_000 and segmento in ['Premium', 'Medio-Alto']:
+                    score += 10
+                    reasons.append(f"Segmento {segmento}")
+                elif precio_max < 400_000_000 and segmento in ['Medio', 'Accesible']:
+                    score += 10
+                    reasons.append(f"Segmento {segmento}")
+
+            # ===== SCORING TRADICIONAL MEJORADO =====
+
+            # 4. Coincidencia de ubicación (ahora con barrio normalizado)
             if criteria.get('ubicaciones'):
                 zona = result.get('zona') or ''
+                barrio_norm = result.get('barrio_normalizado') or ''
                 direccion = result.get('direccion_completa') or ''
+
                 for ubicacion in criteria['ubicaciones']:
-                    if ubicacion.lower() in zona.lower() or \
-                       ubicacion.lower() in direccion.lower():
-                        score += 10
-                        reasons.append(f"Ubicación: {ubicacion}")
+                    if (ubicacion.lower() in zona.lower() or
+                        ubicacion.lower() in barrio_norm.lower() or
+                        ubicacion.lower() in direccion.lower()):
+                        score += 12
+                        reasons.append(f"Ubicación: {barrio_norm or zona}")
                         break
 
-            # Coincidencia de tipo
+            # 5. Walkability score (bonus si es alto)
+            walkability = result.get('walkability_score', 0)
+            if isinstance(walkability, (int, float)) and walkability >= 8:
+                score += 5
+                reasons.append(f"Excelente ubicación (walkability: {walkability}/10)")
+
+            # 6. Coincidencia de tipo
             if criteria.get('tipo_propiedad'):
                 tipo_prop = result.get('tipo_propiedad') or ''
                 if criteria['tipo_propiedad'].lower() in tipo_prop.lower():
                     score += 5
                     reasons.append(f"Tipo: {result.get('tipo_propiedad')}")
 
-            # Coincidencia de precio (mejor si está en el rango ideal)
+            # 7. Precio comparativo (usar análisis AI)
+            precio_comp = result.get('precio_comparativo_zona', '')
+            if 'debajo' in precio_comp.lower() or 'oportunidad' in precio_comp.lower():
+                score += 10
+                reasons.append("Excelente precio para la zona")
+            elif 'competitivo' in precio_comp.lower():
+                score += 5
+
+            # 8. Coincidencia de precio (mejor si está en el rango ideal)
             precio = result.get('precio', 0)
-            # Convertir a número si es string
             if isinstance(precio, str):
                 try:
                     precio = float(precio.replace(',', '').replace('$', '').replace(' ', ''))
@@ -315,10 +383,9 @@ Responde SOLO con el JSON de criterios."""
                 elif precio <= criteria['precio_max']:
                     score += 5
 
-            # Coincidencia de habitaciones exacta
+            # 9. Coincidencia de habitaciones exacta
             if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
                 hab = result.get('habitaciones', 0)
-                # Asegurar que sea número
                 if not isinstance(hab, (int, float)):
                     try:
                         hab = int(hab)
@@ -331,26 +398,74 @@ Responde SOLO con el JSON de criterios."""
                 elif criteria.get('habitaciones_min') and hab >= criteria['habitaciones_min']:
                     score += 3
 
-            # Coincidencia de amenidades
-            amenidades_int = result.get('amenidades_internas') or ''
-            amenidades_ext = result.get('amenidades_externas') or ''
-            amenidades_prop = (amenidades_int + ' ' + amenidades_ext).lower()
-
+            # 10. Amenidades inteligentes (usar flags de AI)
+            # Si el usuario busca para familia
             if criteria.get('amenidades_requeridas'):
                 for amenidad in criteria['amenidades_requeridas']:
+                    amenidad_lower = amenidad.lower()
+
+                    # Check AI flags
+                    if 'familia' in amenidad_lower or 'niños' in amenidad_lower or 'niño' in amenidad_lower:
+                        if result.get('amenidades_familia'):
+                            score += 10
+                            reasons.append("Ideal para familias")
+
+                    if 'mascota' in amenidad_lower or 'pet' in amenidad_lower or 'perro' in amenidad_lower:
+                        if result.get('amenidades_mascota_friendly'):
+                            score += 8
+                            reasons.append("Pet-friendly")
+
+                    if 'lujo' in amenidad_lower or 'premium' in amenidad_lower:
+                        if result.get('amenidades_lujo'):
+                            score += 8
+                            reasons.append("Amenidades de lujo")
+
+                    if 'seguridad' in amenidad_lower or 'portería' in amenidad_lower or 'vigilancia' in amenidad_lower:
+                        if result.get('amenidades_seguridad'):
+                            score += 7
+                            reasons.append("Alta seguridad")
+
+                    # Check tradicional
+                    amenidades_int = result.get('amenidades_internas') or ''
+                    amenidades_ext = result.get('amenidades_externas') or ''
+                    amenidades_prop = (amenidades_int + ' ' + amenidades_ext).lower()
+
                     if amenidad.lower() in amenidades_prop:
                         score += 6
                         reasons.append(f"Tiene: {amenidad}")
 
-            # Piso preferido
+            # 11. Piso preferido
             if criteria.get('piso'):
                 if result.get('piso') == criteria['piso']:
                     score += 8
                     reasons.append(f"Piso {criteria['piso']}")
 
-            # Más amenidades = mejor
+            # 12. Estado de conservación (bonus por excelente estado)
+            estado_cons = result.get('estado_conservacion', '')
+            if estado_cons in ['Nuevo', 'Excelente', 'A estrenar']:
+                score += 4
+                reasons.append(f"Estado: {estado_cons}")
+
+            # 13. Unique Selling Points (bonus por puntos únicos)
+            usps = result.get('unique_selling_points', [])
+            if isinstance(usps, list) and len(usps) >= 3:
+                score += 5
+                reasons.append("Características únicas")
+
+            # 14. Rentabilidad para inversionistas
+            if criteria.get('es_inversionista'):
+                rentabilidad = result.get('valor_rentabilidad_estimada', 0)
+                if isinstance(rentabilidad, (int, float)) and rentabilidad >= 4.0:
+                    score += 12
+                    reasons.append(f"Rentabilidad: {rentabilidad}%")
+
+            # 15. AI Confidence (penalizar si la confianza es muy baja)
+            ai_confidence = result.get('ai_confidence_score', 1.0)
+            if isinstance(ai_confidence, (int, float)) and ai_confidence < 0.5:
+                score = int(score * 0.9)  # Reducir 10% si confianza es baja
+
+            # 16. Más amenidades = mejor
             total_amenidades = result.get('total_amenidades', 0)
-            # Asegurar que sea número
             if not isinstance(total_amenidades, (int, float)):
                 try:
                     total_amenidades = int(total_amenidades)
@@ -444,17 +559,21 @@ Responde SOLO con el JSON de criterios."""
             print(f"⚠️  Error en búsqueda fallback: {e}")
             return []
 
-    def search(self, query: str, limit: int = 10) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 10, sender: str = None) -> Dict[str, Any]:
         """
         Búsqueda principal: procesa consulta en lenguaje natural y retorna propiedades
 
         Args:
             query: Mensaje del agente inmobiliario
             limit: Número máximo de resultados a retornar
+            sender: Teléfono del remitente (para logging)
 
         Returns:
             Diccionario con criterios, resultados y metadatos
         """
+        # Iniciar tracking de la búsqueda
+        search_id = search_log.start_search(query, sender)
+        total_start = time.time()
 
         print("=" * 80)
         print("  BÚSQUEDA INTELIGENTE DE PROPIEDADES")
@@ -469,6 +588,7 @@ Responde SOLO con el JSON de criterios."""
         criteria = self._extract_search_criteria(query)
 
         if not criteria:
+            search_log.log_error('No se pudieron extraer criterios de búsqueda', 'criteria_extraction')
             return {
                 'success': False,
                 'error': 'No se pudieron extraer criterios de búsqueda',
@@ -486,10 +606,14 @@ Responde SOLO con el JSON de criterios."""
 
         # Paso 3: Ejecutar búsqueda en DB
         try:
+            sql_start = time.time()
             with DatabaseManager() as db:
                 db.cursor.execute(sql_query, params)
                 columns = [desc[0] for desc in db.cursor.description]
                 rows = db.cursor.fetchall()
+
+                sql_elapsed = (time.time() - sql_start) * 1000
+                search_log.log_sql_query(sql_query, params, sql_elapsed)
 
                 results = []
                 for row in rows:
@@ -519,6 +643,7 @@ Responde SOLO con el JSON de criterios."""
                     print(f"📊 Búsqueda relajada encontró: {len(results)} propiedades")
 
         except Exception as e:
+            search_log.log_error(str(e), 'sql_execution')
             print(f"❌ Error en búsqueda DB: {e}")
             return {
                 'success': False,
@@ -532,8 +657,17 @@ Responde SOLO con el JSON de criterios."""
         # Paso 4: Rankear resultados
         if results:
             print("⭐ Rankeando resultados...")
+            rank_start = time.time()
             results = self._rank_results(results, criteria)
             results = results[:limit]
+
+            rank_elapsed = (time.time() - rank_start) * 1000
+            top_scores = [{'id': r.get('id'), 'score': r.get('match_score', 0)} for r in results[:5]]
+            search_log.log_ranking(top_scores, rank_elapsed)
+
+        # Log de resultados finales
+        total_elapsed = (time.time() - total_start) * 1000
+        search_log.log_results(len(results), min(len(results), limit), total_elapsed)
 
         # Paso 5: Formatear respuesta
         return {
@@ -541,7 +675,9 @@ Responde SOLO con el JSON de criterios."""
             'criteria': criteria,
             'total_found': len(results),
             'results': results,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'search_id': search_id,
+            'elapsed_ms': total_elapsed
         }
 
     def format_results_for_agent(self, search_response: Dict) -> str:

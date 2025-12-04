@@ -4,33 +4,51 @@
 Servidor Flask para recibir webhooks de UltraMSG
 """
 
+import sys
+import io
+
+# Configurar UTF-8 para evitar errores de encoding en Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import json
 from datetime import datetime
-from whatsapp_bot import WhatsAppBot
-from api_properties import api_bp
+from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
+from src.core.whatsapp_bot import WhatsAppBot
+from src.api.properties import api_bp
+from src.api.analytics import analytics_bp
+from src.api.auth import auth_bp
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# Habilitar CORS para permitir peticiones desde el frontend
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["http://localhost:8080", "http://localhost:5173", "*"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
+# Habilitar CORS para permitir peticiones desde el frontend (configuración global)
+CORS(app, origins="*", supports_credentials=False)
 
-# Registrar blueprint de la API
+# Agregar headers CORS manualmente para asegurar que funcionen
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+# Registrar blueprints de la API
 app.register_blueprint(api_bp)
+app.register_blueprint(analytics_bp)
+app.register_blueprint(auth_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
 
 # Directorio para logs de webhooks
-WEBHOOK_LOGS_DIR = "webhook_logs"
+WEBHOOK_LOGS_DIR = "logs"
 os.makedirs(WEBHOOK_LOGS_DIR, exist_ok=True)
 
 
@@ -244,6 +262,57 @@ def search():
         }), 500
 
 
+def ejecutar_validacion_propiedades():
+    """
+    Ejecuta el script de validación de propiedades
+    Se ejecuta automáticamente según VALIDACION_HORARIOS
+    """
+    print("\n🔍 Iniciando validación automática de propiedades...")
+    try:
+        from validar_propiedades_activas import PropertyValidator
+        validator = PropertyValidator()
+        validator.validar_todas_las_propiedades()
+    except Exception as e:
+        print(f"❌ Error en validación automática: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def iniciar_scheduler():
+    """
+    Inicializa el scheduler de tareas programadas
+
+    Returns:
+        BackgroundScheduler o None si está deshabilitado
+    """
+    enabled = os.getenv('VALIDACION_ENABLED', 'true').lower() == 'true'
+
+    if not enabled:
+        print("ℹ️  Validación automática deshabilitada (VALIDACION_ENABLED=false)")
+        return None
+
+    horarios = os.getenv('VALIDACION_HORARIOS', '3,15')
+    horas = [int(h.strip()) for h in horarios.split(',')]
+
+    scheduler = BackgroundScheduler()
+
+    for hora in horas:
+        scheduler.add_job(
+            func=ejecutar_validacion_propiedades,
+            trigger='cron',
+            hour=hora,
+            minute=0,
+            id=f'validacion_{hora}h',
+            name=f'Validación Propiedades {hora}:00'
+        )
+        print(f"⏰ Tarea programada: Validación de propiedades a las {hora}:00")
+
+    scheduler.start()
+    print("✅ Scheduler iniciado correctamente\n")
+
+    return scheduler
+
+
 if __name__ == '__main__':
     print("=" * 80)
     print("  🤖 WHATSAPP BOT SERVER - TU360 PROPERTY SEARCH")
@@ -265,9 +334,18 @@ if __name__ == '__main__':
     print("   • serveo.net")
     print("=" * 80 + "\n")
 
-    # Obtener puerto de variable de entorno o usar 5000 por defecto
-    port = int(os.environ.get('PORT', 5000))
+    # Inicializar scheduler de validación automática
+    scheduler = iniciar_scheduler()
+
+    # Obtener puerto de variable de entorno o usar 5050 por defecto
+    port = int(os.environ.get('PORT', 5050))
 
     # Correr servidor
     # debug=True solo para desarrollo
-    app.run(host='0.0.0.0', port=port, debug=True)
+    try:
+        app.run(host='0.0.0.0', port=port, debug=True)
+    finally:
+        # Detener scheduler al cerrar servidor
+        if scheduler:
+            scheduler.shutdown()
+            print("\n⏹️  Scheduler detenido")

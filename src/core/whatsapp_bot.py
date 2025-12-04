@@ -12,8 +12,8 @@ import re
 from typing import Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
-from busqueda_propiedades import PropertySearchAgent
-from cupido_manager import CupidoManager
+from src.core.search_agent import PropertySearchAgent
+from src.core.cupido_manager import CupidoManager
 
 load_dotenv()
 
@@ -42,9 +42,13 @@ class WhatsAppBot:
         # ID del grupo de Cupido (configurar en .env como GRUPO_CUPIDO_ID)
         self.grupo_cupido_id = os.getenv('GRUPO_CUPIDO_ID', '')
 
-        print(f"✅ WhatsApp Bot inicializado (Proyecto Cupido)")
+        # URL base del frontend (para links en WhatsApp)
+        self.frontend_url = os.getenv('FRONTEND_BASE_URL', 'http://localhost:8080')
+
+        print(f"[OK] WhatsApp Bot inicializado (Proyecto Cupido)")
         print(f"   Instance ID: {self.instance_id}")
         print(f"   Base URL: {self.base_url}")
+        print(f"   Frontend URL: {self.frontend_url}")
         if self.grupo_cupido_id:
             print(f"   Grupo Cupido: {self.grupo_cupido_id}")
 
@@ -138,8 +142,18 @@ class WhatsAppBot:
                 else:
                     msg += f"• {amenidades[i]}\n"
 
-        # URL
-        if url:
+        # URLs (frontend + original)
+        propiedad_id = prop.get('id')
+        if propiedad_id:
+            # URL del frontend (principal)
+            frontend_link = f"{self.frontend_url}/propiedades/{propiedad_id}"
+            msg += f"\n🔗 *Ver detalles completos:*\n{frontend_link}\n"
+
+            # URL original (fuente)
+            if url:
+                msg += f"\n🌐 _Fuente original:_ {url}\n"
+        elif url:
+            # Si no hay ID, solo mostrar URL original
             msg += f"\n🔗 {url}\n"
 
         return msg
@@ -450,37 +464,22 @@ class WhatsAppBot:
         )
 
         if result['success']:
-            # Enviar información de contacto para cada propiedad
+            # Enviar información de contacto unificada (siempre Hernán Ríos)
             msg_contacto = f"📞 *Información de contacto*\n\n"
 
             for seleccion in result['selecciones']:
                 propiedad = seleccion['propiedad']
-                tipo = seleccion['tipo']
                 contacto = seleccion['contacto']
                 nombre = seleccion['contacto_nombre']
 
                 titulo = propiedad.get('titulo', 'Sin título')[:40]
 
                 msg_contacto += f"🏠 *{titulo}*\n"
+                msg_contacto += f"📱 Contactar a: *{nombre}*\n"
+                msg_contacto += f"   Teléfono: {contacto}\n"
+                msg_contacto += f"   _(Asesor inmobiliario)_\n\n"
 
-                if tipo == 'captada':
-                    msg_contacto += f"📱 Contactar a: *{nombre}*\n"
-                    msg_contacto += f"   Teléfono: {contacto}\n"
-                    msg_contacto += f"   _(Propiedad captada por este agente)_\n\n"
-
-                    # Notificar al agente vendedor
-                    if self.cupido.debe_notificar_vendedor(seleccion['interaccion_id']):
-                        notif = self.cupido.generar_mensaje_notificacion_vendedor(seleccion['interaccion_id'])
-                        if notif:
-                            self.send_message(notif['destinatario'], notif['mensaje'])
-                            print(f"✉️  Notificación enviada a {notif['destinatario']}")
-
-                else:  # Pulppo
-                    msg_contacto += f"📱 Contactar a: *Pulppo*\n"
-                    msg_contacto += f"   Teléfono: {contacto}\n"
-                    msg_contacto += f"   _(Propiedad de nuestra base de datos)_\n\n"
-
-            msg_contacto += f"💡 _Coordina con ellos para hacer el proceso de visita y cierre._"
+            msg_contacto += f"💡 _Coordina con Hernán para agendar tu visita y resolver todas tus dudas._"
 
             self.send_message(sender, msg_contacto)
 
@@ -641,26 +640,15 @@ class WhatsAppBot:
                 )
 
                 if result['success']:
-                    # Si es del grupo, enviar confirmación al agente por privado
-                    if is_group_message:
-                        msg_confirm = f"✅ *Propiedad captada exitosamente*\n\n"
-                        msg_confirm += f"🏠 {result.get('titulo', 'Sin título')}\n"
-                        msg_confirm += f"📝 Código: {result.get('codigo', 'N/A')}\n\n"
-                        msg_confirm += f"La propiedad ha sido agregada al sistema y está disponible para búsquedas."
-
-                        self.send_message(sender, msg_confirm)
-
+                    # Captación exitosa - guardada en DB sin notificar al agente
+                    print(f"   ✅ Propiedad captada y guardada en DB (sin notificación)")
                     return {
                         'status': 'captacion_exitosa',
                         'propiedad_id': result['propiedad_id']
                     }
                 else:
-                    # Error en captación
-                    if is_group_message:
-                        msg_error = f"⚠️ No pude procesar la propiedad de Wasi.\n\n"
-                        msg_error += f"Error: {result.get('error', 'Desconocido')}"
-                        self.send_message(sender, msg_error)
-
+                    # Error en captación - solo registrar en logs, sin notificar
+                    print(f"   ❌ Error en captación: {result.get('error', 'Desconocido')}")
                     return {
                         'status': 'captacion_error',
                         'error': result.get('error')

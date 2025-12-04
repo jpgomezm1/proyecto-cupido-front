@@ -8,7 +8,7 @@ Maneja detección de mensajes, captación, solicitudes y trazabilidad
 import re
 import os
 from typing import Dict, List, Tuple, Optional
-from database import DatabaseManager
+from src.db.database import DatabaseManager
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,8 +26,9 @@ class CupidoManager:
         # ID del grupo de Cupido (se obtiene de la configuración)
         self.grupo_cupido_id = os.getenv('GRUPO_CUPIDO_ID', '')
 
-        # Teléfono de contacto para propiedades Pulppo
-        self.contacto_pulppo = '+573183351733'
+        # Contacto principal - Hernán Ríos (para TODAS las propiedades)
+        self.contacto_principal = '+573187771000'
+        self.nombre_contacto = 'Hernán Ríos'
 
     def _get_db(self):
         """Obtiene o crea conexión a la base de datos"""
@@ -182,7 +183,7 @@ class CupidoManager:
 
         try:
             # 1. Scrappear la propiedad de Wasi
-            from scrapper_wasi import WasiScraper
+            from src.scrapers.wasi import WasiScraper
             scraper = WasiScraper()
 
             propiedad_data = scraper.extract_property_data(url_wasi)
@@ -199,6 +200,9 @@ class CupidoManager:
             propiedad_data['origen'] = 'Wasi_Captado'
             propiedad_data['grupo_origen'] = grupo_id or self.grupo_cupido_id
             propiedad_data['contacto_responsable'] = agente_telefono
+
+            print(f"   [OK] Telefono del agente captador guardado: {agente_telefono}")
+            print(f"   [OK] Origen: Wasi_Captado | Grupo: {grupo_id or self.grupo_cupido_id}")
 
             # 3. Guardar en base de datos
             db = self._get_db()
@@ -407,15 +411,14 @@ class CupidoManager:
                         continue
 
                     # 2. Determinar teléfono del vendedor
+                    # SIEMPRE usar el contacto principal (Hernán Ríos)
+                    vendedor_telefono = self.contacto_principal
+                    vendedor_nombre = self.nombre_contacto
+
+                    # Tipo solo para tracking interno
                     if propiedad.get('origen') == 'Wasi_Captado':
-                        # Propiedad captada por otro agente
-                        vendedor_telefono = propiedad.get('agente_captador_telefono')
-                        vendedor_nombre = propiedad.get('agente_nombre') or 'Agente'
                         tipo = 'captada'
                     else:
-                        # Propiedad de Pulppo
-                        vendedor_telefono = self.contacto_pulppo
-                        vendedor_nombre = 'Pulppo'
                         tipo = 'pulppo'
 
                     # 3. Registrar interacción
