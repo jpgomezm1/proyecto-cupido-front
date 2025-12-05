@@ -465,8 +465,23 @@ class PropertyNormalizer:
         if not titulo:
             return titulo
 
-        # Palabras a quitar del inicio del título
+        # Palabras a quitar del inicio del título (orden importa - más específicos primero)
         palabras_inicio = [
+            r'^de\s+cl[aá]sico\s+',
+            r'^cl[aá]sico\s+',
+            r'^de\s+moderno\s+',
+            r'^moderno\s+',
+            r'^de\s+hermoso\s+',
+            r'^hermoso\s+',
+            r'^de\s+lindo\s+',
+            r'^lindo\s+',
+            r'^de\s+espectacular\s+',
+            r'^espectacular\s+',
+            r'^de\s+exclusivo\s+',
+            r'^exclusivo\s+',
+            r'^de\s+',
+            r'^venta\s+de\s+',
+            r'^arriendo\s+de\s+',
             r'^venta\s+',
             r'^arriendo\s+',
             r'^alquiler\s+',
@@ -481,9 +496,14 @@ class PropertyNormalizer:
 
         titulo_limpio = titulo.strip()
 
-        # Aplicar cada patrón
-        for patron in palabras_inicio:
-            titulo_limpio = re.sub(patron, '', titulo_limpio, flags=re.IGNORECASE)
+        # Aplicar cada patrón (puede necesitar múltiples pasadas)
+        for _ in range(3):  # Máximo 3 pasadas
+            titulo_anterior = titulo_limpio
+            for patron in palabras_inicio:
+                titulo_limpio = re.sub(patron, '', titulo_limpio, flags=re.IGNORECASE)
+            titulo_limpio = titulo_limpio.strip()
+            if titulo_limpio == titulo_anterior:
+                break
 
         # Capitalizar primera letra
         if titulo_limpio:

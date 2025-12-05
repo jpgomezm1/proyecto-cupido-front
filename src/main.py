@@ -23,6 +23,8 @@ from src.core.whatsapp_bot import WhatsAppBot
 from src.api.properties import api_bp
 from src.api.analytics import analytics_bp
 from src.api.auth import auth_bp
+from src.api.agents import agents_bp
+from src.api.search import search_bp
 
 load_dotenv()
 
@@ -43,6 +45,8 @@ def after_request(response):
 app.register_blueprint(api_bp)
 app.register_blueprint(analytics_bp)
 app.register_blueprint(auth_bp)
+app.register_blueprint(agents_bp)
+app.register_blueprint(search_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()

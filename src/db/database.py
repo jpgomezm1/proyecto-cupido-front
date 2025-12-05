@@ -85,7 +85,9 @@ class DatabaseManager:
                 'imagenes_urls', 'total_imagenes', 'imagen_principal',
                 'imagenes_hd_count', 'imagenes_thumb_count',
                 'descripcion', 'descripcion_length',
-                'fecha_extraccion'
+                'fecha_extraccion',
+                # Campos de captación (quién envió la propiedad)
+                'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo'
             ]
 
             # Campos AI enriquecidos (opcionales)
@@ -247,7 +249,8 @@ class DatabaseManager:
 
     def get_or_create_agente(self, telefono, nombre=None):
         """
-        Obtiene un agente por teléfono o lo crea si no existe
+        Obtiene un agente por teléfono o lo crea si no existe.
+        Si el agente existe pero no tiene nombre y se proporciona uno, lo actualiza.
 
         Args:
             telefono (str): Teléfono en formato +57...
@@ -265,6 +268,15 @@ class DatabaseManager:
             agente = self.cursor.fetchone()
 
             if agente:
+                # Si el agente existe pero no tiene nombre y se proporciona uno, actualizarlo
+                if nombre and not agente.get('nombre'):
+                    self.cursor.execute(
+                        "UPDATE agentes SET nombre = %s WHERE telefono = %s RETURNING *",
+                        (nombre, telefono)
+                    )
+                    agente = self.cursor.fetchone()
+                    self.conn.commit()
+                    print(f"✅ Agente actualizado con nombre: {telefono} -> {nombre}")
                 return agente
 
             # Si no existe, crearlo
@@ -278,7 +290,7 @@ class DatabaseManager:
             )
             agente = self.cursor.fetchone()
             self.conn.commit()
-            print(f"✅ Agente creado: {telefono}")
+            print(f"✅ Agente creado: {telefono}" + (f" ({nombre})" if nombre else ""))
             return agente
 
         except Exception as e:

@@ -55,65 +55,69 @@ def get_properties():
         # Construir query SQL
         query = """
             SELECT
-                id,
-                codigo_propiedad as slug,
-                titulo as title,
-                tipo_propiedad as type,
-                precio as price_cop,
-                ciudad as city,
-                zona as barrio,
-                zona as zone,
-                area_construida as area_m2,
-                habitaciones as bedrooms,
-                banos as bathrooms,
-                parqueaderos as parking,
-                estrato as stratum,
-                ano_construccion as age_years,
-                administracion as admin_fee_cop,
-                descripcion as description,
-                direccion_completa as address,
-                latitud as lat,
-                longitud as lng,
-                estado as condition,
-                caracteristicas_adicionales as features,
-                activa as published,
-                CASE WHEN fuente = 'Pulppo' THEN true ELSE false END as exclusive,
+                p.id,
+                p.codigo_propiedad as slug,
+                p.titulo as title,
+                p.tipo_propiedad as type,
+                p.precio as price_cop,
+                p.ciudad as city,
+                p.zona as barrio,
+                p.zona as zone,
+                p.area_construida as area_m2,
+                p.habitaciones as bedrooms,
+                p.banos as bathrooms,
+                p.parqueaderos as parking,
+                p.estrato as stratum,
+                p.ano_construccion as age_years,
+                p.administracion as admin_fee_cop,
+                p.descripcion as description,
+                p.direccion_completa as address,
+                p.latitud as lat,
+                p.longitud as lng,
+                p.estado as condition,
+                p.caracteristicas_adicionales as features,
+                p.activa as published,
+                CASE WHEN p.fuente = 'Pulppo' THEN true ELSE false END as exclusive,
                 false as featured,
-                fuente as source,
-                fecha_creacion as created_at,
-                fecha_actualizacion as updated_at
-            FROM propiedades
-            WHERE activa = TRUE
+                p.fuente as source,
+                p.fecha_creacion as created_at,
+                p.fecha_actualizacion as updated_at,
+                p.agente_captador_telefono as owner_phone,
+                p.grupo_origen as source_group,
+                a.nombre as owner_name
+            FROM propiedades p
+            LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
+            WHERE p.activa = TRUE
         """
         params = []
 
         # Solo filtrar por published si es necesario
         if not published:
-            query = query.replace("WHERE activa = TRUE", "WHERE activa = FALSE")
+            query = query.replace("WHERE p.activa = TRUE", "WHERE p.activa = FALSE")
 
         # Agregar filtros
         if city:
-            query += " AND LOWER(ciudad) = LOWER(%s)"
+            query += " AND LOWER(p.ciudad) = LOWER(%s)"
             params.append(city)
 
         if prop_type:
-            query += " AND LOWER(tipo_propiedad) = LOWER(%s)"
+            query += " AND LOWER(p.tipo_propiedad) = LOWER(%s)"
             params.append(prop_type)
 
         if min_price:
-            query += " AND precio >= %s"
+            query += " AND p.precio >= %s"
             params.append(int(min_price))
 
         if max_price:
-            query += " AND precio <= %s"
+            query += " AND p.precio <= %s"
             params.append(int(max_price))
 
         if bedrooms:
-            query += " AND habitaciones = %s"
+            query += " AND p.habitaciones = %s"
             params.append(int(bedrooms))
 
         # Ordenar y paginar
-        query += " ORDER BY fecha_creacion DESC LIMIT %s OFFSET %s"
+        query += " ORDER BY p.fecha_creacion DESC LIMIT %s OFFSET %s"
         params.extend([limit, offset])
 
         # Ejecutar query
@@ -152,6 +156,9 @@ def get_properties():
                 'source': prop.get('source'),
                 'created_at': str(prop.get('created_at')) if prop.get('created_at') else None,
                 'updated_at': str(prop.get('updated_at')) if prop.get('updated_at') else None,
+                'owner_phone': prop.get('owner_phone'),
+                'owner_name': prop.get('owner_name'),
+                'source_group': prop.get('source_group'),
             }
 
             # Convertir features de texto a JSON
@@ -208,35 +215,40 @@ def get_property_by_slug(slug: str):
 
         query = """
             SELECT
-                id,
-                codigo_propiedad as slug,
-                titulo as title,
-                tipo_propiedad as type,
-                precio as price_cop,
-                ciudad as city,
-                zona as barrio,
-                zona as zone,
-                area_construida as area_m2,
-                habitaciones as bedrooms,
-                banos as bathrooms,
-                parqueaderos as parking,
-                estrato as stratum,
-                ano_construccion as age_years,
-                administracion as admin_fee_cop,
-                descripcion as description,
-                direccion_completa as address,
-                latitud as lat,
-                longitud as lng,
-                estado as condition,
-                caracteristicas_adicionales as features,
-                activa as published,
-                CASE WHEN fuente = 'Pulppo' THEN true ELSE false END as exclusive,
+                p.id,
+                p.codigo_propiedad as slug,
+                p.titulo as title,
+                p.tipo_propiedad as type,
+                p.precio as price_cop,
+                p.ciudad as city,
+                p.zona as barrio,
+                p.zona as zone,
+                p.area_construida as area_m2,
+                p.habitaciones as bedrooms,
+                p.banos as bathrooms,
+                p.parqueaderos as parking,
+                p.estrato as stratum,
+                p.ano_construccion as age_years,
+                p.administracion as admin_fee_cop,
+                p.descripcion as description,
+                p.direccion_completa as address,
+                p.latitud as lat,
+                p.longitud as lng,
+                p.estado as condition,
+                p.caracteristicas_adicionales as features,
+                p.activa as published,
+                CASE WHEN p.fuente = 'Pulppo' THEN true ELSE false END as exclusive,
                 false as featured,
-                fuente as source,
-                fecha_creacion as created_at,
-                fecha_actualizacion as updated_at
-            FROM propiedades
-            WHERE codigo_propiedad = %s AND activa = true
+                p.fuente as source,
+                p.url as source_url,
+                p.fecha_creacion as created_at,
+                p.fecha_actualizacion as updated_at,
+                p.agente_captador_telefono as owner_phone,
+                p.grupo_origen as source_group,
+                a.nombre as owner_name
+            FROM propiedades p
+            LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
+            WHERE p.codigo_propiedad = %s AND p.activa = true
         """
 
         db.cursor.execute(query, (slug,))
@@ -276,8 +288,12 @@ def get_property_by_slug(slug: str):
             'exclusive': prop.get('exclusive'),
             'featured': prop.get('featured'),
             'source': prop.get('source'),
+            'source_url': prop.get('source_url'),
             'created_at': str(prop.get('created_at')) if prop.get('created_at') else None,
             'updated_at': str(prop.get('updated_at')) if prop.get('updated_at') else None,
+            'owner_phone': prop.get('owner_phone'),
+            'owner_name': prop.get('owner_name'),
+            'source_group': prop.get('source_group'),
         }
 
         # Convertir features
@@ -934,3 +950,282 @@ def scrape_tu360():
     finally:
         if db:
             db.disconnect()
+
+
+@api_bp.route('/properties/<slug>/similar', methods=['GET'])
+def get_similar_properties(slug: str):
+    """
+    GET /api/properties/:slug/similar
+
+    Obtiene propiedades similares a la propiedad especificada
+    Criterios de similitud:
+    - Misma ciudad
+    - Rango de precio similar (+/- 30%)
+    - Mismo tipo de propiedad
+    - Numero similar de habitaciones (+/- 1)
+
+    Query params:
+    - limit: int (default: 6)
+    """
+    db = None
+    try:
+        db = get_db()
+        limit = int(request.args.get('limit', 6))
+
+        # Primero obtener la propiedad de referencia
+        db.cursor.execute("""
+            SELECT id, ciudad, precio, tipo_propiedad, habitaciones, zona
+            FROM propiedades
+            WHERE codigo_propiedad = %s AND activa = true
+        """, (slug,))
+
+        ref_prop = db.cursor.fetchone()
+
+        if not ref_prop:
+            return jsonify({
+                'success': False,
+                'error': 'Property not found'
+            }), 404
+
+        ref_id = ref_prop['id']
+        ref_city = ref_prop['ciudad']
+        ref_price = ref_prop['precio'] or 0
+        ref_type = ref_prop['tipo_propiedad']
+        ref_bedrooms = ref_prop['habitaciones'] or 0
+        ref_zone = ref_prop['zona']
+
+        # Calcular rango de precio (+/- 30%)
+        price_min = ref_price * 0.7
+        price_max = ref_price * 1.3
+
+        # Buscar propiedades similares
+        query = """
+            SELECT
+                p.id,
+                p.codigo_propiedad as slug,
+                p.titulo as title,
+                p.tipo_propiedad as type,
+                p.precio as price_cop,
+                p.ciudad as city,
+                p.zona as barrio,
+                p.area_construida as area_m2,
+                p.habitaciones as bedrooms,
+                p.banos as bathrooms,
+                p.parqueaderos as parking,
+                p.imagen_principal as cover_image,
+                p.fuente as source
+            FROM propiedades p
+            WHERE p.activa = true
+            AND p.id != %s
+            AND (
+                -- Priorizar misma ciudad y tipo
+                (p.ciudad = %s AND p.tipo_propiedad = %s)
+                OR
+                -- O misma zona
+                (p.zona = %s AND p.zona IS NOT NULL AND p.zona != '')
+                OR
+                -- O precio similar en misma ciudad
+                (p.ciudad = %s AND p.precio BETWEEN %s AND %s)
+            )
+            ORDER BY
+                -- Ordenar por relevancia
+                CASE
+                    WHEN p.ciudad = %s AND p.tipo_propiedad = %s AND p.precio BETWEEN %s AND %s THEN 1
+                    WHEN p.zona = %s THEN 2
+                    WHEN p.ciudad = %s AND p.tipo_propiedad = %s THEN 3
+                    WHEN p.ciudad = %s AND p.precio BETWEEN %s AND %s THEN 4
+                    ELSE 5
+                END,
+                ABS(p.precio - %s) ASC
+            LIMIT %s
+        """
+
+        params = [
+            ref_id,
+            ref_city, ref_type,  # Misma ciudad y tipo
+            ref_zone,  # Misma zona
+            ref_city, price_min, price_max,  # Precio similar
+            # ORDER BY params
+            ref_city, ref_type, price_min, price_max,  # Caso 1
+            ref_zone,  # Caso 2
+            ref_city, ref_type,  # Caso 3
+            ref_city, price_min, price_max,  # Caso 4
+            ref_price,  # ABS
+            limit
+        ]
+
+        db.cursor.execute(query, tuple(params))
+        similar_props = db.cursor.fetchall()
+
+        properties_list = []
+        for prop in similar_props:
+            prop_dict = {
+                'id': prop.get('id'),
+                'slug': prop.get('slug'),
+                'title': prop.get('title'),
+                'type': prop.get('type'),
+                'price_cop': prop.get('price_cop'),
+                'city': prop.get('city'),
+                'barrio': prop.get('barrio'),
+                'area_m2': float(prop.get('area_m2')) if prop.get('area_m2') else None,
+                'bedrooms': prop.get('bedrooms'),
+                'bathrooms': prop.get('bathrooms'),
+                'parking': prop.get('parking'),
+                'cover_image': prop.get('cover_image'),
+                'source': prop.get('source'),
+            }
+            properties_list.append(prop_dict)
+
+        return jsonify({
+            'success': True,
+            'data': properties_list,
+            'count': len(properties_list)
+        }), 200
+
+    except Exception as e:
+        print(f"Error en get_similar_properties: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
+@api_bp.route('/improve-description', methods=['POST'])
+def improve_description():
+    """
+    POST /api/improve-description
+
+    Usa Claude AI para mejorar la descripción de una propiedad
+    haciéndola más clara, organizada y profesional.
+
+    Body:
+    {
+        "description": "texto de descripción original...",
+        "property_info": {  // opcional, para contexto
+            "title": "...",
+            "type": "Apartamento",
+            "city": "Medellín",
+            "bedrooms": 3,
+            "bathrooms": 2,
+            "area_m2": 81.73,
+            "price_cop": 650000000
+        }
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "improved_description": "texto mejorado...",
+            "highlights": ["highlight1", "highlight2", ...]
+        }
+    }
+    """
+    try:
+        import anthropic
+        import os
+
+        data = request.get_json()
+        if not data or 'description' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'description is required'
+            }), 400
+
+        original_description = data['description']
+        property_info = data.get('property_info', {})
+
+        # Si la descripción es muy corta, no vale la pena procesarla
+        if len(original_description) < 50:
+            return jsonify({
+                'success': True,
+                'data': {
+                    'improved_description': original_description,
+                    'highlights': []
+                }
+            }), 200
+
+        # Construir contexto de la propiedad
+        context_parts = []
+        if property_info.get('type'):
+            context_parts.append(f"Tipo: {property_info['type']}")
+        if property_info.get('city'):
+            context_parts.append(f"Ciudad: {property_info['city']}")
+        if property_info.get('bedrooms'):
+            context_parts.append(f"Habitaciones: {property_info['bedrooms']}")
+        if property_info.get('bathrooms'):
+            context_parts.append(f"Baños: {property_info['bathrooms']}")
+        if property_info.get('area_m2'):
+            context_parts.append(f"Área: {property_info['area_m2']} m²")
+
+        context = ", ".join(context_parts) if context_parts else "Sin contexto adicional"
+
+        # Crear cliente de Anthropic
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+        prompt = f"""Eres un experto en marketing inmobiliario. Tu tarea es tomar una descripción de propiedad que viene de un portal inmobiliario (usualmente desordenada, con información repetida y mal estructurada) y convertirla en una descripción profesional, clara y atractiva.
+
+INFORMACIÓN DE LA PROPIEDAD:
+{context}
+
+DESCRIPCIÓN ORIGINAL:
+{original_description}
+
+INSTRUCCIONES:
+1. Elimina información redundante o repetida
+2. NO incluyas información que ya está en otros campos (precio, área, habitaciones, baños, etc.) - eso ya se muestra por separado
+3. Organiza la información de forma lógica y fluida
+4. Usa un tono profesional pero cálido
+5. Destaca los puntos más atractivos de la propiedad
+6. Mantén la descripción concisa (máximo 3-4 párrafos)
+7. NO inventes información que no esté en la descripción original
+8. Si hay amenidades del conjunto/edificio, menciónalas de forma organizada
+9. Escribe en español
+
+Responde SOLO con un JSON válido en este formato exacto (sin markdown, sin ```):
+{{"improved_description": "La descripción mejorada aquí...", "highlights": ["punto destacado 1", "punto destacado 2", "punto destacado 3"]}}
+
+Los highlights deben ser 3-5 características únicas y atractivas de la propiedad (no información genérica como "tiene baños")."""
+
+        message = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        response_text = message.content[0].text.strip()
+
+        # Intentar parsear JSON
+        import json
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            # Si falla el parsing, usar la descripción original
+            print(f"[API] Error parsing AI response: {response_text[:200]}")
+            result = {
+                'improved_description': original_description,
+                'highlights': []
+            }
+
+        return jsonify({
+            'success': True,
+            'data': result
+        }), 200
+
+    except Exception as e:
+        print(f"Error en improve_description: {str(e)}")
+        traceback.print_exc()
+        # En caso de error, devolver descripción original
+        return jsonify({
+            'success': True,
+            'data': {
+                'improved_description': data.get('description', ''),
+                'highlights': []
+            }
+        }), 200

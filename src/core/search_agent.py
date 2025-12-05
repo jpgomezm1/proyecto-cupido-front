@@ -183,7 +183,7 @@ Responde SOLO con el JSON de criterios."""
 
         base_query = """
         SELECT
-            id, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
+            id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
             tipo_propiedad, estado, ciudad, zona, direccion_completa,
             area_construida, habitaciones, banos, parqueaderos, estrato, piso,
             ano_construccion, administracion, predial,
@@ -197,24 +197,33 @@ Responde SOLO con el JSON de criterios."""
         conditions = []
         params = {}
 
-        # Filtro por ubicaciones (zonas, dirección o título)
+        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
         if criteria.get('ubicaciones'):
             ubicaciones = criteria['ubicaciones']
             zona_conditions = []
             for i, ubicacion in enumerate(ubicaciones):
-                # Buscar en zona, dirección Y título (para propiedades captadas de Wasi)
+                # Buscar en zona, ciudad, dirección Y título (más flexible)
                 zona_conditions.append(
                     f"(zona ILIKE %(ubicacion_{i})s OR "
+                    f"ciudad ILIKE %(ubicacion_{i})s OR "
                     f"direccion_completa ILIKE %(ubicacion_{i})s OR "
                     f"titulo ILIKE %(ubicacion_{i})s)"
                 )
                 params[f'ubicacion_{i}'] = f'%{ubicacion}%'
             conditions.append(f"({' OR '.join(zona_conditions)})")
 
-        # Filtro por tipo de propiedad
+        # Filtro por tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
-            conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
-            params['tipo_propiedad'] = f"%{criteria['tipo_propiedad']}%"
+            tipos = criteria['tipo_propiedad']
+            if isinstance(tipos, list):
+                tipo_conditions = []
+                for i, tipo in enumerate(tipos):
+                    tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_{i})s")
+                    params[f'tipo_{i}'] = f'%{tipo}%'
+                conditions.append(f"({' OR '.join(tipo_conditions)})")
+            else:
+                conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
+                params['tipo_propiedad'] = f"%{tipos}%"
 
         # Filtro por rango de precio
         if criteria.get('precio_min'):
@@ -487,13 +496,13 @@ Responde SOLO con el JSON de criterios."""
     def _fallback_search(self, criteria: Dict[str, Any], db: DatabaseManager) -> List[Dict]:
         """
         Búsqueda relajada si la búsqueda principal no retorna resultados
-        Usa solo los criterios más importantes (ubicación, tipo, precio)
+        Intenta primero con ubicación relajada, luego sin ubicación si no hay resultados
         """
 
-        # Construir query relajada - solo criterios esenciales
+        # Construir query relajada - usa id como slug para links compartibles
         base_query = """
         SELECT
-            id, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
+            id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
             tipo_propiedad, estado, ciudad, zona, direccion_completa,
             area_construida, habitaciones, banos, parqueaderos, estrato, piso,
             ano_construccion, administracion, predial,
@@ -507,22 +516,127 @@ Responde SOLO con el JSON de criterios."""
         conditions = []
         params = {}
 
-        # Solo tipo de propiedad (si existe)
-        if criteria.get('tipo_propiedad'):
-            conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
-            params['tipo_propiedad'] = f"%{criteria['tipo_propiedad']}%"
+        # PRIMERO: Intentar con ubicación relajada (buscar ciudad en lugar de zona específica)
+        # Mapeo de zonas/barrios a ciudades para búsqueda relajada
+        zona_ciudad_map = {
+            # Sabaneta
+            'sabaneta': 'Sabaneta',
+            'rodeo alto': 'Sabaneta',
+            'suramerica': 'Sabaneta',
+            'mayorca': 'Sabaneta',
+            # Envigado
+            'envigado': 'Envigado',
+            'zuñiga': 'Envigado',
+            'la paz': 'Envigado',
+            # Itagüí
+            'itagui': 'Itagüí',
+            'itagüí': 'Itagüí',
+            # Bello
+            'bello': 'Bello',
+            'bello horizonte': 'Bello',
+            'niquia': 'Bello',
+            # La Estrella
+            'la estrella': 'La Estrella',
+            # Caldas
+            'caldas': 'Caldas',
+            # Medellín - Barrios populares
+            'poblado': 'Medellín',
+            'laureles': 'Medellín',
+            'belen': 'Medellín',
+            'belén': 'Medellín',
+            'calasanz': 'Medellín',
+            'robledo': 'Medellín',
+            'floresta': 'Medellín',
+            'estadio': 'Medellín',
+            'conquistadores': 'Medellín',
+            'suramericana': 'Medellín',
+            'carlos e restrepo': 'Medellín',
+            'san javier': 'Medellín',
+            'la america': 'Medellín',
+            'la américa': 'Medellín',
+            'simon bolivar': 'Medellín',
+            'simón bolívar': 'Medellín',
+            'alfonso lopez': 'Medellín',
+            'alfonso lópez': 'Medellín',
+            'francisco antonio zea': 'Medellín',
+            'san german': 'Medellín',
+            'san germán': 'Medellín',
+            'gratamira': 'Medellín',
+            'aranjuez': 'Medellín',
+            'manrique': 'Medellín',
+            'campo valdes': 'Medellín',
+            'campo valdés': 'Medellín',
+            'boston': 'Medellín',
+            'buenos aires': 'Medellín',
+            'guayabal': 'Medellín',
+            'trinidad': 'Medellín',
+            'prado': 'Medellín',
+            'centro': 'Medellín',
+            'castilla': 'Medellín',
+            'doce de octubre': 'Medellín',
+            '12 de octubre': 'Medellín',
+            'pedregal': 'Medellín',
+            'santa monica': 'Medellín',
+            'santa mónica': 'Medellín',
+        }
 
-        # Solo precio máximo (si existe) - relajado al 150%
+        # Si hay ubicaciones, buscar en ciudad correspondiente
+        if criteria.get('ubicaciones'):
+            ciudades_buscar = set()
+            zonas_originales = []
+
+            for ubicacion in criteria['ubicaciones']:
+                ubicacion_lower = ubicacion.lower()
+                zonas_originales.append(ubicacion)
+
+                # Buscar la ciudad correspondiente
+                for zona_key, ciudad in zona_ciudad_map.items():
+                    if zona_key in ubicacion_lower:
+                        ciudades_buscar.add(ciudad)
+                        break
+
+            # Si encontramos ciudades, buscar por ciudad O por zona original (más flexible)
+            if ciudades_buscar:
+                location_conditions = []
+
+                # Buscar por ciudad
+                for i, ciudad in enumerate(ciudades_buscar):
+                    location_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
+                    params[f'ciudad_{i}'] = f'%{ciudad}%'
+
+                # También buscar por zona/título original (por si está escrito diferente)
+                for i, zona in enumerate(zonas_originales):
+                    location_conditions.append(
+                        f"(zona ILIKE %(zona_orig_{i})s OR titulo ILIKE %(zona_orig_{i})s)"
+                    )
+                    params[f'zona_orig_{i}'] = f'%{zona}%'
+
+                conditions.append(f"({' OR '.join(location_conditions)})")
+
+        # Tipo de propiedad (puede ser string o lista)
+        if criteria.get('tipo_propiedad'):
+            tipos = criteria['tipo_propiedad']
+            if isinstance(tipos, list):
+                tipo_conditions = []
+                for i, tipo in enumerate(tipos):
+                    tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_fb_{i})s")
+                    params[f'tipo_fb_{i}'] = f'%{tipo}%'
+                conditions.append(f"({' OR '.join(tipo_conditions)})")
+            else:
+                conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
+                params['tipo_propiedad'] = f"%{tipos}%"
+
+        # Precio máximo relajado al 130% (no tan amplio como antes)
         if criteria.get('precio_max'):
             conditions.append("precio <= %(precio_max_relajado)s")
-            params['precio_max_relajado'] = criteria['precio_max'] * 1.5
+            params['precio_max_relajado'] = criteria['precio_max'] * 1.3
 
-        # Solo habitaciones mínimas (si existe) - acepta 1 menos
+        # Habitaciones mínimas relajadas (acepta 1 menos)
         if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
             conditions.append("habitaciones >= %(habitaciones_min_relajado)s")
             params['habitaciones_min_relajado'] = criteria['habitaciones_min'] - 1
 
-        # Si no hay condiciones, buscar todo del tipo
+        # Agregar condiciones
         if conditions:
             base_query += " AND " + " AND ".join(conditions)
 
@@ -557,6 +671,116 @@ Responde SOLO con el JSON de criterios."""
 
         except Exception as e:
             print(f"⚠️  Error en búsqueda fallback: {e}")
+            return []
+
+    def _minimal_fallback_search(self, criteria: Dict[str, Any], db: DatabaseManager) -> List[Dict]:
+        """
+        Búsqueda mínima: solo tipo de propiedad + ciudad
+        Ignora precio, habitaciones y amenidades
+        Sirve para verificar si hay ALGUNA propiedad disponible en la zona
+        """
+        base_query = """
+        SELECT
+            id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
+            tipo_propiedad, estado, ciudad, zona, direccion_completa,
+            area_construida, habitaciones, banos, parqueaderos, estrato, piso,
+            ano_construccion, administracion, predial,
+            amenidades_internas, amenidades_externas, total_amenidades,
+            asesor, telefono, inmobiliaria, imagen_principal, total_imagenes,
+            descripcion, fecha_creacion
+        FROM propiedades
+        WHERE activa = TRUE
+        """
+
+        conditions = []
+        params = {}
+
+        # Solo tipo de propiedad (puede ser lista)
+        if criteria.get('tipo_propiedad'):
+            tipos = criteria['tipo_propiedad']
+            if isinstance(tipos, list):
+                tipo_conditions = []
+                for i, tipo in enumerate(tipos):
+                    tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_min_{i})s")
+                    params[f'tipo_min_{i}'] = f'%{tipo}%'
+                conditions.append(f"({' OR '.join(tipo_conditions)})")
+            else:
+                conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
+                params['tipo_propiedad'] = f"%{tipos}%"
+
+        # Buscar en TODAS las ciudades mencionadas (usando el mapeo expandido)
+        zona_ciudad_map = {
+            'calasanz': 'Medellín', 'robledo': 'Medellín', 'floresta': 'Medellín',
+            'bello horizonte': 'Bello', 'bello': 'Bello', 'alfonso lopez': 'Medellín',
+            'alfonso lópez': 'Medellín', 'francisco antonio zea': 'Medellín',
+            'san german': 'Medellín', 'san germán': 'Medellín', 'gratamira': 'Medellín',
+            'laureles': 'Medellín', 'poblado': 'Medellín', 'envigado': 'Envigado',
+            'sabaneta': 'Sabaneta', 'itagui': 'Itagüí', 'itagüí': 'Itagüí',
+        }
+
+        if criteria.get('ubicaciones'):
+            ciudades_buscar = set()
+            zonas_originales = []
+
+            for ubicacion in criteria['ubicaciones']:
+                ubicacion_lower = ubicacion.lower()
+                zonas_originales.append(ubicacion)
+
+                # Buscar la ciudad correspondiente
+                for zona_key, ciudad in zona_ciudad_map.items():
+                    if zona_key in ubicacion_lower:
+                        ciudades_buscar.add(ciudad)
+                        break
+
+            if ciudades_buscar or zonas_originales:
+                location_conditions = []
+
+                # Buscar por ciudad
+                for i, ciudad in enumerate(ciudades_buscar):
+                    location_conditions.append(f"ciudad ILIKE %(ciudad_min_{i})s")
+                    params[f'ciudad_min_{i}'] = f'%{ciudad}%'
+
+                # También buscar por zona/título original
+                for i, zona in enumerate(zonas_originales):
+                    location_conditions.append(
+                        f"(zona ILIKE %(zona_min_{i})s OR titulo ILIKE %(zona_min_{i})s)"
+                    )
+                    params[f'zona_min_{i}'] = f'%{zona}%'
+
+                if location_conditions:
+                    conditions.append(f"({' OR '.join(location_conditions)})")
+
+        # Si no hay ninguna condición, buscar todo
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+
+        base_query += " ORDER BY precio ASC LIMIT 10"
+
+        try:
+            db.cursor.execute(base_query, params)
+            columns = [desc[0] for desc in db.cursor.description]
+            rows = db.cursor.fetchall()
+
+            results = []
+            for row in rows:
+                if isinstance(row, dict):
+                    prop = dict(row)
+                else:
+                    prop = dict(zip(columns, row))
+
+                for key, value in prop.items():
+                    if hasattr(value, 'isoformat'):
+                        prop[key] = value.isoformat()
+                    elif isinstance(value, (int, float, str, bool, type(None))):
+                        continue
+                    else:
+                        prop[key] = str(value)
+                results.append(prop)
+
+            return results
+
+        except Exception as e:
+            print(f"⚠️  Error en búsqueda mínima: {e}")
             return []
 
     def search(self, query: str, limit: int = 10, sender: str = None) -> Dict[str, Any]:
@@ -641,6 +865,12 @@ Responde SOLO con el JSON de criterios."""
                     print("⚠️  Sin resultados con todos los criterios. Intentando búsqueda relajada...")
                     results = self._fallback_search(criteria, db)
                     print(f"📊 Búsqueda relajada encontró: {len(results)} propiedades")
+
+                    # Si aún no hay resultados, buscar solo por tipo y ciudad (ignorar precio/habitaciones)
+                    if len(results) == 0:
+                        print("⚠️  Intentando búsqueda mínima (solo tipo + ubicación)...")
+                        results = self._minimal_fallback_search(criteria, db)
+                        print(f"📊 Búsqueda mínima encontró: {len(results)} propiedades")
 
         except Exception as e:
             search_log.log_error(str(e), 'sql_execution')

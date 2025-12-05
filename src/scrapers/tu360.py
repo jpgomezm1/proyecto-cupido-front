@@ -233,56 +233,65 @@ class Tu360Scraper:
             agente_telefono = PropertyNormalizer.validar_telefono(agente_telefono_raw) or agente_telefono_raw
             agente_email = contact.get('agent', {}).get('email', '')
 
-            # Construir objeto de datos normalizados
+            # Construir imágenes como string separado por |
+            imagenes_urls_str = '|'.join([img['url'] for img in imagenes]) if imagenes else None
+
+            # Amenidades como string
+            amenidades_str = ', '.join(amenidades) if amenidades else None
+
+            # Construir objeto de datos normalizados (compatible con esquema DB)
             datos_normalizados = {
                 # Identificación
                 'fuente': 'Tu360_Captado',
                 'codigo_propiedad': codigo_interno or codigo_mongo,
-                'url_original': url,
+                'url': url,  # Campo esperado por la DB
 
                 # Información básica
                 'titulo': titulo,
                 'descripcion': descripcion,
+                'descripcion_length': len(descripcion) if descripcion else 0,
                 'tipo_propiedad': tipo_propiedad,
-                'tipo_negocio': tipo_negocio,
+                'estado': 'Usado',  # Default
 
                 # Precio
                 'precio': precio,
-                'precio_formateado': precio_formateado,
-                'moneda': price_info.get('currency', 'COP'),
+                'precio_texto': precio_formateado,
 
                 # Ubicación
-                'ciudad': ciudad,
+                'pais': 'Colombia',
                 'departamento': departamento,
-                'barrio': barrio,
-                'direccion': direccion,
+                'ciudad': ciudad,
+                'zona': barrio,  # zona es el campo esperado por la DB
+                'direccion_completa': direccion,
                 'latitud': address.get('coordinates', [None, None])[1],
                 'longitud': address.get('coordinates', [None, None])[0],
 
                 # Características
                 'habitaciones': habitaciones,
                 'banos': banos,
-                'area_m2': int(area_total) if area_total else int(area_construida),
-                'area_construida': int(area_construida) if area_construida else None,
+                'area_construida': int(area_construida) if area_construida else (int(area_total) if area_total else None),
                 'parqueaderos': parqueaderos,
                 'piso': piso,
-                'antiguedad': antiguedad,
+                'ano_construccion': (datetime.now().year - antiguedad) if antiguedad else None,
 
                 # Imágenes
-                'imagenes': imagenes,
+                'imagenes_urls': imagenes_urls_str,
+                'total_imagenes': len(imagenes),
                 'imagen_principal': imagenes[0]['url'] if imagenes else None,
+                'imagenes_hd_count': len(imagenes),
+                'imagenes_thumb_count': 0,
 
                 # Amenidades
-                'amenidades': amenidades,
-                'caracteristicas_adicionales': amenidades,
+                'caracteristicas_adicionales': amenidades_str,
+                'total_amenidades': len(amenidades),
 
                 # Contacto
-                'contacto_nombre': agente_nombre,
-                'contacto_telefono': agente_telefono,
-                'contacto_email': agente_email,
+                'asesor': agente_nombre,
+                'telefono': agente_telefono,
+                'inmobiliaria': 'Tu360Inmobiliario',
 
                 # Metadata
-                'fecha_scraping': datetime.now().isoformat(),
+                'fecha_extraccion': datetime.now().isoformat(),
                 'activa': True,
             }
 

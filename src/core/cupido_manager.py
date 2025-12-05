@@ -58,14 +58,14 @@ class CupidoManager:
 
         Returns:
             dict: {
-                'tipo': str,  # 'solicitud_mercado', 'captacion_wasi', 'chat_normal', 'comando'
+                'tipo': str,  # 'solicitud_mercado', 'captacion_wasi', 'captacion_tu360', 'chat_normal', 'comando'
                 'confianza': float,  # 0.0 - 1.0
                 'data': dict  # Datos adicionales según el tipo
             }
         """
         mensaje_lower = mensaje.lower().strip()
 
-        # 1. Detectar si es captación (tiene link de Wasi)
+        # 1. Detectar si es captación de Wasi (tiene link de Wasi)
         wasi_link = self._extraer_link_wasi(mensaje)
         if wasi_link:
             return {
@@ -77,7 +77,19 @@ class CupidoManager:
                 }
             }
 
-        # 2. Detectar si es solicitud de mercado (búsqueda de propiedad)
+        # 2. Detectar si es captación de Tu360 (tiene link de Tu360)
+        tu360_link = self._extraer_link_tu360(mensaje)
+        if tu360_link:
+            return {
+                'tipo': 'captacion_tu360',
+                'confianza': 1.0,
+                'data': {
+                    'url': tu360_link,
+                    'mensaje_completo': mensaje
+                }
+            }
+
+        # 3. Detectar si es solicitud de mercado (búsqueda de propiedad)
         if self._es_solicitud_mercado(mensaje):
             return {
                 'tipo': 'solicitud_mercado',
@@ -87,7 +99,7 @@ class CupidoManager:
                 }
             }
 
-        # 3. Si no es ninguno de los anteriores, es chat normal
+        # 4. Si no es ninguno de los anteriores, es chat normal
         return {
             'tipo': 'chat_normal',
             'confianza': 0.5,
@@ -122,6 +134,34 @@ class CupidoManager:
 
         return None
 
+    def _extraer_link_tu360(self, mensaje: str) -> Optional[str]:
+        """
+        Extrae link de Tu360 del mensaje
+
+        Args:
+            mensaje (str): Mensaje completo
+
+        Returns:
+            str: URL de Tu360 o None
+        """
+        # Patrones de URLs de Tu360
+        patterns = [
+            r'https?://[a-zA-Z0-9.-]*tu360inmobiliario-pulppo\.com[^\s]*',
+            r'https?://asesor\.tu360inmobiliario-pulppo\.com[^\s]*',
+            r'tu360inmobiliario-pulppo\.com/property/[^\s]*'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, mensaje, re.IGNORECASE)
+            if match:
+                url = match.group(0)
+                # Asegurar que tenga https://
+                if not url.startswith('http'):
+                    url = 'https://' + url
+                return url
+
+        return None
+
     def _es_solicitud_mercado(self, mensaje: str) -> bool:
         """
         Determina si el mensaje es una solicitud de mercado (búsqueda de propiedad)
@@ -138,33 +178,92 @@ class CupidoManager:
         if len(mensaje_lower) < 15:
             return False
 
-        # Keywords que indican solicitud de mercado
+        # Keywords que indican solicitud explícita de mercado
         keywords_solicitud = [
-            'busco', 'buscar', 'quiero', 'necesito', 'me interesa',
-            'requiero', 'estoy buscando', 'cliente busca', 'cliente quiere'
+            'busco', 'buscar', 'buscando', 'quiero', 'necesito', 'me interesa',
+            'requiero', 'estoy buscando', 'cliente busca', 'cliente quiere',
+            'tengo cliente', 'para cliente', 'cliente necesita', 'cliente requiere'
         ]
 
-        # Keywords de propiedades
-        keywords_propiedad = [
-            'apto', 'apartamento', 'casa', 'penthouse', 'duplex',
-            'habitacion', 'habitaciones', 'alcoba', 'alcobas', 'cuarto',
-            'millones', 'millon', 'presupuesto', 'precio',
-            'laureles', 'poblado', 'envigado', 'belen', 'sabaneta',
-            'parqueadero', 'balcon', 'terraza'
+        # Keywords de tipos de propiedad
+        keywords_tipo = [
+            'apto', 'apartamento', 'apartmento', 'casa', 'penthouse', 'duplex',
+            'townhouse', 'lote', 'oficina', 'local', 'bodega', 'finca',
+            'propiedad', 'inmueble'
         ]
 
-        # Debe contener al menos una palabra de solicitud Y una de propiedad
+        # Keywords de características
+        keywords_caracteristicas = [
+            'habitacion', 'habitaciones', 'alcoba', 'alcobas', 'cuarto', 'cuartos',
+            'baño', 'baños', 'parqueadero', 'parqueaderos', 'garaje',
+            'balcon', 'terraza', 'patio', 'jardin', 'piscina',
+            'cuarto util', 'cuarto de servicio', 'estudio'
+        ]
+
+        # Keywords de precio/presupuesto
+        keywords_precio = [
+            'millones', 'millon', 'presupuesto', 'precio', 'hasta',
+            '000.000', '000,000', 'cop', 'pesos'
+        ]
+
+        # Keywords de ubicaciones comunes
+        keywords_ubicacion = [
+            'laureles', 'poblado', 'envigado', 'belen', 'sabaneta', 'itagui',
+            'robledo', 'castilla', 'aranjuez', 'manrique', 'calasanz',
+            'estadio', 'floresta', 'conquistadores', 'suramericana', 'suramerica',
+            'rodeo alto', 'la estrella', 'caldas', 'la america', 'bello',
+            'medellin', 'medellín', 'cerca de', 'sector', 'zona', 'barrio'
+        ]
+
+        # Contar cuántas categorías tiene el mensaje
         tiene_solicitud = any(kw in mensaje_lower for kw in keywords_solicitud)
-        tiene_propiedad = any(kw in mensaje_lower for kw in keywords_propiedad)
+        tiene_tipo = any(kw in mensaje_lower for kw in keywords_tipo)
+        tiene_caracteristicas = any(kw in mensaje_lower for kw in keywords_caracteristicas)
+        tiene_precio = any(kw in mensaje_lower for kw in keywords_precio)
+        tiene_ubicacion = any(kw in mensaje_lower for kw in keywords_ubicacion)
 
-        return tiene_solicitud and tiene_propiedad
+        # Contar categorías presentes
+        categorias_presentes = sum([
+            tiene_tipo,
+            tiene_caracteristicas,
+            tiene_precio,
+            tiene_ubicacion
+        ])
+
+        # CASO 1: Tiene palabra de solicitud + al menos 1 categoría de propiedad
+        if tiene_solicitud and categorias_presentes >= 1:
+            return True
+
+        # CASO 2: Solicitud estructurada - tiene al menos 3 categorías de propiedad
+        # (tipo + características + precio, o tipo + características + ubicación, etc.)
+        if categorias_presentes >= 3:
+            return True
+
+        # CASO 3: Tiene tipo de propiedad + precio/presupuesto + otra cosa
+        if tiene_tipo and tiene_precio and (tiene_caracteristicas or tiene_ubicacion):
+            return True
+
+        # CASO 4: Tiene caracterísitcas específicas (habitaciones) + ubicación + precio
+        if tiene_caracteristicas and tiene_ubicacion and tiene_precio:
+            return True
+
+        # CASO 5: Detectar patrones de números que indican búsqueda estructurada
+        # Ejemplo: "3 habitaciones", "2 baños", "$380.000.000"
+        patron_habitaciones = re.search(r'\d+\s*(hab|alcob|cuarto)', mensaje_lower)
+        patron_precio = re.search(r'\$?\d{1,4}[.,]?\d{3}[.,]?\d{3}', mensaje)
+
+        if patron_habitaciones and (tiene_ubicacion or patron_precio):
+            return True
+
+        return False
 
     # =========================================================================
     # PROCESAMIENTO DE CAPTACIÓN DE PROPIEDADES
     # =========================================================================
 
     def procesar_captacion_wasi(self, url_wasi: str, agente_telefono: str,
-                                 mensaje_completo: str, grupo_id: str = None) -> Dict:
+                                 mensaje_completo: str, grupo_id: str = None,
+                                 nombre_agente: str = None) -> Dict:
         """
         Procesa la captación de una propiedad desde un link de Wasi
 
@@ -173,6 +272,7 @@ class CupidoManager:
             agente_telefono (str): Teléfono del agente que compartió
             mensaje_completo (str): Mensaje completo del grupo
             grupo_id (str): ID del grupo de WhatsApp
+            nombre_agente (str): Nombre del agente (pushname de WhatsApp)
 
         Returns:
             dict: Resultado del procesamiento
@@ -180,6 +280,8 @@ class CupidoManager:
         print(f"\n🏠 Procesando captación de Wasi...")
         print(f"   URL: {url_wasi}")
         print(f"   Agente: {agente_telefono}")
+        if nombre_agente:
+            print(f"   Nombre: {nombre_agente}")
 
         try:
             # 1. Scrappear la propiedad de Wasi
@@ -208,8 +310,8 @@ class CupidoManager:
             db = self._get_db()
 
             try:
-                # Obtener o crear agente
-                agente = db.get_or_create_agente(agente_telefono)
+                # Obtener o crear agente (con nombre si está disponible)
+                agente = db.get_or_create_agente(agente_telefono, nombre_agente)
                 if agente:
                     propiedad_data['agente_captador_id'] = agente['id']
 
@@ -277,6 +379,125 @@ class CupidoManager:
                 'error': str(e)
             }
 
+    def procesar_captacion_tu360(self, url_tu360: str, agente_telefono: str,
+                                  mensaje_completo: str, grupo_id: str = None,
+                                  nombre_agente: str = None) -> Dict:
+        """
+        Procesa la captación de una propiedad desde un link de Tu360
+
+        Args:
+            url_tu360 (str): URL de la propiedad en Tu360
+            agente_telefono (str): Teléfono del agente que compartió
+            mensaje_completo (str): Mensaje completo del grupo
+            grupo_id (str): ID del grupo de WhatsApp
+            nombre_agente (str): Nombre del agente (pushname de WhatsApp)
+
+        Returns:
+            dict: Resultado del procesamiento
+        """
+        print(f"\n🏠 Procesando captación de Tu360...")
+        print(f"   URL: {url_tu360}")
+        print(f"   Agente: {agente_telefono}")
+        if nombre_agente:
+            print(f"   Nombre: {nombre_agente}")
+
+        try:
+            # 1. Scrappear la propiedad de Tu360
+            from src.scrapers.tu360 import Tu360Scraper
+            scraper = Tu360Scraper()
+
+            propiedad_data = scraper.extract_property_data(url_tu360)
+
+            if not propiedad_data:
+                return {
+                    'success': False,
+                    'error': 'No se pudo scrappear la propiedad de Tu360'
+                }
+
+            # 2. Agregar información del agente captador
+            propiedad_data['agente_captador_telefono'] = agente_telefono
+            propiedad_data['mensaje_original_grupo'] = mensaje_completo
+            propiedad_data['origen'] = 'Tu360_Captado'
+            propiedad_data['grupo_origen'] = grupo_id or self.grupo_cupido_id
+            propiedad_data['contacto_responsable'] = agente_telefono
+
+            print(f"   [OK] Telefono del agente captador guardado: {agente_telefono}")
+            print(f"   [OK] Origen: Tu360_Captado | Grupo: {grupo_id or self.grupo_cupido_id}")
+
+            # 3. Guardar en base de datos
+            db = self._get_db()
+
+            try:
+                # Obtener o crear agente (con nombre si está disponible)
+                agente = db.get_or_create_agente(agente_telefono, nombre_agente)
+                if agente:
+                    propiedad_data['agente_captador_id'] = agente['id']
+
+                # Insertar propiedad
+                propiedad_id = db.insert_property(propiedad_data)
+
+                if propiedad_id:
+                    # Actualizar contador del agente
+                    if agente:
+                        db.cursor.execute(
+                            "UPDATE agentes SET total_propiedades_captadas = total_propiedades_captadas + 1 WHERE id = %s",
+                            (agente['id'],)
+                        )
+                        db.conn.commit()
+
+                    # Log del evento
+                    db.log_evento(
+                        tipo_evento='Propiedad_Captada',
+                        agente_telefono=agente_telefono,
+                        propiedad_id=propiedad_id,
+                        datos_evento={
+                            'url': url_tu360,
+                            'codigo': propiedad_data.get('codigo_propiedad'),
+                            'titulo': propiedad_data.get('titulo'),
+                            'fuente': 'Tu360'
+                        },
+                        mensaje_whatsapp=mensaje_completo,
+                        grupo_origen=grupo_id,
+                        resultado='Exitoso'
+                    )
+
+                    return {
+                        'success': True,
+                        'propiedad_id': propiedad_id,
+                        'codigo': propiedad_data.get('codigo_propiedad'),
+                        'titulo': propiedad_data.get('titulo')
+                    }
+
+                return {
+                    'success': False,
+                    'error': 'No se pudo guardar en la base de datos'
+                }
+            finally:
+                db.disconnect()
+
+        except Exception as e:
+            print(f"❌ Error en captación Tu360: {e}")
+
+            # Log del error
+            db = self._get_db()
+            try:
+                db.log_evento(
+                    tipo_evento='Propiedad_Captada',
+                    agente_telefono=agente_telefono,
+                    datos_evento={'url': url_tu360, 'fuente': 'Tu360'},
+                    mensaje_whatsapp=mensaje_completo,
+                    grupo_origen=grupo_id,
+                    resultado='Error',
+                    mensaje_error=str(e)
+                )
+            finally:
+                db.disconnect()
+
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
     # =========================================================================
     # PROCESAMIENTO DE SOLICITUDES DE MERCADO
     # =========================================================================
@@ -302,7 +523,7 @@ class CupidoManager:
 
         try:
             # 1. Realizar búsqueda de propiedades
-            from busqueda_propiedades import PropertySearchAgent
+            from src.core.search_agent import PropertySearchAgent
             agent = PropertySearchAgent()
 
             result = agent.search(query, limit=5)

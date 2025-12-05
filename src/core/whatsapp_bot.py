@@ -142,19 +142,17 @@ class WhatsAppBot:
                 else:
                     msg += f"• {amenidades[i]}\n"
 
-        # URLs (frontend + original)
-        propiedad_id = prop.get('id')
-        if propiedad_id:
-            # URL del frontend (principal)
-            frontend_link = f"{self.frontend_url}/propiedades/{propiedad_id}"
-            msg += f"\n🔗 *Ver detalles completos:*\n{frontend_link}\n"
-
-            # URL original (fuente)
-            if url:
-                msg += f"\n🌐 _Fuente original:_ {url}\n"
-        elif url:
-            # Si no hay ID, solo mostrar URL original
-            msg += f"\n🔗 {url}\n"
+        # URL shareable (solo el link de compartir, no la fuente original)
+        slug = prop.get('slug')
+        if slug:
+            # URL del frontend para compartir
+            shareable_link = f"{self.frontend_url}/compartir/{slug}"
+            msg += f"\n🔗 *Ver detalles:*\n{shareable_link}\n"
+        else:
+            # Fallback: usar ID si no hay slug
+            propiedad_id = prop.get('id')
+            if propiedad_id:
+                msg += f"\n🔗 *Ver detalles:*\n{self.frontend_url}/compartir/{propiedad_id}\n"
 
         return msg
 
@@ -631,12 +629,18 @@ class WhatsAppBot:
                 url_wasi = deteccion['data']['url']
                 print(f"📥 Captando propiedad de Wasi: {url_wasi}")
 
+                # Extraer nombre del agente (pushname del webhook)
+                nombre_agente = message_data.get('pushname', None)
+                if nombre_agente:
+                    print(f"   👤 Nombre del agente: {nombre_agente}")
+
                 # Procesar captación
                 result = self.cupido.procesar_captacion_wasi(
                     url_wasi=url_wasi,
                     agente_telefono=sender,
                     mensaje_completo=message_body,
-                    grupo_id=grupo_id if is_group_message else None
+                    grupo_id=grupo_id if is_group_message else None,
+                    nombre_agente=nombre_agente
                 )
 
                 if result['success']:
@@ -654,7 +658,43 @@ class WhatsAppBot:
                         'error': result.get('error')
                     }
 
-            # 4. CASO: Solicitud de mercado (búsqueda de propiedad)
+            # 4. CASO: Captación de propiedad (link de Tu360)
+            elif deteccion['tipo'] == 'captacion_tu360':
+                url_tu360 = deteccion['data']['url']
+                print(f"📥 Captando propiedad de Tu360: {url_tu360}")
+
+                # Extraer nombre del agente (pushname del webhook)
+                nombre_agente = message_data.get('pushname', None)
+                if nombre_agente:
+                    print(f"   👤 Nombre del agente: {nombre_agente}")
+
+                # Procesar captación
+                result = self.cupido.procesar_captacion_tu360(
+                    url_tu360=url_tu360,
+                    agente_telefono=sender,
+                    mensaje_completo=message_body,
+                    grupo_id=grupo_id if is_group_message else None,
+                    nombre_agente=nombre_agente
+                )
+
+                if result['success']:
+                    # Captación exitosa - guardada en DB sin notificar al agente
+                    print(f"   ✅ Propiedad Tu360 captada y guardada en DB (sin notificación)")
+                    return {
+                        'status': 'captacion_exitosa',
+                        'propiedad_id': result['propiedad_id'],
+                        'fuente': 'Tu360'
+                    }
+                else:
+                    # Error en captación - solo registrar en logs, sin notificar
+                    print(f"   ❌ Error en captación Tu360: {result.get('error', 'Desconocido')}")
+                    return {
+                        'status': 'captacion_error',
+                        'error': result.get('error'),
+                        'fuente': 'Tu360'
+                    }
+
+            # 5. CASO: Solicitud de mercado (búsqueda de propiedad)
             elif deteccion['tipo'] == 'solicitud_mercado':
                 query = deteccion['data']['query']
                 origen = 'Grupo' if is_group_message else 'Chat_Privado'
@@ -699,7 +739,7 @@ class WhatsAppBot:
                         'error': result.get('error')
                     }
 
-            # 5. CASO: Chat normal (no es captación ni solicitud)
+            # 6. CASO: Chat normal (no es captación ni solicitud)
             else:
                 # Solo responder en chats privados
                 if not is_group_message:
@@ -708,7 +748,7 @@ class WhatsAppBot:
                     help_msg += "1️⃣ *Buscar propiedades*\n"
                     help_msg += "   Ejemplo: _Busco apto en Laureles, 2 habitaciones_\n\n"
                     help_msg += "2️⃣ *Captar propiedades*\n"
-                    help_msg += "   Comparte un link de Wasi\n\n"
+                    help_msg += "   Comparte un link de Wasi o Tu360\n\n"
                     help_msg += "Escribe *ayuda* para más información."
 
                     self.send_message(sender, help_msg)
