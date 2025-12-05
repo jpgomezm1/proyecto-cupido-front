@@ -24,6 +24,14 @@ except ImportError:
 from src.db.database import DatabaseManager
 from src.core.logger import get_search_logger, log_execution_time
 
+# Importar búsqueda vectorial (opcional)
+try:
+    from src.core.vector_search import get_vector_search
+    VECTOR_SEARCH_AVAILABLE = True
+except ImportError:
+    VECTOR_SEARCH_AVAILABLE = False
+    print("ℹ️  Búsqueda vectorial no disponible (ejecutar scripts/process_properties_vectors.py)")
+
 # Cargar variables de entorno
 load_dotenv()
 
@@ -362,10 +370,15 @@ Responde SOLO con el JSON de criterios."""
                 score += 5
                 reasons.append(f"Excelente ubicación (walkability: {walkability}/10)")
 
-            # 6. Coincidencia de tipo
+            # 6. Coincidencia de tipo (puede ser string o lista)
             if criteria.get('tipo_propiedad'):
-                tipo_prop = result.get('tipo_propiedad') or ''
-                if criteria['tipo_propiedad'].lower() in tipo_prop.lower():
+                tipo_prop = (result.get('tipo_propiedad') or '').lower()
+                tipos_buscar = criteria['tipo_propiedad']
+                if isinstance(tipos_buscar, list):
+                    if any(t.lower() in tipo_prop for t in tipos_buscar):
+                        score += 5
+                        reasons.append(f"Tipo: {result.get('tipo_propiedad')}")
+                elif tipos_buscar.lower() in tipo_prop:
                     score += 5
                     reasons.append(f"Tipo: {result.get('tipo_propiedad')}")
 
@@ -824,8 +837,40 @@ Responde SOLO con el JSON de criterios."""
         print(json.dumps(criteria, indent=2, ensure_ascii=False))
         print()
 
-        # Paso 2: Construir consulta SQL
-        print("🔍 Buscando en base de datos...")
+        # Paso 2: Intentar búsqueda vectorial primero (si está disponible)
+        vector_results = []
+        if VECTOR_SEARCH_AVAILABLE:
+            try:
+                print("🔮 Intentando búsqueda vectorial...")
+                vector_search = get_vector_search()
+                vector_response = vector_search.search(query, criteria, limit=limit)
+
+                if vector_response.get('success') and vector_response.get('results'):
+                    vector_results = vector_response['results']
+                    print(f"✅ Búsqueda vectorial encontró: {len(vector_results)} propiedades")
+
+                    # Si tenemos resultados vectoriales, usarlos directamente
+                    if len(vector_results) >= 3:
+                        # Log de resultados
+                        total_elapsed = (time.time() - total_start) * 1000
+                        search_log.log_results(len(vector_results), min(len(vector_results), limit), total_elapsed)
+
+                        return {
+                            'success': True,
+                            'criteria': criteria,
+                            'results': vector_results[:limit],
+                            'total_found': len(vector_results),
+                            'search_type': 'vector'
+                        }
+                    else:
+                        print("ℹ️  Pocos resultados vectoriales, complementando con SQL...")
+
+            except Exception as e:
+                print(f"⚠️  Error en búsqueda vectorial: {e}")
+                print("   Fallback a búsqueda SQL tradicional...")
+
+        # Paso 3: Búsqueda SQL tradicional (fallback o complementaria)
+        print("🔍 Buscando en base de datos (SQL)...")
         sql_query, params = self._build_sql_query(criteria)
 
         # Paso 3: Ejecutar búsqueda en DB

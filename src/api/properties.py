@@ -207,12 +207,15 @@ def get_property_by_slug(slug: str):
     """
     GET /api/properties/:slug
 
-    Obtiene una propiedad específica por su slug (código)
+    Obtiene una propiedad específica por su slug (código) o ID
+    Acepta tanto el codigo_propiedad como el ID numérico
     """
     db = None
     try:
         db = get_db()
 
+        # Intentar buscar por codigo_propiedad primero, luego por ID
+        # Esto permite usar tanto "WASI-12345" como "26"
         query = """
             SELECT
                 p.id,
@@ -248,10 +251,10 @@ def get_property_by_slug(slug: str):
                 a.nombre as owner_name
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
-            WHERE p.codigo_propiedad = %s AND p.activa = true
+            WHERE (p.codigo_propiedad = %s OR p.id::text = %s) AND p.activa = true
         """
 
-        db.cursor.execute(query, (slug,))
+        db.cursor.execute(query, (slug, slug))
         result = db.cursor.fetchall()
 
         if not result or len(result) == 0:
@@ -743,6 +746,13 @@ def scrape_wasi():
 
         print(f"[API] Propiedad guardada con ID: {property_id}")
 
+        # Procesar vectores automáticamente (en background)
+        try:
+            from src.core.property_processor import process_new_property
+            process_new_property(property_id, property_data)
+        except Exception as ve:
+            print(f"[API] ⚠️  Procesamiento vectorial no disponible: {ve}")
+
         # Obtener la propiedad completa guardada
         db.cursor.execute("""
             SELECT
@@ -884,6 +894,13 @@ def scrape_tu360():
 
         print(f"[API] Propiedad guardada con ID: {property_id}")
 
+        # Procesar vectores automáticamente (en background)
+        try:
+            from src.core.property_processor import process_new_property
+            process_new_property(property_id, property_data)
+        except Exception as ve:
+            print(f"[API] ⚠️  Procesamiento vectorial no disponible: {ve}")
+
         # Obtener la propiedad completa guardada
         db.cursor.execute("""
             SELECT
@@ -972,12 +989,12 @@ def get_similar_properties(slug: str):
         db = get_db()
         limit = int(request.args.get('limit', 6))
 
-        # Primero obtener la propiedad de referencia
+        # Primero obtener la propiedad de referencia (buscar por codigo_propiedad o por ID)
         db.cursor.execute("""
             SELECT id, ciudad, precio, tipo_propiedad, habitaciones, zona
             FROM propiedades
-            WHERE codigo_propiedad = %s AND activa = true
-        """, (slug,))
+            WHERE (codigo_propiedad = %s OR id::text = %s) AND activa = true
+        """, (slug, slug))
 
         ref_prop = db.cursor.fetchone()
 

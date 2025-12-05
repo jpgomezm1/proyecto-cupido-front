@@ -43,7 +43,7 @@ class WhatsAppBot:
         self.grupo_cupido_id = os.getenv('GRUPO_CUPIDO_ID', '')
 
         # URL base del frontend (para links en WhatsApp)
-        self.frontend_url = os.getenv('FRONTEND_BASE_URL', 'http://localhost:8080')
+        self.frontend_url = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
 
         print(f"[OK] WhatsApp Bot inicializado (Proyecto Cupido)")
         print(f"   Instance ID: {self.instance_id}")

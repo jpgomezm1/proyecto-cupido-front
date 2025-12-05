@@ -327,6 +327,13 @@ class CupidoManager:
                         )
                         db.conn.commit()
 
+                    # Procesar vectores automáticamente (en background)
+                    try:
+                        from src.core.property_processor import process_new_property
+                        process_new_property(propiedad_id, propiedad_data)
+                    except Exception as ve:
+                        print(f"⚠️  Procesamiento vectorial no disponible: {ve}")
+
                     # Log del evento
                     db.log_evento(
                         tipo_evento='Propiedad_Captada',
@@ -444,6 +451,13 @@ class CupidoManager:
                             (agente['id'],)
                         )
                         db.conn.commit()
+
+                    # Procesar vectores automáticamente (en background)
+                    try:
+                        from src.core.property_processor import process_new_property
+                        process_new_property(propiedad_id, propiedad_data)
+                    except Exception as ve:
+                        print(f"⚠️  Procesamiento vectorial no disponible: {ve}")
 
                     # Log del evento
                     db.log_evento(
@@ -665,16 +679,33 @@ class CupidoManager:
                         resultado='Exitoso'
                     )
 
+                    # 5. Crear deal automáticamente
+                    deal_info = None
+                    try:
+                        from src.api.deals import create_deal_from_whatsapp
+                        deal_info = create_deal_from_whatsapp(
+                            propiedad_id=propiedad_id,
+                            contacto_telefono=agente_telefono,
+                            contacto_nombre=None,  # Se obtiene después si está disponible
+                            mensaje_origen=f"Selección de propiedad desde búsqueda (solicitud #{solicitud_id})",
+                            agente_comprador_telefono=agente_telefono
+                        )
+                        if deal_info:
+                            print(f"   📋 Deal {'existente' if deal_info.get('existente') else 'creado'}: {deal_info.get('codigo')}")
+                    except Exception as de:
+                        print(f"   ⚠️  No se pudo crear deal automático: {de}")
+
                     resultados.append({
                         'propiedad_id': propiedad_id,
                         'interaccion_id': interaccion_id,
                         'tipo': tipo,
                         'contacto': vendedor_telefono,
                         'contacto_nombre': vendedor_nombre,
-                        'propiedad': propiedad
+                        'propiedad': propiedad,
+                        'deal': deal_info
                     })
 
-                # 5. Actualizar estado de la solicitud
+                # 6. Actualizar estado de la solicitud
                 db.cursor.execute(
                     """
                     UPDATE solicitudes_mercado

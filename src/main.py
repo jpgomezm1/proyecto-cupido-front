@@ -25,6 +25,8 @@ from src.api.analytics import analytics_bp
 from src.api.auth import auth_bp
 from src.api.agents import agents_bp
 from src.api.search import search_bp
+from src.api.deals import deals_bp
+from src.api.property_chat import property_chat_bp
 
 load_dotenv()
 
@@ -47,6 +49,8 @@ app.register_blueprint(analytics_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(agents_bp)
 app.register_blueprint(search_bp)
+app.register_blueprint(deals_bp)
+app.register_blueprint(property_chat_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
@@ -95,6 +99,16 @@ def home():
                 'property_images': '/api/property-images (GET)',
                 'property_images_by_id': '/api/property-images/:property_id (GET)',
                 'health': '/api/health (GET)'
+            },
+            'deals': {
+                'list': '/api/deals (GET)',
+                'create': '/api/deals (POST)',
+                'detail': '/api/deals/:id (GET)',
+                'update_estado': '/api/deals/:id/estado (PUT)',
+                'add_activity': '/api/deals/:id/actividad (POST)',
+                'pipeline': '/api/deals/pipeline (GET)',
+                'stats': '/api/deals/stats (GET)',
+                'contactos': '/api/deals/contactos (GET)'
             }
         }
     })

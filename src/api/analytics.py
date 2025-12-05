@@ -1026,3 +1026,150 @@ def get_market_inventory():
     finally:
         if db:
             db.disconnect()
+
+
+@analytics_bp.route('/market/geo-zones', methods=['GET'])
+def get_market_geo_zones():
+    """
+    GET /api/analytics/market/geo-zones
+
+    Obtiene estadísticas por zona con coordenadas geográficas para visualización en mapa
+    """
+    db = None
+    try:
+        db = get_db()
+
+        # Estadísticas por zona con coordenadas
+        db.cursor.execute("""
+            SELECT
+                COALESCE(zona, 'Sin zona') as zone,
+                ciudad as city,
+                AVG(latitud) as lat,
+                AVG(longitud) as lng,
+                COUNT(*) as property_count,
+                AVG(precio) as avg_price,
+                MIN(precio) as min_price,
+                MAX(precio) as max_price,
+                AVG(precio / NULLIF(area_construida, 0)) as avg_price_m2,
+                AVG(area_construida) as avg_area,
+                AVG(habitaciones) as avg_bedrooms,
+                STRING_AGG(DISTINCT tipo_propiedad, ', ') as property_types
+            FROM propiedades
+            WHERE activa = true
+                AND latitud IS NOT NULL
+                AND longitud IS NOT NULL
+                AND latitud != 0
+                AND longitud != 0
+                AND longitud < -70
+                AND longitud > -80
+                AND latitud > 0
+                AND latitud < 10
+            GROUP BY zona, ciudad
+            HAVING COUNT(*) >= 1
+            ORDER BY COUNT(*) DESC
+        """)
+
+        zones = []
+        for row in db.cursor.fetchall():
+            zones.append({
+                'zone': row['zone'],
+                'city': row['city'],
+                'lat': float(row['lat']) if row['lat'] else None,
+                'lng': float(row['lng']) if row['lng'] else None,
+                'property_count': row['property_count'],
+                'avg_price': int(row['avg_price']) if row['avg_price'] else 0,
+                'min_price': int(row['min_price']) if row['min_price'] else 0,
+                'max_price': int(row['max_price']) if row['max_price'] else 0,
+                'avg_price_m2': int(row['avg_price_m2']) if row['avg_price_m2'] else 0,
+                'avg_area': int(row['avg_area']) if row['avg_area'] else 0,
+                'avg_bedrooms': round(row['avg_bedrooms'], 1) if row['avg_bedrooms'] else 0,
+                'property_types': row['property_types']
+            })
+
+        # Propiedades individuales para el mapa detallado
+        db.cursor.execute("""
+            SELECT
+                id,
+                titulo as title,
+                tipo_propiedad as type,
+                precio as price,
+                COALESCE(zona, 'Sin zona') as zone,
+                ciudad as city,
+                latitud as lat,
+                longitud as lng,
+                area_construida as area,
+                habitaciones as bedrooms,
+                banos as bathrooms
+            FROM propiedades
+            WHERE activa = true
+                AND latitud IS NOT NULL
+                AND longitud IS NOT NULL
+                AND latitud != 0
+                AND longitud != 0
+                AND longitud < -70
+                AND longitud > -80
+                AND latitud > 0
+                AND latitud < 10
+            ORDER BY precio DESC
+            LIMIT 200
+        """)
+
+        properties = []
+        for row in db.cursor.fetchall():
+            properties.append({
+                'id': row['id'],
+                'title': row['title'],
+                'type': row['type'],
+                'price': int(row['price']) if row['price'] else 0,
+                'zone': row['zone'],
+                'city': row['city'],
+                'lat': float(row['lat']),
+                'lng': float(row['lng']),
+                'area': int(row['area']) if row['area'] else 0,
+                'bedrooms': row['bedrooms'],
+                'bathrooms': row['bathrooms']
+            })
+
+        # Estadísticas globales para el mapa
+        db.cursor.execute("""
+            SELECT
+                AVG(latitud) as center_lat,
+                AVG(longitud) as center_lng,
+                MIN(precio) as global_min_price,
+                MAX(precio) as global_max_price,
+                AVG(precio) as global_avg_price
+            FROM propiedades
+            WHERE activa = true
+                AND latitud IS NOT NULL
+                AND longitud IS NOT NULL
+                AND latitud != 0
+                AND longitud != 0
+                AND longitud < -70
+                AND longitud > -80
+        """)
+        stats_row = db.cursor.fetchone()
+
+        stats = {
+            'center_lat': float(stats_row['center_lat']) if stats_row['center_lat'] else 6.2442,
+            'center_lng': float(stats_row['center_lng']) if stats_row['center_lng'] else -75.5812,
+            'min_price': int(stats_row['global_min_price']) if stats_row['global_min_price'] else 0,
+            'max_price': int(stats_row['global_max_price']) if stats_row['global_max_price'] else 0,
+            'avg_price': int(stats_row['global_avg_price']) if stats_row['global_avg_price'] else 0
+        }
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'zones': zones,
+                'properties': properties,
+                'stats': stats
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"[ANALYTICS] Error en market/geo-zones: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db:
+            db.disconnect()
