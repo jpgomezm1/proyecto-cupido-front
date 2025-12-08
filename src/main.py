@@ -32,16 +32,12 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Habilitar CORS para permitir peticiones desde el frontend (configuración global)
-CORS(app, origins="*", supports_credentials=False)
-
-# Agregar headers CORS manualmente para asegurar que funcionen
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
+# Habilitar CORS para permitir peticiones desde el frontend
+CORS(app,
+     origins=["https://dash-admin-hrjg.netlify.app", "http://localhost:8080", "http://localhost:5173"],
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # Registrar blueprints de la API
 app.register_blueprint(api_bp)
