@@ -304,8 +304,8 @@ class VectorSearch:
         if calidad:
             score += min(float(calidad), 10)
 
-        # 4. Bonus por fuente Pulppo (0-10 puntos)
-        if property_data.get('fuente') == 'Pulppo':
+        # 4. Bonus por propiedades propias (0-10 puntos)
+        if property_data.get('fuente') == 'Propia':
             score += 10
 
         return round(score, 2)

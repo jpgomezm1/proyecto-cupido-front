@@ -927,12 +927,13 @@ def get_market_inventory():
         db = get_db()
 
         # Total inventario
+        # Los valores de fuente pueden variar: 'Wasi', 'Wasi_Captado', 'Tu360_Captado', 'Pulppo', 'Propia'
         db.cursor.execute("""
             SELECT
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE fuente = 'Pulppo') as pulppo,
-                COUNT(*) FILTER (WHERE fuente = 'Wasi_Captado') as wasi,
-                COUNT(*) FILTER (WHERE fuente = 'Tu360_Captado') as tu360,
+                COUNT(*) FILTER (WHERE LOWER(fuente) = 'pulppo') as pulppo,
+                COUNT(*) FILTER (WHERE LOWER(fuente) LIKE '%wasi%' OR LOWER(fuente) = 'propia') as wasi,
+                COUNT(*) FILTER (WHERE LOWER(fuente) LIKE '%tu360%') as tu360,
                 AVG(precio) as avg_price,
                 AVG(area_construida) as avg_area
             FROM propiedades

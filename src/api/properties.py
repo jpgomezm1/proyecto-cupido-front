@@ -734,6 +734,11 @@ def scrape_wasi():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Verificar si es propiedad propia
+        if data.get('es_propia', False):
+            property_data['fuente'] = 'Propia'
+            print(f"[API] Marcada como propiedad propia")
+
         # Guardar en base de datos
         db = get_db()
         property_id = db.insert_property(property_data)
