@@ -111,19 +111,20 @@ def process_bulk_job(job: BulkUploadJob):
             # Detectar fuente y scrapear
             if 'wasi.co' in url.lower():
                 data = wasi_scraper.extract_property_data(url)
+                if not data:
+                    raise ValueError('No se pudo extraer información de la URL (puede que ya no exista)')
                 if job.is_propia:
                     data['fuente'] = 'Propia'
                 else:
                     data['fuente'] = 'Wasi_Captado'
             elif 'tu360inmobiliario' in url.lower() or 'pulppo' in url.lower():
                 data = tu360_scraper.extract_property_data(url)
+                if not data:
+                    raise ValueError('No se pudo extraer información de la URL (puede que ya no exista)')
                 if not job.is_propia:
                     data['fuente'] = 'Tu360_Captado'
             else:
                 raise ValueError(f'URL no soportada. Solo se aceptan URLs de Wasi.co o Tu360Inmobiliario')
-
-            if not data:
-                raise ValueError('No se pudo extraer información de la URL')
 
             # Para propiedades externas, agregar/sobrescribir datos del agente
             if not job.is_propia:
@@ -147,6 +148,10 @@ def process_bulk_job(job: BulkUploadJob):
                 property_id = db.insert_property(data)
 
             titulo = data.get('titulo', data.get('title', 'Sin título'))
+
+            # Verificar si se guardó correctamente
+            if property_id is None:
+                raise ValueError(f'La propiedad ya existe en la base de datos (código: {data.get("codigo_propiedad", "desconocido")})')
 
             print(f"   ✅ Guardada: {titulo[:40]}... (ID: {property_id})")
 
