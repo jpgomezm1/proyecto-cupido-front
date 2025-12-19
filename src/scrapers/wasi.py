@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from tqdm import tqdm
 import os
+from urllib.parse import unquote
 
 # Importar sistema de logging
 try:
@@ -73,6 +74,10 @@ class WasiScraper:
         """
         total_start = time.time()
 
+        # Decodificar URL para evitar doble encoding (ej: %C3%AD -> í)
+        # Esto es necesario porque requests re-codifica las URLs y Wasi rechaza la doble codificación
+        url = unquote(url)
+
         # Iniciar tracking del scrape
         if scraper_log:
             scraper_log.start_scrape(url, 'Wasi')
@@ -80,9 +85,9 @@ class WasiScraper:
         try:
             self.log(f"Obteniendo página: {url}")
 
-            # Descargar página
+            # Descargar página (usar request directo en lugar de session para evitar acumulación de cookies)
             download_start = time.time()
-            response = self.session.get(url, timeout=30)
+            response = requests.get(url, headers=self.session.headers, timeout=30)
             response.raise_for_status()
             download_elapsed = (time.time() - download_start) * 1000
 
@@ -147,20 +152,48 @@ class WasiScraper:
             data.update(desc)
 
             total_elapsed = (time.time() - total_start) * 1000
-            self.log(f"✓ Datos extraídos exitosamente de {url}")
+            self.log(f"[OK] Datos extraidos exitosamente de {url}")
 
             if scraper_log:
-                scraper_log.log_complete(data.get('codigo_propiedad', 'unknown'), total_elapsed)
+                try:
+                    scraper_log.log_complete(data.get('codigo_propiedad', 'unknown'), total_elapsed)
+                except Exception:
+                    pass  # Ignorar errores de logging
 
             return data
 
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"HTTP Error {e.response.status_code}: {url}"
+            print(f"   [ERROR] {error_msg}")
+            self.errors.append({'url': url, 'error': str(e), 'timestamp': datetime.now()})
+            if scraper_log:
+                try:
+                    scraper_log.log_error(str(e), 'http_error')
+                except Exception:
+                    pass
+            return None
+
+        except requests.exceptions.Timeout as e:
+            error_msg = f"Timeout: {url}"
+            print(f"   [TIMEOUT] {error_msg}")
+            self.errors.append({'url': url, 'error': 'Timeout', 'timestamp': datetime.now()})
+            if scraper_log:
+                try:
+                    scraper_log.log_error(str(e), 'timeout')
+                except Exception:
+                    pass
+            return None
+
         except Exception as e:
             error_msg = f"Error procesando {url}: {str(e)}"
-            self.log(f"✗ {error_msg}")
+            print(f"   [ERROR] {error_msg}")
             self.errors.append({'url': url, 'error': str(e), 'timestamp': datetime.now()})
 
             if scraper_log:
-                scraper_log.log_error(str(e), 'extraction')
+                try:
+                    scraper_log.log_error(str(e), 'extraction')
+                except Exception:
+                    pass
 
             return None
 

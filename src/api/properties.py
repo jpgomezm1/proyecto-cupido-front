@@ -30,7 +30,7 @@ def get_properties():
 
     Query params:
     - published: boolean (default: true)
-    - limit: int (default: 100)
+    - limit: int (default: 500)
     - offset: int (default: 0)
     - city: string
     - type: string
@@ -44,7 +44,7 @@ def get_properties():
 
         # Parámetros de query
         published = request.args.get('published', 'true').lower() == 'true'
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get('limit', 500))
         offset = int(request.args.get('offset', 0))
         city = request.args.get('city')
         prop_type = request.args.get('type')

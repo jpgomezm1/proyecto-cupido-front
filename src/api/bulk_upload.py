@@ -71,7 +71,8 @@ def process_bulk_job(job: BulkUploadJob):
     job.status = 'processing'
 
     # Inicializar scrapers (sin AI enrichment para mayor velocidad)
-    wasi_scraper = WasiScraper(delay=1, verbose=False, enable_ai_enrichment=False)
+    # Delay de 2 segundos para Wasi para evitar rate limiting
+    wasi_scraper = WasiScraper(delay=2, verbose=True, enable_ai_enrichment=False)
     tu360_scraper = Tu360Scraper(verbose=False)
 
     print(f"\n{'='*60}")
@@ -108,11 +109,24 @@ def process_bulk_job(job: BulkUploadJob):
         print(f"📍 [{idx+1}/{job.total}] Procesando: {url[:60]}...")
 
         try:
-            # Detectar fuente y scrapear
+            # Detectar fuente y scrapear (con reintento)
+            data = None
+            max_retries = 2
+
             if 'wasi.co' in url.lower():
-                data = wasi_scraper.extract_property_data(url)
+                # Wasi tiene 404 intermitentes por su CDN, necesitamos más reintentos
+                max_wasi_retries = 4
+                for attempt in range(max_wasi_retries):
+                    data = wasi_scraper.extract_property_data(url)
+                    if data:
+                        break
+                    if attempt < max_wasi_retries - 1:
+                        wait_time = 2 + (attempt * 2)  # 2, 4, 6 segundos (backoff)
+                        print(f"   ⏳ Reintentando en {wait_time} segundos... (intento {attempt + 2}/{max_wasi_retries})")
+                        time.sleep(wait_time)
+
                 if not data:
-                    raise ValueError('No se pudo extraer información de la URL (puede que ya no exista)')
+                    raise ValueError('No se pudo extraer información de la URL después de varios intentos')
                 if job.is_propia:
                     data['fuente'] = 'Propia'
                 else:
@@ -191,9 +205,9 @@ def process_bulk_job(job: BulkUploadJob):
 
         job.processed += 1
 
-        # Delay entre propiedades para evitar rate limiting
+        # Delay entre propiedades para evitar rate limiting (2 segundos)
         if idx < len(job.properties) - 1:
-            time.sleep(1)
+            time.sleep(2)
 
     # Calcular resumen
     success_count = len([r for r in job.results if r['status'] == 'success'])
@@ -300,7 +314,13 @@ def upload_bulk():
         # Convertir a lista de propiedades
         properties = []
         for _, row in df.iterrows():
-            prop = {'url': str(row['url']).strip()}
+            # Limpiar URL: quitar espacios, caracteres invisibles, y asegurar encoding correcto
+            raw_url = str(row['url']).strip()
+            # Quitar caracteres invisibles y de control
+            clean_url = ''.join(c for c in raw_url if c.isprintable() or c in '\n\r\t')
+            clean_url = clean_url.strip()
+
+            prop = {'url': clean_url}
             if tipo == 'externa':
                 prop['nombre_agente'] = str(row.get('nombre_agente', '')).strip() if pd.notna(row.get('nombre_agente')) else ''
                 prop['telefono_agente'] = str(row.get('telefono_agente', '')).strip() if pd.notna(row.get('telefono_agente')) else ''
