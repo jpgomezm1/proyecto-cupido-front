@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Sistema de Búsqueda Inteligente de Propiedades
+Sistema de Búsqueda Inteligente de Propiedades v2.0
 Usa Claude API (Anthropic) para procesar consultas en lenguaje natural
 y encontrar propiedades que coincidan con los criterios de los agentes inmobiliarios
+
+MEJORAS v2.0:
+- Filtros duros de precio que nunca se relajan (±15% del presupuesto)
+- Detección automática de perfil de comprador
+- Scoring inteligente por perfil
+- Búsqueda vectorial como protagonista
+- Explicabilidad en resultados
 """
 
 import os
@@ -11,7 +18,7 @@ import re
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dotenv import load_dotenv
 
 try:
@@ -23,6 +30,27 @@ except ImportError:
 
 from src.db.database import DatabaseManager
 from src.core.logger import get_search_logger, log_execution_time
+
+# Importar configuración de búsqueda Colombia
+from src.core.search_config import (
+    SEGMENTOS_PRECIO_COLOMBIA,
+    TOLERANCIA_PRECIO_POR_SEGMENTO,
+    PERFILES_COMPRADOR,
+    ZONA_A_CIUDAD,
+    ZONAS_SIMILARES,
+    DEFAULT_SEARCH_CONFIG,
+    get_segmento_precio,
+    get_tolerancia_precio,
+    calcular_rango_precio,
+    detectar_perfil_comprador,
+    get_zonas_expandidas,
+    get_pesos_perfil,
+    get_amenidades_preferidas,
+    AMENIDADES_SEGURIDAD,
+    AMENIDADES_FAMILIA,
+    AMENIDADES_LUJO,
+    AMENIDADES_ACCESIBILIDAD,
+)
 
 # Importar búsqueda vectorial (opcional)
 try:
@@ -94,6 +122,7 @@ class PropertySearchAgent:
     def _extract_search_criteria(self, query: str) -> Dict[str, Any]:
         """
         Usa Claude para extraer criterios de búsqueda de un mensaje en lenguaje natural
+        MEJORADO v2.0: Extrae perfil de comprador, banos_max, y más contexto
 
         Args:
             query: Mensaje del agente inmobiliario (puede ser informal/WhatsApp)
@@ -107,30 +136,57 @@ Tu tarea es analizar mensajes de agentes inmobiliarios y extraer los criterios d
 
 Debes extraer y estructurar la siguiente información cuando esté disponible:
 - ubicaciones: Lista de zonas/barrios mencionados (ej: ["Laureles", "Ciudad del Río"])
-- tipo_propiedad: Tipo (Apartamento, Casa, Penthouse, Duplex)
-- precio_min: Precio mínimo en COP (número)
-- precio_max: Precio máximo en COP (número)
+- tipo_propiedad: Tipo (Apartamento, Casa, Penthouse, Duplex, Local, Oficina)
+- precio_min: Precio mínimo en COP (número). Si no se menciona explícitamente, NO incluir.
+- precio_max: Precio máximo en COP (número). Este es el presupuesto del cliente.
 - habitaciones_min: Mínimo de habitaciones
-- habitaciones_max: Máximo de habitaciones
+- habitaciones_max: Máximo de habitaciones (si dice "2 o 3" entonces min=2, max=3)
 - banos_min: Mínimo de baños
+- banos_max: Máximo de baños (si dice "máximo 2 baños" entonces banos_max=2)
 - area_min: Área mínima en m²
 - area_max: Área máxima en m²
-- piso: Número de piso específico o "primer piso"
+- piso: Número de piso específico (1 para primer piso)
 - amenidades_requeridas: Lista de amenidades importantes (ej: ["portería", "piscina", "balcón"])
 - caracteristicas_especiales: Características mencionadas (ej: "baño en cada habitación", "estudio")
-- urgencia: Si se menciona "urgente", "ya", "rápido"
-- notas: Cualquier otra información relevante
+- perfil_comprador: Detectar el perfil del comprador basado en el mensaje:
+  * "familia" - Si menciona familia, niños, hijos, colegios
+  * "inversionista" - Si menciona inversión, rentabilidad, arriendo
+  * "senior" - Si menciona persona mayor, tercera edad, primer piso por accesibilidad
+  * "joven_profesional" - Si menciona soltero, moderno, cerca al trabajo
+  * "general" - Si no hay indicadores claros
+- urgencia: true/false si se menciona "urgente", "ya", "rápido", "compradora lista"
+- flexibilidad_precio: "estricto" si dice "máximo", "hasta"; "flexible" si dice "alrededor de", "más o menos"
+- notas: Cualquier otra información relevante (nombre del cliente, contacto, etc.)
 
-IMPORTANTE:
-- Los precios en mensajes colombianos como "1000 millones" = 1,000,000,000 COP
+IMPORTANTE - CONVERSIÓN DE PRECIOS COLOMBIANOS:
+- "1000 millones" = 1,000,000,000 COP (mil millones)
 - "800 millones" = 800,000,000 COP
+- "500 millones" = 500,000,000 COP
 - "Hasta $800 millones" significa precio_max = 800,000,000
-- Ubicaciones en Medellín: El Poblado, Laureles, Envigado, Sabaneta, Belén, etc.
-- "Baño en cada habitación" o "cada una con baño" = característica importante
-- "Primer piso" = piso: 1
-- "Portería", "vigilancia" son amenidades de seguridad
+- "Presupuesto 1000 millones" significa precio_max = 1,000,000,000
+- "Entre 500 y 800" significa precio_min = 500,000,000, precio_max = 800,000,000
 
-Responde SOLO con un JSON válido, sin texto adicional."""
+UBICACIONES EN ÁREA METROPOLITANA DE MEDELLÍN:
+- Medellín: El Poblado, Laureles, Belén, Estadio, Conquistadores, Floresta, Calasanz, Robledo, Ciudad del Río, Castropol, Lalinde
+- Envigado: Zúñiga, La Paz, El Portal, Las Antillas, El Dorado, Alcalá, La Cuenca, El Trianón
+- Sabaneta: Aves María, Mayorca, La Doctora
+- Itagüí: Ditaires, Santa María
+- Bello: Niquía, París
+
+DETECCIÓN DE PERFIL:
+- "Persona mayor", "primer piso por accesibilidad" → perfil_comprador: "senior"
+- "Familia con niños", "cerca a colegios" → perfil_comprador: "familia"
+- "Para inversión", "rentabilidad" → perfil_comprador: "inversionista"
+
+TÉRMINOS COLOMBIANOS:
+- "Alcoba" = habitación
+- "Parqueadero" = garaje
+- "Cuarto útil" = depósito
+- "Baño en cada habitación" = característica importante
+- "Portería", "vigilancia" = amenidades de seguridad
+- "Unidad completa" = conjunto residencial con todas las amenidades
+
+Responde SOLO con un JSON válido, sin texto adicional ni markdown."""
 
         user_message = f"""Analiza este mensaje de un agente inmobiliario y extrae los criterios de búsqueda:
 
@@ -163,6 +219,45 @@ Responde SOLO con el JSON de criterios."""
 
             criteria = json.loads(response_text)
 
+            # ===== ENRIQUECIMIENTO POST-EXTRACCIÓN v2.0 =====
+
+            # 1. Calcular rango de precio implícito si solo hay precio_max
+            if criteria.get('precio_max') and not criteria.get('precio_min'):
+                precio_max = criteria['precio_max']
+                precio_min, precio_max_ajustado = calcular_rango_precio(precio_max)
+                criteria['precio_min_implicito'] = precio_min
+                criteria['precio_max_ajustado'] = precio_max_ajustado
+                criteria['segmento_precio'] = get_segmento_precio(precio_max)
+                criteria['tolerancia_aplicada'] = get_tolerancia_precio(precio_max)
+
+            # 2. Detectar/confirmar perfil de comprador
+            perfil_claude = criteria.get('perfil_comprador', 'general')
+            perfil_detectado = detectar_perfil_comprador(query, criteria)
+            # Si Claude detectó algo específico, usarlo; si no, usar nuestro detector
+            if perfil_claude == 'general' and perfil_detectado != 'general':
+                criteria['perfil_comprador'] = perfil_detectado
+            elif perfil_claude == 'general':
+                criteria['perfil_comprador'] = perfil_detectado
+
+            # 3. Expandir zonas similares si hay ubicaciones
+            if criteria.get('ubicaciones'):
+                zonas_expandidas = []
+                for zona in criteria['ubicaciones']:
+                    expandidas = get_zonas_expandidas(zona)
+                    for z in expandidas:
+                        if z not in zonas_expandidas:
+                            zonas_expandidas.append(z)
+                criteria['zonas_expandidas'] = zonas_expandidas
+
+            # 4. Normalizar flexibilidad de precio
+            if not criteria.get('flexibilidad_precio'):
+                # Por defecto, si dice "hasta" o "máximo" es estricto
+                query_lower = query.lower()
+                if 'máximo' in query_lower or 'hasta' in query_lower or 'maximo' in query_lower:
+                    criteria['flexibilidad_precio'] = 'estricto'
+                else:
+                    criteria['flexibilidad_precio'] = 'normal'
+
             elapsed_ms = (time.time() - start_time) * 1000
             search_log.log_criteria_extraction(criteria, elapsed_ms)
 
@@ -178,12 +273,14 @@ Responde SOLO con el JSON de criterios."""
             print(f"❌ Error al extraer criterios: {e}")
             return {}
 
-    def _build_sql_query(self, criteria: Dict[str, Any]) -> tuple:
+    def _build_sql_query(self, criteria: Dict[str, Any], use_hard_filters: bool = True) -> tuple:
         """
         Construye una consulta SQL basada en los criterios extraídos
+        MEJORADO v2.0: Filtros duros de precio que nunca se relajan
 
         Args:
             criteria: Diccionario de criterios de búsqueda
+            use_hard_filters: Si usar filtros duros de precio (default True)
 
         Returns:
             Tupla (query_sql, params)
@@ -205,22 +302,31 @@ Responde SOLO con el JSON de criterios."""
         conditions = []
         params = {}
 
-        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
-        if criteria.get('ubicaciones'):
-            ubicaciones = criteria['ubicaciones']
-            zona_conditions = []
-            for i, ubicacion in enumerate(ubicaciones):
-                # Buscar en zona, ciudad, dirección Y título (más flexible)
-                zona_conditions.append(
-                    f"(zona ILIKE %(ubicacion_{i})s OR "
-                    f"ciudad ILIKE %(ubicacion_{i})s OR "
-                    f"direccion_completa ILIKE %(ubicacion_{i})s OR "
-                    f"titulo ILIKE %(ubicacion_{i})s)"
-                )
-                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-            conditions.append(f"({' OR '.join(zona_conditions)})")
+        # ========== FILTROS DUROS (NUNCA SE RELAJAN) ==========
 
-        # Filtro por tipo de propiedad (puede ser string o lista)
+        # FILTRO DURO #1: Rango de precio con tolerancia del segmento
+        if use_hard_filters and criteria.get('precio_max'):
+            # Usar precio_min implícito calculado (±tolerancia del segmento)
+            precio_min_duro = criteria.get('precio_min_implicito') or criteria.get('precio_min')
+            precio_max_duro = criteria.get('precio_max_ajustado') or criteria['precio_max']
+
+            # Si hay precio_min explícito del usuario, usarlo
+            if criteria.get('precio_min'):
+                precio_min_duro = criteria['precio_min']
+
+            if precio_min_duro:
+                conditions.append("precio >= %(precio_min_duro)s")
+                params['precio_min_duro'] = precio_min_duro
+
+            conditions.append("precio <= %(precio_max_duro)s")
+            params['precio_max_duro'] = precio_max_duro
+
+        elif criteria.get('precio_max'):
+            # Fallback sin filtros duros (para búsquedas relajadas)
+            conditions.append("precio <= %(precio_max)s")
+            params['precio_max'] = criteria['precio_max']
+
+        # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
             tipos = criteria['tipo_propiedad']
             if isinstance(tipos, list):
@@ -233,14 +339,23 @@ Responde SOLO con el JSON de criterios."""
                 conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
                 params['tipo_propiedad'] = f"%{tipos}%"
 
-        # Filtro por rango de precio
-        if criteria.get('precio_min'):
-            conditions.append("precio >= %(precio_min)s")
-            params['precio_min'] = criteria['precio_min']
+        # ========== FILTROS FLEXIBLES ==========
 
-        if criteria.get('precio_max'):
-            conditions.append("precio <= %(precio_max)s")
-            params['precio_max'] = criteria['precio_max']
+        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
+        # Incluye zonas expandidas si están disponibles
+        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
+        if ubicaciones_buscar:
+            zona_conditions = []
+            for i, ubicacion in enumerate(ubicaciones_buscar):
+                # Buscar en zona, ciudad, dirección Y título (más flexible)
+                zona_conditions.append(
+                    f"(zona ILIKE %(ubicacion_{i})s OR "
+                    f"ciudad ILIKE %(ubicacion_{i})s OR "
+                    f"direccion_completa ILIKE %(ubicacion_{i})s OR "
+                    f"titulo ILIKE %(ubicacion_{i})s)"
+                )
+                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+            conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Filtro por habitaciones
         if criteria.get('habitaciones_min'):
@@ -251,10 +366,14 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("habitaciones <= %(habitaciones_max)s")
             params['habitaciones_max'] = criteria['habitaciones_max']
 
-        # Filtro por baños
+        # Filtro por baños (MEJORADO v2.0: ahora incluye banos_max)
         if criteria.get('banos_min'):
             conditions.append("banos >= %(banos_min)s")
             params['banos_min'] = criteria['banos_min']
+
+        if criteria.get('banos_max'):
+            conditions.append("banos <= %(banos_max)s")
+            params['banos_max'] = criteria['banos_max']
 
         # Filtro por área
         if criteria.get('area_min'):
@@ -273,14 +392,17 @@ Responde SOLO con el JSON de criterios."""
                 conditions.append("piso = %(piso)s")
                 params['piso'] = criteria['piso']
 
-        # Filtro por amenidades
+        # Filtro por amenidades (ahora es opcional, no elimina resultados)
+        # Las amenidades se usan más para ranking que para filtrado duro
+        # Solo aplicar si hay pocas amenidades requeridas (máx 2)
         if criteria.get('amenidades_requeridas'):
             amenidades = criteria['amenidades_requeridas']
-            for i, amenidad in enumerate(amenidades):
-                conditions.append(
-                    f"(amenidades_internas ILIKE %(amenidad_{i})s OR amenidades_externas ILIKE %(amenidad_{i})s)"
-                )
-                params[f'amenidad_{i}'] = f'%{amenidad}%'
+            if len(amenidades) <= 2:  # Solo filtrar si son pocas
+                for i, amenidad in enumerate(amenidades):
+                    conditions.append(
+                        f"(amenidades_internas ILIKE %(amenidad_{i})s OR amenidades_externas ILIKE %(amenidad_{i})s)"
+                    )
+                    params[f'amenidad_{i}'] = f'%{amenidad}%'
 
         # Agregar condiciones a la query
         if conditions:
@@ -289,88 +411,208 @@ Responde SOLO con el JSON de criterios."""
         # Ordenar por relevancia (más amenidades primero, luego por precio)
         base_query += " ORDER BY total_amenidades DESC, precio ASC"
 
-        # Limitar resultados
-        base_query += " LIMIT 20"
+        # Limitar resultados (más para ranking posterior)
+        base_query += " LIMIT 50"
 
         return base_query, params
 
     def _rank_results(self, results: List[Dict], criteria: Dict[str, Any]) -> List[Dict]:
         """
         Rankea los resultados según qué tan bien coinciden con los criterios
-        Versión mejorada que usa campos AI enriquecidos
+        MEJORADO v2.0: Scoring por perfil de comprador y explicabilidad
 
         Args:
             results: Lista de propiedades encontradas
             criteria: Criterios de búsqueda originales
 
         Returns:
-            Lista rankeada con score de coincidencia
+            Lista rankeada con score de coincidencia (0-100 normalizado)
         """
+        perfil_comprador = criteria.get('perfil_comprador', 'general')
+        pesos_perfil = get_pesos_perfil(perfil_comprador)
+        amenidades_preferidas = get_amenidades_preferidas(perfil_comprador)
 
         for result in results:
             score = 0
             reasons = []
+            match_details = {
+                'precio': 'no_evaluado',
+                'ubicacion': 'no_evaluado',
+                'habitaciones': 'no_evaluado',
+                'amenidades': 'no_evaluado'
+            }
 
-            # ===== SCORING BASADO EN AI ENRICHMENT =====
+            # ===== SCORING POR PERFIL DE COMPRADOR v2.0 =====
 
-            # 1. Overall Quality Score (base score from AI)
-            overall_quality = result.get('overall_quality_score', 50)
-            if isinstance(overall_quality, (int, float)):
-                # Usar el quality score de AI como base (normalizado a 0-20 pts)
-                score += int(overall_quality * 0.2)
-                if overall_quality >= 80:
-                    reasons.append(f"Calidad excepcional ({overall_quality}/100)")
-                elif overall_quality >= 70:
-                    reasons.append(f"Alta calidad ({overall_quality}/100)")
+            # 1. PRECIO - Evaluación detallada
+            precio = result.get('precio', 0)
+            if isinstance(precio, str):
+                try:
+                    precio = float(precio.replace(',', '').replace('$', '').replace(' ', ''))
+                except:
+                    precio = 0
 
-            # 2. Target Buyer Profile Match
-            if criteria.get('target_buyer_profile'):
-                target_profiles = result.get('target_buyer_profile', [])
-                if isinstance(target_profiles, list):
-                    for profile in criteria['target_buyer_profile']:
-                        if any(profile.lower() in tp.lower() for tp in target_profiles):
-                            score += 15
-                            reasons.append(f"Ideal para: {profile}")
+            if criteria.get('precio_max') and precio > 0:
+                precio_max = criteria['precio_max']
+                precio_min = criteria.get('precio_min_implicito') or criteria.get('precio_min') or 0
+
+                # Calcular qué tan bien encaja el precio
+                if precio_min <= precio <= precio_max:
+                    # Precio en rango ideal
+                    rango = precio_max - precio_min if precio_min else precio_max
+                    # Mejor si está en el 70-90% del presupuesto (ni muy barato ni muy caro)
+                    ratio = precio / precio_max
+                    if 0.70 <= ratio <= 0.90:
+                        score += 15
+                        match_details['precio'] = 'ideal'
+                        reasons.append(f"Precio ideal ({ratio*100:.0f}% del presupuesto)")
+                    elif ratio <= 0.70:
+                        score += 10
+                        match_details['precio'] = 'bajo'
+                        reasons.append("Precio bajo el presupuesto")
+                    else:
+                        score += 12
+                        match_details['precio'] = 'limite'
+                        reasons.append("Precio cerca del límite")
+                elif precio > precio_max:
+                    # Penalizar propiedades fuera del rango (no deberían llegar aquí con filtros duros)
+                    score -= 20
+                    match_details['precio'] = 'excede'
+
+            # 2. UBICACIÓN - Coincidencia exacta vs zona expandida
+            if criteria.get('ubicaciones'):
+                zona = (result.get('zona') or '').lower()
+                ciudad = (result.get('ciudad') or '').lower()
+                direccion = (result.get('direccion_completa') or '').lower()
+                titulo = (result.get('titulo') or '').lower()
+
+                ubicacion_match = False
+                for ubicacion in criteria['ubicaciones']:
+                    ub_lower = ubicacion.lower()
+                    if ub_lower in zona or ub_lower in titulo:
+                        score += 15
+                        match_details['ubicacion'] = 'exacta'
+                        reasons.append(f"Ubicación exacta: {result.get('zona', ubicacion)}")
+                        ubicacion_match = True
+                        break
+
+                # Si no hay match exacto, verificar zonas expandidas
+                if not ubicacion_match and criteria.get('zonas_expandidas'):
+                    for zona_exp in criteria['zonas_expandidas']:
+                        if zona_exp.lower() in zona or zona_exp.lower() in titulo:
+                            score += 8
+                            match_details['ubicacion'] = 'cercana'
+                            reasons.append(f"Zona cercana: {result.get('zona')}")
                             break
 
-            # 3. Segmento de mercado adecuado
+            # 3. HABITACIONES - Exacto vs rango
+            if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
+                hab = result.get('habitaciones', 0)
+                if not isinstance(hab, (int, float)):
+                    try:
+                        hab = int(hab)
+                    except:
+                        hab = 0
+
+                hab_min = criteria.get('habitaciones_min', 0)
+                hab_max = criteria.get('habitaciones_max', 99)
+
+                if hab_min <= hab <= hab_max:
+                    if hab == hab_min or (hab_max and hab == hab_max):
+                        score += 10
+                        match_details['habitaciones'] = 'exacto'
+                        reasons.append(f"{hab} habitaciones (exacto)")
+                    else:
+                        score += 7
+                        match_details['habitaciones'] = 'rango'
+                        reasons.append(f"{hab} habitaciones")
+                elif hab > hab_max:
+                    score -= 5  # Penalizar si excede el máximo
+                    match_details['habitaciones'] = 'excede'
+
+            # 4. BAÑOS - Ahora incluye max
+            if criteria.get('banos_min') or criteria.get('banos_max'):
+                banos = result.get('banos', 0)
+                if not isinstance(banos, (int, float)):
+                    try:
+                        banos = int(banos)
+                    except:
+                        banos = 0
+
+                banos_min = criteria.get('banos_min', 0)
+                banos_max = criteria.get('banos_max', 99)
+
+                if banos_min <= banos <= banos_max:
+                    score += 5
+                    reasons.append(f"{banos} baños")
+                elif banos > banos_max:
+                    score -= 3  # Penalizar si excede
+
+            # 5. PISO - Crítico para perfil senior
+            if criteria.get('piso'):
+                piso_buscado = criteria['piso']
+                piso_prop = result.get('piso')
+
+                peso_piso = pesos_perfil.get('primer_piso', 1.0) if piso_buscado == 1 else 1.0
+
+                if piso_prop == piso_buscado:
+                    score += int(10 * peso_piso)
+                    reasons.append(f"Piso {piso_buscado} (requerido)")
+                elif piso_buscado == 1 and piso_prop and piso_prop > 1:
+                    # Para seniors, no primer piso es muy malo
+                    if perfil_comprador == 'senior':
+                        score -= 15
+                        reasons.append("No es primer piso (requerido)")
+
+            # ===== SCORING POR PERFIL ESPECÍFICO =====
+
+            # 6. Amenidades según perfil
+            amenidades_int = (result.get('amenidades_internas') or '').lower()
+            amenidades_ext = (result.get('amenidades_externas') or '').lower()
+            amenidades_prop = amenidades_int + ' ' + amenidades_ext
+
+            amenidades_encontradas = []
+            for amenidad in amenidades_preferidas:
+                if amenidad.lower() in amenidades_prop:
+                    amenidades_encontradas.append(amenidad)
+                    score += 3  # Bonus por cada amenidad preferida del perfil
+
+            if amenidades_encontradas:
+                match_details['amenidades'] = 'match'
+                reasons.append(f"Amenidades ideales: {', '.join(amenidades_encontradas[:3])}")
+
+            # 7. Amenidades requeridas explícitamente
+            if criteria.get('amenidades_requeridas'):
+                for amenidad in criteria['amenidades_requeridas']:
+                    if amenidad.lower() in amenidades_prop:
+                        score += 5
+                        if f"Tiene: {amenidad}" not in reasons:
+                            reasons.append(f"Tiene: {amenidad}")
+
+            # 8. Seguridad - Importante para familias y seniors
+            if perfil_comprador in ['familia', 'senior']:
+                tiene_seguridad = any(s in amenidades_prop for s in AMENIDADES_SEGURIDAD)
+                if tiene_seguridad:
+                    score += int(5 * pesos_perfil.get('seguridad', 1.0))
+                    reasons.append("Alta seguridad")
+
+            # ===== SCORING ADICIONAL =====
+
+            # 9. Segmento de mercado adecuado
             segmento = result.get('segmento_mercado', '')
             if criteria.get('precio_max'):
                 precio_max = criteria['precio_max']
-                # Dar bonus si el segmento es apropiado al presupuesto
                 if precio_max >= 1_000_000_000 and segmento in ['Lujo', 'Premium']:
-                    score += 10
+                    score += 8
                     reasons.append(f"Segmento {segmento}")
                 elif 400_000_000 <= precio_max < 1_000_000_000 and segmento in ['Premium', 'Medio-Alto']:
-                    score += 10
+                    score += 8
                     reasons.append(f"Segmento {segmento}")
                 elif precio_max < 400_000_000 and segmento in ['Medio', 'Accesible']:
-                    score += 10
+                    score += 8
                     reasons.append(f"Segmento {segmento}")
 
-            # ===== SCORING TRADICIONAL MEJORADO =====
-
-            # 4. Coincidencia de ubicación (ahora con barrio normalizado)
-            if criteria.get('ubicaciones'):
-                zona = result.get('zona') or ''
-                barrio_norm = result.get('barrio_normalizado') or ''
-                direccion = result.get('direccion_completa') or ''
-
-                for ubicacion in criteria['ubicaciones']:
-                    if (ubicacion.lower() in zona.lower() or
-                        ubicacion.lower() in barrio_norm.lower() or
-                        ubicacion.lower() in direccion.lower()):
-                        score += 12
-                        reasons.append(f"Ubicación: {barrio_norm or zona}")
-                        break
-
-            # 5. Walkability score (bonus si es alto)
-            walkability = result.get('walkability_score', 0)
-            if isinstance(walkability, (int, float)) and walkability >= 8:
-                score += 5
-                reasons.append(f"Excelente ubicación (walkability: {walkability}/10)")
-
-            # 6. Coincidencia de tipo (puede ser string o lista)
+            # 10. Tipo de propiedad
             if criteria.get('tipo_propiedad'):
                 tipo_prop = (result.get('tipo_propiedad') or '').lower()
                 tipos_buscar = criteria['tipo_propiedad']
@@ -382,111 +624,20 @@ Responde SOLO con el JSON de criterios."""
                     score += 5
                     reasons.append(f"Tipo: {result.get('tipo_propiedad')}")
 
-            # 7. Precio comparativo (usar análisis AI)
-            precio_comp = result.get('precio_comparativo_zona', '')
-            if 'debajo' in precio_comp.lower() or 'oportunidad' in precio_comp.lower():
-                score += 10
-                reasons.append("Excelente precio para la zona")
-            elif 'competitivo' in precio_comp.lower():
-                score += 5
-
-            # 8. Coincidencia de precio (mejor si está en el rango ideal)
-            precio = result.get('precio', 0)
-            if isinstance(precio, str):
-                try:
-                    precio = float(precio.replace(',', '').replace('$', '').replace(' ', ''))
-                except:
-                    precio = 0
-
-            if criteria.get('precio_max'):
-                if precio <= criteria['precio_max'] * 0.9:  # 10% bajo el máximo
-                    score += 8
-                    reasons.append("Precio dentro del presupuesto")
-                elif precio <= criteria['precio_max']:
-                    score += 5
-
-            # 9. Coincidencia de habitaciones exacta
-            if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
-                hab = result.get('habitaciones', 0)
-                if not isinstance(hab, (int, float)):
-                    try:
-                        hab = int(hab)
-                    except:
-                        hab = 0
-
-                if criteria.get('habitaciones_min') and hab == criteria['habitaciones_min']:
-                    score += 7
-                    reasons.append(f"{hab} habitaciones (exacto)")
-                elif criteria.get('habitaciones_min') and hab >= criteria['habitaciones_min']:
-                    score += 3
-
-            # 10. Amenidades inteligentes (usar flags de AI)
-            # Si el usuario busca para familia
-            if criteria.get('amenidades_requeridas'):
-                for amenidad in criteria['amenidades_requeridas']:
-                    amenidad_lower = amenidad.lower()
-
-                    # Check AI flags
-                    if 'familia' in amenidad_lower or 'niños' in amenidad_lower or 'niño' in amenidad_lower:
-                        if result.get('amenidades_familia'):
-                            score += 10
-                            reasons.append("Ideal para familias")
-
-                    if 'mascota' in amenidad_lower or 'pet' in amenidad_lower or 'perro' in amenidad_lower:
-                        if result.get('amenidades_mascota_friendly'):
-                            score += 8
-                            reasons.append("Pet-friendly")
-
-                    if 'lujo' in amenidad_lower or 'premium' in amenidad_lower:
-                        if result.get('amenidades_lujo'):
-                            score += 8
-                            reasons.append("Amenidades de lujo")
-
-                    if 'seguridad' in amenidad_lower or 'portería' in amenidad_lower or 'vigilancia' in amenidad_lower:
-                        if result.get('amenidades_seguridad'):
-                            score += 7
-                            reasons.append("Alta seguridad")
-
-                    # Check tradicional
-                    amenidades_int = result.get('amenidades_internas') or ''
-                    amenidades_ext = result.get('amenidades_externas') or ''
-                    amenidades_prop = (amenidades_int + ' ' + amenidades_ext).lower()
-
-                    if amenidad.lower() in amenidades_prop:
-                        score += 6
-                        reasons.append(f"Tiene: {amenidad}")
-
-            # 11. Piso preferido
-            if criteria.get('piso'):
-                if result.get('piso') == criteria['piso']:
-                    score += 8
-                    reasons.append(f"Piso {criteria['piso']}")
-
-            # 12. Estado de conservación (bonus por excelente estado)
+            # 11. Estado de conservación
             estado_cons = result.get('estado_conservacion', '')
             if estado_cons in ['Nuevo', 'Excelente', 'A estrenar']:
                 score += 4
                 reasons.append(f"Estado: {estado_cons}")
 
-            # 13. Unique Selling Points (bonus por puntos únicos)
-            usps = result.get('unique_selling_points', [])
-            if isinstance(usps, list) and len(usps) >= 3:
-                score += 5
-                reasons.append("Características únicas")
-
-            # 14. Rentabilidad para inversionistas
-            if criteria.get('es_inversionista'):
+            # 12. Rentabilidad para inversionistas
+            if perfil_comprador == 'inversionista' or criteria.get('es_inversionista'):
                 rentabilidad = result.get('valor_rentabilidad_estimada', 0)
                 if isinstance(rentabilidad, (int, float)) and rentabilidad >= 4.0:
-                    score += 12
+                    score += int(12 * pesos_perfil.get('rentabilidad', 1.0))
                     reasons.append(f"Rentabilidad: {rentabilidad}%")
 
-            # 15. AI Confidence (penalizar si la confianza es muy baja)
-            ai_confidence = result.get('ai_confidence_score', 1.0)
-            if isinstance(ai_confidence, (int, float)) and ai_confidence < 0.5:
-                score = int(score * 0.9)  # Reducir 10% si confianza es baja
-
-            # 16. Más amenidades = mejor
+            # 13. Total amenidades bonus
             total_amenidades = result.get('total_amenidades', 0)
             if not isinstance(total_amenidades, (int, float)):
                 try:
@@ -498,8 +649,15 @@ Responde SOLO con el JSON de criterios."""
                 score += 4
                 reasons.append(f"{total_amenidades} amenidades")
 
+            # ===== NORMALIZACIÓN Y GUARDADO =====
+
+            # Normalizar score a 0-100
+            score = max(0, min(100, score))
+
             result['match_score'] = score
-            result['match_reasons'] = reasons
+            result['match_reasons'] = reasons[:5]  # Máximo 5 razones para no saturar
+            result['match_details'] = match_details
+            result['perfil_aplicado'] = perfil_comprador
 
         # Ordenar por score descendente
         results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
@@ -509,10 +667,18 @@ Responde SOLO con el JSON de criterios."""
     def _fallback_search(self, criteria: Dict[str, Any], db: DatabaseManager) -> List[Dict]:
         """
         Búsqueda relajada si la búsqueda principal no retorna resultados
-        Intenta primero con ubicación relajada, luego sin ubicación si no hay resultados
+        MEJORADO v2.0: MANTIENE filtros de precio (solo relaja ±20%)
+
+        Relaja:
+        - Ubicación: Expande a toda la ciudad
+        - Habitaciones: -1 del mínimo
+        - Amenidades: Ignora
+
+        NUNCA relaja:
+        - Precio: Mantiene dentro del segmento (máx ±20%)
+        - Tipo de propiedad: Mantiene exacto
         """
 
-        # Construir query relajada - usa id como slug para links compartibles
         base_query = """
         SELECT
             id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
@@ -529,104 +695,23 @@ Responde SOLO con el JSON de criterios."""
         conditions = []
         params = {}
 
-        # PRIMERO: Intentar con ubicación relajada (buscar ciudad en lugar de zona específica)
-        # Mapeo de zonas/barrios a ciudades para búsqueda relajada
-        zona_ciudad_map = {
-            # Sabaneta
-            'sabaneta': 'Sabaneta',
-            'rodeo alto': 'Sabaneta',
-            'suramerica': 'Sabaneta',
-            'mayorca': 'Sabaneta',
-            # Envigado
-            'envigado': 'Envigado',
-            'zuñiga': 'Envigado',
-            'la paz': 'Envigado',
-            # Itagüí
-            'itagui': 'Itagüí',
-            'itagüí': 'Itagüí',
-            # Bello
-            'bello': 'Bello',
-            'bello horizonte': 'Bello',
-            'niquia': 'Bello',
-            # La Estrella
-            'la estrella': 'La Estrella',
-            # Caldas
-            'caldas': 'Caldas',
-            # Medellín - Barrios populares
-            'poblado': 'Medellín',
-            'laureles': 'Medellín',
-            'belen': 'Medellín',
-            'belén': 'Medellín',
-            'calasanz': 'Medellín',
-            'robledo': 'Medellín',
-            'floresta': 'Medellín',
-            'estadio': 'Medellín',
-            'conquistadores': 'Medellín',
-            'suramericana': 'Medellín',
-            'carlos e restrepo': 'Medellín',
-            'san javier': 'Medellín',
-            'la america': 'Medellín',
-            'la américa': 'Medellín',
-            'simon bolivar': 'Medellín',
-            'simón bolívar': 'Medellín',
-            'alfonso lopez': 'Medellín',
-            'alfonso lópez': 'Medellín',
-            'francisco antonio zea': 'Medellín',
-            'san german': 'Medellín',
-            'san germán': 'Medellín',
-            'gratamira': 'Medellín',
-            'aranjuez': 'Medellín',
-            'manrique': 'Medellín',
-            'campo valdes': 'Medellín',
-            'campo valdés': 'Medellín',
-            'boston': 'Medellín',
-            'buenos aires': 'Medellín',
-            'guayabal': 'Medellín',
-            'trinidad': 'Medellín',
-            'prado': 'Medellín',
-            'centro': 'Medellín',
-            'castilla': 'Medellín',
-            'doce de octubre': 'Medellín',
-            '12 de octubre': 'Medellín',
-            'pedregal': 'Medellín',
-            'santa monica': 'Medellín',
-            'santa mónica': 'Medellín',
-        }
+        # ===== FILTROS DUROS (SE MANTIENEN) =====
 
-        # Si hay ubicaciones, buscar en ciudad correspondiente
-        if criteria.get('ubicaciones'):
-            ciudades_buscar = set()
-            zonas_originales = []
+        # PRECIO: Relajar pero MANTENER en segmento (máx ±20%)
+        if criteria.get('precio_max'):
+            precio_max = criteria['precio_max']
+            # Precio mínimo: 30% abajo del presupuesto (más relajado que búsqueda principal)
+            precio_min_relajado = int(precio_max * 0.70)
+            # Precio máximo: 20% arriba del presupuesto
+            precio_max_relajado = int(precio_max * 1.20)
 
-            for ubicacion in criteria['ubicaciones']:
-                ubicacion_lower = ubicacion.lower()
-                zonas_originales.append(ubicacion)
+            conditions.append("precio >= %(precio_min_relajado)s")
+            params['precio_min_relajado'] = precio_min_relajado
 
-                # Buscar la ciudad correspondiente
-                for zona_key, ciudad in zona_ciudad_map.items():
-                    if zona_key in ubicacion_lower:
-                        ciudades_buscar.add(ciudad)
-                        break
+            conditions.append("precio <= %(precio_max_relajado)s")
+            params['precio_max_relajado'] = precio_max_relajado
 
-            # Si encontramos ciudades, buscar por ciudad O por zona original (más flexible)
-            if ciudades_buscar:
-                location_conditions = []
-
-                # Buscar por ciudad
-                for i, ciudad in enumerate(ciudades_buscar):
-                    location_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
-                    params[f'ciudad_{i}'] = f'%{ciudad}%'
-
-                # También buscar por zona/título original (por si está escrito diferente)
-                for i, zona in enumerate(zonas_originales):
-                    location_conditions.append(
-                        f"(zona ILIKE %(zona_orig_{i})s OR titulo ILIKE %(zona_orig_{i})s)"
-                    )
-                    params[f'zona_orig_{i}'] = f'%{zona}%'
-
-                conditions.append(f"({' OR '.join(location_conditions)})")
-
-        # Tipo de propiedad (puede ser string o lista)
+        # TIPO DE PROPIEDAD: Mantener exacto
         if criteria.get('tipo_propiedad'):
             tipos = criteria['tipo_propiedad']
             if isinstance(tipos, list):
@@ -639,98 +724,9 @@ Responde SOLO con el JSON de criterios."""
                 conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
                 params['tipo_propiedad'] = f"%{tipos}%"
 
-        # Precio máximo relajado al 130% (no tan amplio como antes)
-        if criteria.get('precio_max'):
-            conditions.append("precio <= %(precio_max_relajado)s")
-            params['precio_max_relajado'] = criteria['precio_max'] * 1.3
+        # ===== FILTROS RELAJADOS =====
 
-        # Habitaciones mínimas relajadas (acepta 1 menos)
-        if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
-            conditions.append("habitaciones >= %(habitaciones_min_relajado)s")
-            params['habitaciones_min_relajado'] = criteria['habitaciones_min'] - 1
-
-        # Agregar condiciones
-        if conditions:
-            base_query += " AND " + " AND ".join(conditions)
-
-        # Ordenar por precio y amenidades
-        base_query += " ORDER BY precio ASC, total_amenidades DESC LIMIT 20"
-
-        try:
-            db.cursor.execute(base_query, params)
-            columns = [desc[0] for desc in db.cursor.description]
-            rows = db.cursor.fetchall()
-
-            results = []
-            for row in rows:
-                # Si row ya es un diccionario (RealDictRow), convertirlo a dict normal
-                if isinstance(row, dict):
-                    prop = dict(row)
-                else:
-                    # Si es tupla, zip con columnas
-                    prop = dict(zip(columns, row))
-
-                # Convertir tipos para JSON
-                for key, value in prop.items():
-                    if hasattr(value, 'isoformat'):
-                        prop[key] = value.isoformat()
-                    elif isinstance(value, (int, float, str, bool, type(None))):
-                        continue
-                    else:
-                        prop[key] = str(value)
-                results.append(prop)
-
-            return results
-
-        except Exception as e:
-            print(f"⚠️  Error en búsqueda fallback: {e}")
-            return []
-
-    def _minimal_fallback_search(self, criteria: Dict[str, Any], db: DatabaseManager) -> List[Dict]:
-        """
-        Búsqueda mínima: solo tipo de propiedad + ciudad
-        Ignora precio, habitaciones y amenidades
-        Sirve para verificar si hay ALGUNA propiedad disponible en la zona
-        """
-        base_query = """
-        SELECT
-            id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
-            tipo_propiedad, estado, ciudad, zona, direccion_completa,
-            area_construida, habitaciones, banos, parqueaderos, estrato, piso,
-            ano_construccion, administracion, predial,
-            amenidades_internas, amenidades_externas, total_amenidades,
-            asesor, telefono, inmobiliaria, imagen_principal, total_imagenes,
-            descripcion, fecha_creacion
-        FROM propiedades
-        WHERE activa = TRUE
-        """
-
-        conditions = []
-        params = {}
-
-        # Solo tipo de propiedad (puede ser lista)
-        if criteria.get('tipo_propiedad'):
-            tipos = criteria['tipo_propiedad']
-            if isinstance(tipos, list):
-                tipo_conditions = []
-                for i, tipo in enumerate(tipos):
-                    tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_min_{i})s")
-                    params[f'tipo_min_{i}'] = f'%{tipo}%'
-                conditions.append(f"({' OR '.join(tipo_conditions)})")
-            else:
-                conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
-                params['tipo_propiedad'] = f"%{tipos}%"
-
-        # Buscar en TODAS las ciudades mencionadas (usando el mapeo expandido)
-        zona_ciudad_map = {
-            'calasanz': 'Medellín', 'robledo': 'Medellín', 'floresta': 'Medellín',
-            'bello horizonte': 'Bello', 'bello': 'Bello', 'alfonso lopez': 'Medellín',
-            'alfonso lópez': 'Medellín', 'francisco antonio zea': 'Medellín',
-            'san german': 'Medellín', 'san germán': 'Medellín', 'gratamira': 'Medellín',
-            'laureles': 'Medellín', 'poblado': 'Medellín', 'envigado': 'Envigado',
-            'sabaneta': 'Sabaneta', 'itagui': 'Itagüí', 'itagüí': 'Itagüí',
-        }
-
+        # UBICACIÓN: Expandir a ciudad completa usando el mapeo de search_config
         if criteria.get('ubicaciones'):
             ciudades_buscar = set()
             zonas_originales = []
@@ -739,35 +735,37 @@ Responde SOLO con el JSON de criterios."""
                 ubicacion_lower = ubicacion.lower()
                 zonas_originales.append(ubicacion)
 
-                # Buscar la ciudad correspondiente
-                for zona_key, ciudad in zona_ciudad_map.items():
-                    if zona_key in ubicacion_lower:
-                        ciudades_buscar.add(ciudad)
-                        break
+                # Usar el mapeo centralizado de search_config
+                ciudad = ZONA_A_CIUDAD.get(ubicacion_lower)
+                if ciudad:
+                    ciudades_buscar.add(ciudad)
 
+            # Buscar por ciudad O zona original
             if ciudades_buscar or zonas_originales:
                 location_conditions = []
 
-                # Buscar por ciudad
                 for i, ciudad in enumerate(ciudades_buscar):
-                    location_conditions.append(f"ciudad ILIKE %(ciudad_min_{i})s")
-                    params[f'ciudad_min_{i}'] = f'%{ciudad}%'
+                    location_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
+                    params[f'ciudad_{i}'] = f'%{ciudad}%'
 
-                # También buscar por zona/título original
                 for i, zona in enumerate(zonas_originales):
                     location_conditions.append(
-                        f"(zona ILIKE %(zona_min_{i})s OR titulo ILIKE %(zona_min_{i})s)"
+                        f"(zona ILIKE %(zona_orig_{i})s OR titulo ILIKE %(zona_orig_{i})s)"
                     )
-                    params[f'zona_min_{i}'] = f'%{zona}%'
+                    params[f'zona_orig_{i}'] = f'%{zona}%'
 
-                if location_conditions:
-                    conditions.append(f"({' OR '.join(location_conditions)})")
+                conditions.append(f"({' OR '.join(location_conditions)})")
 
-        # Si no hay ninguna condición, buscar todo
+        # HABITACIONES: Relajar -1 del mínimo
+        if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
+            conditions.append("habitaciones >= %(habitaciones_min_relajado)s")
+            params['habitaciones_min_relajado'] = criteria['habitaciones_min'] - 1
+
+        # Agregar condiciones
         if conditions:
             base_query += " AND " + " AND ".join(conditions)
 
-        base_query += " ORDER BY precio ASC LIMIT 10"
+        base_query += " ORDER BY precio ASC, total_amenidades DESC LIMIT 30"
 
         try:
             db.cursor.execute(base_query, params)
@@ -788,13 +786,92 @@ Responde SOLO con el JSON de criterios."""
                         continue
                     else:
                         prop[key] = str(value)
+
+                # Marcar como resultado de búsqueda relajada
+                prop['busqueda_relajada'] = True
                 results.append(prop)
 
             return results
 
         except Exception as e:
-            print(f"⚠️  Error en búsqueda mínima: {e}")
+            print(f"⚠️  Error en búsqueda fallback: {e}")
             return []
+
+    def _generate_no_results_response(self, criteria: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Genera una respuesta informativa cuando no hay resultados
+        NUEVO v2.0: En lugar de mostrar propiedades irrelevantes, explicamos por qué
+        """
+        # Construir mensaje de sugerencias
+        sugerencias = []
+
+        if criteria.get('ubicaciones'):
+            zonas = criteria['ubicaciones']
+            zonas_expandidas = []
+            for zona in zonas:
+                expandidas = get_zonas_expandidas(zona)
+                zonas_expandidas.extend([z for z in expandidas if z not in zonas])
+            if zonas_expandidas:
+                sugerencias.append(f"Ampliar zona a: {', '.join(zonas_expandidas[:3])}")
+
+        if criteria.get('precio_max'):
+            precio_sugerido = int(criteria['precio_max'] * 1.2)
+            sugerencias.append(f"Aumentar presupuesto a ${precio_sugerido/1_000_000:.0f}M")
+
+        if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 2:
+            sugerencias.append(f"Considerar {criteria['habitaciones_min'] - 1} habitaciones")
+
+        if criteria.get('amenidades_requeridas') and len(criteria['amenidades_requeridas']) > 2:
+            sugerencias.append("Reducir amenidades requeridas")
+
+        return {
+            'success': True,
+            'results': [],
+            'total_found': 0,
+            'no_results_reason': 'No encontramos propiedades que cumplan todos los criterios',
+            'criterios_aplicados': {
+                'ubicaciones': criteria.get('ubicaciones', []),
+                'tipo': criteria.get('tipo_propiedad', 'No especificado'),
+                'precio_rango': f"${criteria.get('precio_min_implicito', 0)/1_000_000:.0f}M - ${criteria.get('precio_max', 0)/1_000_000:.0f}M" if criteria.get('precio_max') else 'No especificado',
+                'habitaciones': f"{criteria.get('habitaciones_min', '?')}-{criteria.get('habitaciones_max', '?')}",
+            },
+            'sugerencias': sugerencias,
+            'mensaje_usuario': self._format_no_results_message(criteria, sugerencias)
+        }
+
+    def _format_no_results_message(self, criteria: Dict[str, Any], sugerencias: List[str]) -> str:
+        """
+        Formatea el mensaje de no resultados para WhatsApp
+        NUEVO v2.0: Mensaje informativo en lugar de mostrar propiedades irrelevantes
+        """
+        lines = []
+        lines.append("No encontramos propiedades con esos criterios exactos")
+        lines.append("")
+
+        # Mostrar qué se buscó
+        lines.append("Criterios aplicados:")
+        if criteria.get('ubicaciones'):
+            lines.append(f"  - Zona: {', '.join(criteria['ubicaciones'])}")
+        if criteria.get('tipo_propiedad'):
+            lines.append(f"  - Tipo: {criteria['tipo_propiedad']}")
+        if criteria.get('precio_max'):
+            precio_min = criteria.get('precio_min_implicito', 0)
+            lines.append(f"  - Precio: ${precio_min/1_000_000:.0f}M - ${criteria['precio_max']/1_000_000:.0f}M")
+        if criteria.get('habitaciones_min'):
+            hab_max = criteria.get('habitaciones_max', criteria['habitaciones_min'])
+            lines.append(f"  - Habitaciones: {criteria['habitaciones_min']}-{hab_max}")
+
+        # Sugerencias
+        if sugerencias:
+            lines.append("")
+            lines.append("Sugerencias para encontrar opciones:")
+            for i, sug in enumerate(sugerencias[:3], 1):
+                lines.append(f"  {i}. {sug}")
+
+        lines.append("")
+        lines.append("Responde con nuevos criterios o escribe 'ampliar' para buscar con criterios más flexibles.")
+
+        return "\n".join(lines)
 
     def search(self, query: str, limit: int = 10, sender: str = None) -> Dict[str, Any]:
         """
@@ -905,17 +982,26 @@ Responde SOLO con el JSON de criterios."""
 
                 print(f"📊 Propiedades encontradas: {len(results)}")
 
-                # Si no hay resultados, intentar búsqueda más relajada
+                # FLUJO MEJORADO v2.0: Si no hay resultados, usar fallback CON filtros de precio
+                search_type = 'principal'
                 if len(results) == 0:
                     print("⚠️  Sin resultados con todos los criterios. Intentando búsqueda relajada...")
                     results = self._fallback_search(criteria, db)
+                    search_type = 'relajada'
                     print(f"📊 Búsqueda relajada encontró: {len(results)} propiedades")
 
-                    # Si aún no hay resultados, buscar solo por tipo y ciudad (ignorar precio/habitaciones)
+                    # v2.0: Si TAMPOCO hay resultados en fallback, NO mostrar propiedades irrelevantes
+                    # En su lugar, generar respuesta informativa
                     if len(results) == 0:
-                        print("⚠️  Intentando búsqueda mínima (solo tipo + ubicación)...")
-                        results = self._minimal_fallback_search(criteria, db)
-                        print(f"📊 Búsqueda mínima encontró: {len(results)} propiedades")
+                        print("ℹ️  Sin resultados incluso con criterios relajados")
+                        total_elapsed = (time.time() - total_start) * 1000
+                        search_log.log_results(0, 0, total_elapsed)
+                        no_results_response = self._generate_no_results_response(criteria)
+                        no_results_response['search_id'] = search_id
+                        no_results_response['elapsed_ms'] = total_elapsed
+                        no_results_response['criteria'] = criteria
+                        no_results_response['search_type'] = 'sin_resultados'
+                        return no_results_response
 
         except Exception as e:
             search_log.log_error(str(e), 'sql_execution')
@@ -944,7 +1030,7 @@ Responde SOLO con el JSON de criterios."""
         total_elapsed = (time.time() - total_start) * 1000
         search_log.log_results(len(results), min(len(results), limit), total_elapsed)
 
-        # Paso 5: Formatear respuesta
+        # Paso 5: Formatear respuesta con metadata adicional v2.0
         return {
             'success': True,
             'criteria': criteria,
@@ -952,12 +1038,16 @@ Responde SOLO con el JSON de criterios."""
             'results': results,
             'timestamp': datetime.now().isoformat(),
             'search_id': search_id,
+            'search_type': search_type,
+            'perfil_comprador': criteria.get('perfil_comprador', 'general'),
+            'segmento_precio': criteria.get('segmento_precio'),
             'elapsed_ms': total_elapsed
         }
 
     def format_results_for_agent(self, search_response: Dict) -> str:
         """
         Formatea los resultados de forma amigable para el agente inmobiliario
+        MEJORADO v2.0: Mayor explicabilidad y contexto
 
         Args:
             search_response: Respuesta de la búsqueda
@@ -967,33 +1057,61 @@ Responde SOLO con el JSON de criterios."""
         """
 
         if not search_response.get('success'):
-            return f"❌ Error: {search_response.get('error', 'Error desconocido')}"
+            return f"Error: {search_response.get('error', 'Error desconocido')}"
 
         results = search_response.get('results', [])
         criteria = search_response.get('criteria', {})
 
+        # Manejar respuesta de sin resultados
+        if search_response.get('search_type') == 'sin_resultados':
+            return search_response.get('mensaje_usuario', 'No se encontraron propiedades.')
+
         if not results:
-            return "😔 No se encontraron propiedades que coincidan con los criterios."
+            return "No se encontraron propiedades que coincidan con los criterios."
 
-        # Construir mensaje
+        # Construir mensaje mejorado v2.0
         lines = []
-        lines.append("🏠 PROPIEDADES ENCONTRADAS")
-        lines.append("=" * 50)
-        lines.append("")
 
-        # Resumen de búsqueda
-        lines.append("📋 Criterios de búsqueda:")
-        if criteria.get('ubicaciones'):
-            lines.append(f"   📍 Ubicación: {', '.join(criteria['ubicaciones'])}")
-        if criteria.get('tipo_propiedad'):
-            lines.append(f"   🏢 Tipo: {criteria['tipo_propiedad']}")
-        if criteria.get('precio_max'):
-            precio_max = criteria['precio_max'] / 1_000_000
-            lines.append(f"   💰 Hasta: ${precio_max:.0f}M")
-        if criteria.get('habitaciones_min'):
-            lines.append(f"   🛏️  Habitaciones: {criteria['habitaciones_min']}+")
+        # Header con perfil detectado
+        perfil = criteria.get('perfil_comprador', 'general')
+        perfil_emoji = {
+            'familia': '👨‍👩‍👧',
+            'senior': '👴',
+            'inversionista': '📈',
+            'joven_profesional': '💼',
+            'general': '🏠'
+        }.get(perfil, '🏠')
+
+        lines.append(f"{perfil_emoji} PROPIEDADES ENCONTRADAS")
+        lines.append("=" * 40)
+
+        # Resumen de criterios aplicados
         lines.append("")
-        lines.append(f"✅ {len(results)} propiedades coinciden")
+        lines.append("Criterios aplicados:")
+        if criteria.get('ubicaciones'):
+            lines.append(f"  Zona: {', '.join(criteria['ubicaciones'])}")
+        if criteria.get('tipo_propiedad'):
+            lines.append(f"  Tipo: {criteria['tipo_propiedad']}")
+        if criteria.get('precio_max'):
+            precio_min = criteria.get('precio_min_implicito', 0)
+            lines.append(f"  Precio: ${precio_min/1_000_000:.0f}M - ${criteria['precio_max']/1_000_000:.0f}M")
+        if criteria.get('habitaciones_min'):
+            hab_max = criteria.get('habitaciones_max', '')
+            if hab_max:
+                lines.append(f"  Habitaciones: {criteria['habitaciones_min']}-{hab_max}")
+            else:
+                lines.append(f"  Habitaciones: {criteria['habitaciones_min']}+")
+        if criteria.get('piso') == 1:
+            lines.append("  Piso: Primer piso")
+
+        # Indicador de tipo de búsqueda
+        search_type = search_response.get('search_type', 'principal')
+        if search_type == 'relajada':
+            lines.append("")
+            lines.append("(Resultados con criterios ampliados)")
+
+        lines.append("")
+        lines.append(f"{len(results)} propiedades encontradas")
         lines.append("")
 
         # Listar propiedades (top 5)

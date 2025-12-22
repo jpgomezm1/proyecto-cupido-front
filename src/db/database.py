@@ -46,6 +46,20 @@ class DatabaseManager:
             self.conn.close()
         print("[OK] Conexion cerrada")
 
+    def __enter__(self):
+        """Permite usar DatabaseManager con 'with' statement"""
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Cierra la conexión al salir del 'with' statement"""
+        if exc_type is not None:
+            # Hubo una excepción, hacer rollback
+            if self.conn:
+                self.conn.rollback()
+        self.disconnect()
+        return False  # No suprimir excepciones
+
     def create_tables(self):
         """Crea las tablas si no existen"""
         try:

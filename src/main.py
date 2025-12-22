@@ -28,6 +28,8 @@ from src.api.search import search_bp
 from src.api.deals import deals_bp
 from src.api.property_chat import property_chat_bp
 from src.api.bulk_upload import bulk_bp
+from src.api.conversations import conversations_bp
+from src.api.chat_auth import chat_auth_bp
 
 load_dotenv()
 
@@ -49,6 +51,8 @@ app.register_blueprint(search_bp)
 app.register_blueprint(deals_bp)
 app.register_blueprint(property_chat_bp)
 app.register_blueprint(bulk_bp)
+app.register_blueprint(conversations_bp)
+app.register_blueprint(chat_auth_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
