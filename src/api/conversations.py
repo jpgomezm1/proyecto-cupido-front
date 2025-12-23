@@ -291,6 +291,107 @@ def get_conversation(conversation_id):
         }), 500
 
 
+@conversations_bp.route('/public/<int:conversation_id>', methods=['GET'])
+def get_public_conversation(conversation_id):
+    """
+    Obtiene una conversación para vista pública (sin autenticación)
+    Solo lectura - para compartir links
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "id": 1,
+            "nombre": "Apto Laureles $500M",
+            "criterios_acumulados": {...},
+            "total_mensajes": 5,
+            "mensajes": [...]
+        }
+    }
+    """
+    try:
+        with DatabaseManager() as db:
+            # Obtener conversación (incluyendo inactivas para links compartidos)
+            query_conv = """
+                SELECT id, nombre, criterios_acumulados, total_mensajes,
+                       fecha_creacion, fecha_actualizacion
+                FROM conversaciones_busqueda
+                WHERE id = %s
+            """
+            db.cursor.execute(query_conv, (conversation_id,))
+            conv_row = db.cursor.fetchone()
+
+            if not conv_row:
+                return jsonify({
+                    'success': False,
+                    'error': 'Conversación no encontrada'
+                }), 404
+
+            if isinstance(conv_row, dict):
+                conversation = dict(conv_row)
+                if 'fecha_creacion' in conversation and conversation['fecha_creacion']:
+                    conversation['fecha_creacion'] = conversation['fecha_creacion'].isoformat()
+                if 'fecha_actualizacion' in conversation and conversation['fecha_actualizacion']:
+                    conversation['fecha_actualizacion'] = conversation['fecha_actualizacion'].isoformat()
+            else:
+                conversation = {
+                    'id': conv_row[0],
+                    'nombre': conv_row[1],
+                    'criterios_acumulados': conv_row[2] or {},
+                    'total_mensajes': conv_row[3],
+                    'fecha_creacion': conv_row[4].isoformat() if conv_row[4] else None,
+                    'fecha_actualizacion': conv_row[5].isoformat() if conv_row[5] else None
+                }
+
+            # Obtener mensajes
+            query_msgs = """
+                SELECT id, role, content, criterios_mensaje, criterios_acumulados,
+                       propiedades_ids, total_resultados, tiempo_respuesta_ms,
+                       search_response, fecha_creacion
+                FROM mensajes_conversacion
+                WHERE conversacion_id = %s
+                ORDER BY fecha_creacion ASC
+            """
+            db.cursor.execute(query_msgs, (conversation_id,))
+            msg_rows = db.cursor.fetchall()
+
+            mensajes = []
+            for row in msg_rows:
+                if isinstance(row, dict):
+                    msg = dict(row)
+                    if 'fecha_creacion' in msg and msg['fecha_creacion']:
+                        msg['fecha_creacion'] = msg['fecha_creacion'].isoformat()
+                else:
+                    msg = {
+                        'id': row[0],
+                        'role': row[1],
+                        'content': row[2],
+                        'criterios_mensaje': row[3],
+                        'criterios_acumulados': row[4],
+                        'propiedades_ids': row[5],
+                        'total_resultados': row[6],
+                        'tiempo_respuesta_ms': row[7],
+                        'search_response': row[8],
+                        'fecha_creacion': row[9].isoformat() if row[9] else None
+                    }
+                mensajes.append(msg)
+
+            conversation['mensajes'] = mensajes
+
+            return jsonify({
+                'success': True,
+                'data': conversation
+            })
+
+    except Exception as e:
+        print(f"Error obteniendo conversación pública: {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @conversations_bp.route('/<int:conversation_id>', methods=['PUT'])
 def update_conversation(conversation_id):
     """
