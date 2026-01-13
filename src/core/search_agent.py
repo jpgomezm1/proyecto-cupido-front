@@ -392,6 +392,161 @@ Responde SOLO con el JSON de criterios."""
             print(f"❌ Error al extraer criterios: {e}")
             return {}
 
+    def _build_relaxed_criteria(self, criteria: Dict[str, Any], level: int) -> Dict[str, Any]:
+        """
+        Construye criterios relajados según el nivel de búsqueda.
+        Protege PRECIO y UBICACIÓN como los más importantes.
+
+        Niveles:
+        0 = Exacta (usa criterios originales)
+        1 = Relaja área (±35%) y parqueaderos (-1)
+        2 = + Relaja baños (±1)
+        3 = + Relaja habitaciones (±1), ignora parqueaderos
+        4 = + Relaja precio ligeramente (+10% máximo)
+        """
+        relaxed = criteria.copy()
+
+        if level >= 1:
+            # Área: expandir de ±20% a ±35%
+            if criteria.get('area_min') or criteria.get('area_max'):
+                area_min = criteria.get('area_min', 0)
+                area_max = criteria.get('area_max', area_min)
+                area_base = (area_min + area_max) / 2 if area_min else area_max
+                if area_base > 0:
+                    relaxed['area_min'] = int(area_base * 0.65)
+                    relaxed['area_max'] = int(area_base * 1.35)
+
+            # Parqueaderos: -1 del mínimo
+            if criteria.get('parqueaderos_min') and criteria['parqueaderos_min'] > 1:
+                relaxed['parqueaderos_min'] = criteria['parqueaderos_min'] - 1
+
+        if level >= 2:
+            # Baños: ±1
+            if criteria.get('banos_min') and criteria['banos_min'] > 1:
+                relaxed['banos_min'] = criteria['banos_min'] - 1
+            if criteria.get('banos_max'):
+                relaxed['banos_max'] = criteria['banos_max'] + 1
+
+        if level >= 3:
+            # Área: expandir aún más a ±40%
+            if criteria.get('area_min') or criteria.get('area_max'):
+                area_min = criteria.get('area_min', 0)
+                area_max = criteria.get('area_max', area_min)
+                area_base = (area_min + area_max) / 2 if area_min else area_max
+                if area_base > 0:
+                    relaxed['area_min'] = int(area_base * 0.60)
+                    relaxed['area_max'] = int(area_base * 1.40)
+
+            # Habitaciones: ±1
+            if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
+                relaxed['habitaciones_min'] = criteria['habitaciones_min'] - 1
+            if criteria.get('habitaciones_max'):
+                relaxed['habitaciones_max'] = criteria['habitaciones_max'] + 1
+
+            # Parqueaderos: ignorar completamente
+            relaxed.pop('parqueaderos_min', None)
+
+        if level >= 4:
+            # Precio: +10% sobre el máximo ajustado (ÚLTIMO RECURSO)
+            if criteria.get('precio_max_ajustado'):
+                relaxed['precio_max_ajustado'] = int(criteria['precio_max_ajustado'] * 1.10)
+            elif criteria.get('precio_max'):
+                # Si no hay ajustado, aplicar 10% extra sobre el max
+                relaxed['precio_max_ajustado'] = int(criteria['precio_max'] * 1.25)
+
+        return relaxed
+
+    def _progressive_search(
+        self,
+        criteria: Dict[str, Any],
+        db: DatabaseManager,
+        min_results: int = 5,
+        max_level: int = 4
+    ) -> Tuple[List[Dict], Dict[str, Any]]:
+        """
+        Búsqueda progresiva que relaja criterios hasta obtener min_results.
+        Protege PRECIO y UBICACIÓN como los factores más importantes.
+
+        Args:
+            criteria: Criterios de búsqueda originales
+            db: Conexión a base de datos
+            min_results: Mínimo de resultados deseados (default 5)
+            max_level: Máximo nivel de relajación (default 4)
+
+        Returns:
+            Tuple de (resultados, metadata de progresión)
+        """
+        search_progression = {
+            'nivel_final': 0,
+            'resultados_por_nivel': {},
+            'relajaciones_aplicadas': []
+        }
+
+        results = []
+
+        for level in range(max_level + 1):
+            # Construir criterios relajados para este nivel
+            relaxed_criteria = self._build_relaxed_criteria(criteria, level)
+
+            # Construir y ejecutar query
+            sql_query, params = self._build_sql_query(relaxed_criteria)
+
+            try:
+                db.cursor.execute(sql_query, params)
+                columns = [desc[0] for desc in db.cursor.description]
+                rows = db.cursor.fetchall()
+
+                results = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        prop = dict(row)
+                    else:
+                        prop = dict(zip(columns, row))
+
+                    # Convertir tipos para JSON
+                    for key, value in prop.items():
+                        if hasattr(value, 'isoformat'):
+                            prop[key] = value.isoformat()
+                        elif not isinstance(value, (int, float, str, bool, type(None))):
+                            prop[key] = str(value)
+                    results.append(prop)
+
+                search_progression['resultados_por_nivel'][level] = len(results)
+
+                level_name = ['exacta', 'área/parq', 'baños', 'habitaciones', 'precio'][level]
+                print(f"   Nivel {level} ({level_name}): {len(results)} resultados")
+
+                # Si tenemos suficientes resultados, parar
+                if len(results) >= min_results:
+                    search_progression['nivel_final'] = level
+                    search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(level)
+                    return results, search_progression
+
+            except Exception as e:
+                print(f"⚠️  Error en nivel {level}: {e}")
+                continue
+
+        # Si llegamos aquí, devolver lo que tengamos del último nivel
+        search_progression['nivel_final'] = max_level
+        search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(max_level)
+        return results, search_progression
+
+    def _get_relaxation_descriptions(self, level: int) -> List[str]:
+        """Retorna descripciones de qué criterios se relajaron"""
+        descriptions = []
+        if level >= 1:
+            descriptions.append("área ±35%")
+            descriptions.append("parqueaderos -1")
+        if level >= 2:
+            descriptions.append("baños ±1")
+        if level >= 3:
+            descriptions.append("área ±40%")
+            descriptions.append("habitaciones ±1")
+            descriptions.append("parqueaderos ignorados")
+        if level >= 4:
+            descriptions.append("precio +10%")
+        return descriptions
+
     def _build_sql_query(self, criteria: Dict[str, Any], use_hard_filters: bool = True) -> tuple:
         """
         Construye una consulta SQL basada en los criterios extraídos
@@ -546,6 +701,11 @@ Responde SOLO con el JSON de criterios."""
             elif isinstance(criteria['piso'], int):
                 conditions.append("piso = %(piso)s")
                 params['piso'] = criteria['piso']
+
+        # Filtro por parqueaderos (NUEVO v2.1)
+        if criteria.get('parqueaderos_min'):
+            conditions.append("parqueaderos >= %(parqueaderos_min)s")
+            params['parqueaderos_min'] = criteria['parqueaderos_min']
 
         # Filtro por amenidades (ahora es opcional, no elimina resultados)
         # Las amenidades se usan más para ranking que para filtrado duro
@@ -819,124 +979,8 @@ Responde SOLO con el JSON de criterios."""
 
         return results
 
-    def _fallback_search(self, criteria: Dict[str, Any], db: DatabaseManager) -> List[Dict]:
-        """
-        Búsqueda relajada si la búsqueda principal no retorna resultados
-        MEJORADO v2.0: MANTIENE filtros de precio (solo relaja ±20%)
-
-        Relaja:
-        - Ubicación: Expande a toda la ciudad
-        - Habitaciones: -1 del mínimo
-        - Amenidades: Ignora
-
-        NUNCA relaja:
-        - Precio: Mantiene dentro del segmento (máx ±20%)
-        - Tipo de propiedad: Mantiene exacto
-        """
-
-        base_query = """
-        SELECT
-            id, id::text as slug, codigo_propiedad, fuente, url, titulo, precio, precio_texto,
-            tipo_propiedad, estado, ciudad, zona, direccion_completa,
-            area_construida, habitaciones, banos, parqueaderos, estrato, piso,
-            ano_construccion, administracion, predial,
-            amenidades_internas, amenidades_externas, total_amenidades,
-            asesor, telefono, inmobiliaria, imagen_principal, total_imagenes,
-            descripcion, fecha_creacion
-        FROM propiedades
-        WHERE activa = TRUE
-        """
-
-        conditions = []
-        params = {}
-
-        # ===== FILTROS DUROS (SE MANTIENEN) =====
-
-        # PRECIO: Relajar pero MANTENER en segmento (máx ±20%)
-        if criteria.get('precio_max'):
-            precio_max = criteria['precio_max']
-            # Precio mínimo: 30% abajo del presupuesto (más relajado que búsqueda principal)
-            precio_min_relajado = int(precio_max * 0.70)
-            # Precio máximo: 20% arriba del presupuesto
-            precio_max_relajado = int(precio_max * 1.20)
-
-            conditions.append("precio >= %(precio_min_relajado)s")
-            params['precio_min_relajado'] = precio_min_relajado
-
-            conditions.append("precio <= %(precio_max_relajado)s")
-            params['precio_max_relajado'] = precio_max_relajado
-
-        # TIPO DE PROPIEDAD: Mantener exacto
-        if criteria.get('tipo_propiedad'):
-            tipos = criteria['tipo_propiedad']
-            if isinstance(tipos, list):
-                tipo_conditions = []
-                for i, tipo in enumerate(tipos):
-                    tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_fb_{i})s")
-                    params[f'tipo_fb_{i}'] = f'%{tipo}%'
-                conditions.append(f"({' OR '.join(tipo_conditions)})")
-            else:
-                conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
-                params['tipo_propiedad'] = f"%{tipos}%"
-
-        # ===== FILTROS RELAJADOS =====
-
-        # UBICACIÓN: MANTENER zona/ciudad como filtro estricto
-        # v2.1: NO expandir a toda la ciudad - el usuario quiere esa zona específica
-        # Solo usar zonas expandidas (cercanas) como en búsqueda principal
-        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
-        if ubicaciones_buscar:
-            zona_conditions = []
-            for i, ubicacion in enumerate(ubicaciones_buscar):
-                # Buscar por zona, ciudad, o título (pero NO expandir a toda la ciudad)
-                zona_conditions.append(f"""(
-                    zona ILIKE %(ubicacion_fb_{i})s OR
-                    ciudad ILIKE %(ubicacion_fb_{i})s OR
-                    titulo ILIKE %(ubicacion_fb_{i})s
-                )""")
-                params[f'ubicacion_fb_{i}'] = f'%{ubicacion}%'
-            conditions.append(f"({' OR '.join(zona_conditions)})")
-
-        # HABITACIONES: Relajar -1 del mínimo
-        if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
-            conditions.append("habitaciones >= %(habitaciones_min_relajado)s")
-            params['habitaciones_min_relajado'] = criteria['habitaciones_min'] - 1
-
-        # Agregar condiciones
-        if conditions:
-            base_query += " AND " + " AND ".join(conditions)
-
-        base_query += " ORDER BY precio ASC, total_amenidades DESC LIMIT 30"
-
-        try:
-            db.cursor.execute(base_query, params)
-            columns = [desc[0] for desc in db.cursor.description]
-            rows = db.cursor.fetchall()
-
-            results = []
-            for row in rows:
-                if isinstance(row, dict):
-                    prop = dict(row)
-                else:
-                    prop = dict(zip(columns, row))
-
-                for key, value in prop.items():
-                    if hasattr(value, 'isoformat'):
-                        prop[key] = value.isoformat()
-                    elif isinstance(value, (int, float, str, bool, type(None))):
-                        continue
-                    else:
-                        prop[key] = str(value)
-
-                # Marcar como resultado de búsqueda relajada
-                prop['busqueda_relajada'] = True
-                results.append(prop)
-
-            return results
-
-        except Exception as e:
-            print(f"⚠️  Error en búsqueda fallback: {e}")
-            return []
+    # NOTA v2.1: _fallback_search() fue reemplazado por _progressive_search()
+    # que implementa relajación progresiva por niveles protegiendo precio y ubicación
 
     def _generate_no_results_response(self, criteria: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1099,66 +1143,45 @@ Responde SOLO con el JSON de criterios."""
                 print(f"⚠️  Error en búsqueda vectorial: {e}")
                 print("   Fallback a búsqueda SQL tradicional...")
 
-        # Paso 3: Búsqueda SQL tradicional (fallback o complementaria)
-        print("🔍 Buscando en base de datos (SQL)...")
-        sql_query, params = self._build_sql_query(criteria)
-
-        # Paso 3: Ejecutar búsqueda en DB
+        # Paso 3: Búsqueda PROGRESIVA v2.1 (relaja criterios hasta obtener mínimo 5 resultados)
+        # Protege PRECIO y UBICACIÓN como los factores más importantes
+        print("🔍 Buscando en base de datos (búsqueda progresiva)...")
+        search_progression = {}
         try:
             sql_start = time.time()
             with DatabaseManager() as db:
-                db.cursor.execute(sql_query, params)
-                columns = [desc[0] for desc in db.cursor.description]
-                rows = db.cursor.fetchall()
+                results, search_progression = self._progressive_search(
+                    criteria,
+                    db,
+                    min_results=5,
+                    max_level=4
+                )
 
                 sql_elapsed = (time.time() - sql_start) * 1000
-                search_log.log_sql_query(sql_query, params, sql_elapsed)
-
-                results = []
-                for row in rows:
-                    # Si row ya es un diccionario (RealDictRow), convertirlo a dict normal
-                    if isinstance(row, dict):
-                        prop = dict(row)
-                    else:
-                        # Si es tupla, zip con columnas
-                        prop = dict(zip(columns, row))
-
-                    # Convertir tipos para JSON
-                    for key, value in prop.items():
-                        if hasattr(value, 'isoformat'):  # datetime
-                            prop[key] = value.isoformat()
-                        elif isinstance(value, (int, float, str, bool, type(None))):
-                            continue
-                        else:
-                            prop[key] = str(value)
-                    results.append(prop)
+                search_log.log_sql_query("progressive_search", {}, sql_elapsed)
 
                 print(f"📊 Propiedades encontradas: {len(results)}")
+                if search_progression.get('nivel_final', 0) > 0:
+                    print(f"   Nivel de relajación: {search_progression['nivel_final']}")
+                    print(f"   Criterios relajados: {', '.join(search_progression.get('relajaciones_aplicadas', []))}")
 
-                # FLUJO MEJORADO v2.0: Si no hay resultados, usar fallback CON filtros de precio
-                search_type = 'principal'
+                # Si no hay resultados después de todos los niveles
+                search_type = 'exacta' if search_progression.get('nivel_final', 0) == 0 else 'progresiva'
                 if len(results) == 0:
-                    print("⚠️  Sin resultados con todos los criterios. Intentando búsqueda relajada...")
-                    results = self._fallback_search(criteria, db)
-                    search_type = 'relajada'
-                    print(f"📊 Búsqueda relajada encontró: {len(results)} propiedades")
-
-                    # v2.0: Si TAMPOCO hay resultados en fallback, NO mostrar propiedades irrelevantes
-                    # En su lugar, generar respuesta informativa
-                    if len(results) == 0:
-                        print("ℹ️  Sin resultados incluso con criterios relajados")
-                        total_elapsed = (time.time() - total_start) * 1000
-                        search_log.log_results(0, 0, total_elapsed)
-                        no_results_response = self._generate_no_results_response(criteria)
-                        no_results_response['search_id'] = search_id
-                        no_results_response['elapsed_ms'] = total_elapsed
-                        no_results_response['criteria'] = criteria
-                        no_results_response['search_type'] = 'sin_resultados'
-                        return no_results_response
+                    print("ℹ️  Sin resultados incluso con criterios relajados")
+                    total_elapsed = (time.time() - total_start) * 1000
+                    search_log.log_results(0, 0, total_elapsed)
+                    no_results_response = self._generate_no_results_response(criteria)
+                    no_results_response['search_id'] = search_id
+                    no_results_response['elapsed_ms'] = total_elapsed
+                    no_results_response['criteria'] = criteria
+                    no_results_response['search_type'] = 'sin_resultados'
+                    no_results_response['search_progression'] = search_progression
+                    return no_results_response
 
         except Exception as e:
-            search_log.log_error(str(e), 'sql_execution')
-            print(f"❌ Error en búsqueda DB: {e}")
+            search_log.log_error(str(e), 'progressive_search')
+            print(f"❌ Error en búsqueda progresiva: {e}")
             return {
                 'success': False,
                 'error': str(e),
@@ -1183,7 +1206,7 @@ Responde SOLO con el JSON de criterios."""
         total_elapsed = (time.time() - total_start) * 1000
         search_log.log_results(len(results), min(len(results), limit), total_elapsed)
 
-        # Paso 5: Formatear respuesta con metadata adicional v2.0
+        # Paso 5: Formatear respuesta con metadata adicional v2.1
         return {
             'success': True,
             'criteria': criteria,
@@ -1192,6 +1215,7 @@ Responde SOLO con el JSON de criterios."""
             'timestamp': datetime.now().isoformat(),
             'search_id': search_id,
             'search_type': search_type,
+            'search_progression': search_progression,  # v2.1: Info de relajación progresiva
             'perfil_comprador': criteria.get('perfil_comprador', 'general'),
             'segmento_precio': criteria.get('segmento_precio'),
             'elapsed_ms': total_elapsed
