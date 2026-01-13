@@ -484,12 +484,26 @@ Responde SOLO con el JSON de criterios."""
 
         results = []
 
+        # Log de diagnóstico: mostrar criterios clave
+        print(f"   Criterios clave para SQL:")
+        if criteria.get('ubicaciones'):
+            print(f"     - Ubicaciones: {criteria['ubicaciones']}")
+        if criteria.get('precio_max'):
+            print(f"     - Precio max: ${criteria['precio_max']:,}")
+        if criteria.get('tipo_propiedad'):
+            print(f"     - Tipo: {criteria['tipo_propiedad']}")
+
         for level in range(max_level + 1):
             # Construir criterios relajados para este nivel
             relaxed_criteria = self._build_relaxed_criteria(criteria, level)
 
             # Construir y ejecutar query
             sql_query, params = self._build_sql_query(relaxed_criteria)
+
+            # Log de diagnóstico en nivel 0
+            if level == 0:
+                print(f"   Query SQL (nivel 0): {sql_query[:300]}...")
+                print(f"   Params: {params}")
 
             try:
                 db.cursor.execute(sql_query, params)
@@ -524,6 +538,15 @@ Responde SOLO con el JSON de criterios."""
 
             except Exception as e:
                 print(f"⚠️  Error en nivel {level}: {e}")
+                print(f"   Query: {sql_query[:200]}...")
+                print(f"   Params: {list(params.keys())}")
+                import traceback
+                traceback.print_exc()
+                # Rollback para limpiar la transacción fallida
+                try:
+                    db.conn.rollback()
+                except:
+                    pass
                 continue
 
         # Si llegamos aquí, devolver lo que tengamos del último nivel
@@ -547,14 +570,12 @@ Responde SOLO con el JSON de criterios."""
             descriptions.append("precio +10%")
         return descriptions
 
-    def _build_sql_query(self, criteria: Dict[str, Any], use_hard_filters: bool = True) -> tuple:
+    def _build_sql_query(self, criteria: Dict[str, Any]) -> tuple:
         """
-        Construye una consulta SQL basada en los criterios extraídos
-        MEJORADO v2.0: Filtros duros de precio que nunca se relajan
+        Construye una consulta SQL basada en los criterios extraídos.
 
         Args:
             criteria: Diccionario de criterios de búsqueda
-            use_hard_filters: Si usar filtros duros de precio (default True)
 
         Returns:
             Tupla (query_sql, params)
@@ -576,29 +597,20 @@ Responde SOLO con el JSON de criterios."""
         conditions = []
         params = {}
 
-        # ========== FILTROS DUROS (NUNCA SE RELAJAN) ==========
+        # ========== FILTROS DE PRECIO ==========
 
-        # FILTRO DURO #1: Rango de precio con tolerancia del segmento
-        if use_hard_filters and criteria.get('precio_max'):
-            # Usar precio_min implícito calculado (±tolerancia del segmento)
-            precio_min_duro = criteria.get('precio_min_implicito') or criteria.get('precio_min')
+        # Filtro de precio máximo (siempre se aplica)
+        if criteria.get('precio_max'):
+            # Usar precio_max_ajustado si existe (incluye tolerancia del 15%)
             precio_max_duro = criteria.get('precio_max_ajustado') or criteria['precio_max']
-
-            # Si hay precio_min explícito del usuario, usarlo
-            if criteria.get('precio_min'):
-                precio_min_duro = criteria['precio_min']
-
-            if precio_min_duro:
-                conditions.append("precio >= %(precio_min_duro)s")
-                params['precio_min_duro'] = precio_min_duro
-
             conditions.append("precio <= %(precio_max_duro)s")
             params['precio_max_duro'] = precio_max_duro
 
-        elif criteria.get('precio_max'):
-            # Fallback sin filtros duros (para búsquedas relajadas)
-            conditions.append("precio <= %(precio_max)s")
-            params['precio_max'] = criteria['precio_max']
+            # Precio mínimo SOLO si el usuario lo especificó explícitamente
+            # NO usar precio_min_implicito como filtro duro (es muy restrictivo)
+            if criteria.get('precio_min'):
+                conditions.append("precio >= %(precio_min_duro)s")
+                params['precio_min_duro'] = criteria['precio_min']
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -615,57 +627,21 @@ Responde SOLO con el JSON de criterios."""
 
         # ========== FILTROS FLEXIBLES ==========
 
-        # v2.1: Búsqueda geoespacial si hay ubicaciones con coordenadas
-        if criteria.get('ubicaciones_geo'):
-            geo_conditions = []
-            for i, geo in enumerate(criteria['ubicaciones_geo']):
-                # Usar función de distancia Haversine
-                geo_conditions.append(f"""
-                    (latitud IS NOT NULL AND longitud IS NOT NULL AND
-                     distancia_km(%(lat_{i})s, %(lon_{i})s, latitud, longitud) <= %(radio_{i})s)
-                """)
-                params[f'lat_{i}'] = geo['lat']
-                params[f'lon_{i}'] = geo['lon']
-                params[f'radio_{i}'] = geo.get('radio_km', 2.0)
-
-            # Si también hay zonas normales, combinar con OR
-            ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
-            if ubicaciones_buscar:
-                zona_conditions = []
-                for i, ubicacion in enumerate(ubicaciones_buscar):
-                    # v2.1: Fuzzy matching con similarity() + ILIKE tradicional
-                    zona_conditions.append(f"""(
-                        zona ILIKE %(ubicacion_{i})s OR
-                        similarity(COALESCE(zona, ''), %(ubicacion_exact_{i})s) > 0.3 OR
-                        ciudad ILIKE %(ubicacion_{i})s OR
-                        titulo ILIKE %(ubicacion_{i})s
-                    )""")
-                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-                    params[f'ubicacion_exact_{i}'] = ubicacion
-
-                # Combinar geo + zonas
-                conditions.append(f"(({' OR '.join(geo_conditions)}) OR ({' OR '.join(zona_conditions)}))")
-            else:
-                conditions.append(f"({' OR '.join(geo_conditions)})")
-
-        else:
-            # Filtro por ubicaciones (zonas, ciudad, dirección o título)
-            # Incluye zonas expandidas si están disponibles
-            ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
-            if ubicaciones_buscar:
-                zona_conditions = []
-                for i, ubicacion in enumerate(ubicaciones_buscar):
-                    # v2.1: Fuzzy matching con similarity() + ILIKE tradicional
-                    zona_conditions.append(f"""(
-                        zona ILIKE %(ubicacion_{i})s OR
-                        similarity(COALESCE(zona, ''), %(ubicacion_exact_{i})s) > 0.3 OR
-                        ciudad ILIKE %(ubicacion_{i})s OR
-                        direccion_completa ILIKE %(ubicacion_{i})s OR
-                        titulo ILIKE %(ubicacion_{i})s
-                    )""")
-                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-                    params[f'ubicacion_exact_{i}'] = ubicacion
-                conditions.append(f"({' OR '.join(zona_conditions)})")
+        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
+        # Usa solo ILIKE para compatibilidad (sin funciones avanzadas)
+        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
+        if ubicaciones_buscar:
+            zona_conditions = []
+            for i, ubicacion in enumerate(ubicaciones_buscar):
+                # Búsqueda con ILIKE (compatible con todas las instalaciones PostgreSQL)
+                zona_conditions.append(f"""(
+                    zona ILIKE %(ubicacion_{i})s OR
+                    ciudad ILIKE %(ubicacion_{i})s OR
+                    direccion_completa ILIKE %(ubicacion_{i})s OR
+                    titulo ILIKE %(ubicacion_{i})s
+                )""")
+                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+            conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Filtro por habitaciones
         if criteria.get('habitaciones_min'):
