@@ -576,27 +576,18 @@ def send_message(conversation_id):
             agent = get_search_agent()
             start_time = datetime.now()
 
-            # Si hay criterios previos, enriquecer el query con contexto
-            search_query = content
+            # v2.1: Pasar criterios previos como parámetro estructurado
+            # Esto permite que Claude entienda el contexto y haga refinamientos correctos
+            search_previous_criteria = None
             if prev_criteria and total_mensajes > 0:
-                # Añadir contexto de criterios anteriores al query
-                context_parts = []
-                if prev_criteria.get('ubicaciones'):
-                    context_parts.append(f"zona: {', '.join(prev_criteria['ubicaciones'])}")
-                if prev_criteria.get('tipo_propiedad'):
-                    context_parts.append(f"tipo: {prev_criteria['tipo_propiedad']}")
-                if prev_criteria.get('precio_max'):
-                    context_parts.append(f"precio máximo: {prev_criteria['precio_max']}")
-                if prev_criteria.get('habitaciones_min'):
-                    context_parts.append(f"habitaciones: {prev_criteria['habitaciones_min']}+")
-
-                if context_parts:
-                    search_query = f"(Contexto anterior: {', '.join(context_parts)}) {content}"
+                search_previous_criteria = prev_criteria
+                print(f"📋 Usando criterios previos para contexto: {list(prev_criteria.keys())}")
 
             search_response = agent.search(
-                search_query,
+                content,  # Query original sin modificar
                 limit=10,
-                sender='web'
+                sender='web',
+                previous_criteria=search_previous_criteria  # Contexto estructurado
             )
 
             elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)

@@ -50,6 +50,13 @@ from src.core.search_config import (
     AMENIDADES_FAMILIA,
     AMENIDADES_LUJO,
     AMENIDADES_ACCESIBILIDAD,
+    # v2.1: Nuevas funciones de normalización
+    ZONA_CANONICA,
+    LANDMARKS_A_ZONAS,
+    LANDMARKS_COORDENADAS,
+    normalizar_zona,
+    procesar_ubicacion_relativa,
+    inferir_zona_de_direccion,
 )
 
 # Importar búsqueda vectorial (opcional)
@@ -119,19 +126,72 @@ class PropertySearchAgent:
         print(f"[WARN] No se pudo detectar modelo, usando: {FALLBACK_MODELS[0]}")
         return FALLBACK_MODELS[0]
 
-    def _extract_search_criteria(self, query: str) -> Dict[str, Any]:
+    def _extract_search_criteria(self, query: str, previous_criteria: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Usa Claude para extraer criterios de búsqueda de un mensaje en lenguaje natural
-        MEJORADO v2.0: Extrae perfil de comprador, banos_max, y más contexto
+        MEJORADO v2.1: Soporta contexto de búsquedas previas para refinamiento iterativo
 
         Args:
             query: Mensaje del agente inmobiliario (puede ser informal/WhatsApp)
+            previous_criteria: Criterios de búsqueda previa para contexto (opcional)
 
         Returns:
             Diccionario con criterios estructurados
         """
 
-        system_prompt = """Eres un asistente experto en bienes raíces en Medellín, Colombia.
+        # Construir contexto de búsqueda previa si existe
+        previous_context = ""
+        if previous_criteria:
+            context_parts = []
+            if previous_criteria.get('ubicaciones'):
+                context_parts.append(f"- Zonas: {', '.join(previous_criteria['ubicaciones'])}")
+            if previous_criteria.get('tipo_propiedad'):
+                context_parts.append(f"- Tipo: {previous_criteria['tipo_propiedad']}")
+            if previous_criteria.get('precio_max'):
+                context_parts.append(f"- Presupuesto máximo: ${previous_criteria['precio_max']:,} COP")
+            if previous_criteria.get('precio_min'):
+                context_parts.append(f"- Presupuesto mínimo: ${previous_criteria['precio_min']:,} COP")
+            if previous_criteria.get('habitaciones_min'):
+                habs = f"{previous_criteria['habitaciones_min']}"
+                if previous_criteria.get('habitaciones_max') and previous_criteria['habitaciones_max'] != previous_criteria['habitaciones_min']:
+                    habs += f"-{previous_criteria['habitaciones_max']}"
+                context_parts.append(f"- Habitaciones: {habs}")
+            if previous_criteria.get('banos_min'):
+                context_parts.append(f"- Baños mínimo: {previous_criteria['banos_min']}")
+            if previous_criteria.get('area_min') or previous_criteria.get('area_max'):
+                area = ""
+                if previous_criteria.get('area_min'):
+                    area += f"desde {previous_criteria['area_min']}m²"
+                if previous_criteria.get('area_max'):
+                    area += f" hasta {previous_criteria['area_max']}m²"
+                context_parts.append(f"- Área: {area.strip()}")
+            if previous_criteria.get('amenidades_requeridas'):
+                context_parts.append(f"- Amenidades: {', '.join(previous_criteria['amenidades_requeridas'])}")
+            if previous_criteria.get('perfil_comprador') and previous_criteria['perfil_comprador'] != 'general':
+                context_parts.append(f"- Perfil: {previous_criteria['perfil_comprador']}")
+
+            if context_parts:
+                previous_context = f"""
+
+CONTEXTO DE BÚSQUEDA ANTERIOR (IMPORTANTE):
+El usuario ya realizó una búsqueda con estos criterios:
+{chr(10).join(context_parts)}
+
+REGLAS DE REFINAMIENTO:
+1. Si el usuario menciona un criterio EXPLÍCITAMENTE en su nuevo mensaje, USA ESE VALOR (sobrescribe el anterior)
+2. Si el usuario NO menciona un criterio, MANTÉN EL VALOR ANTERIOR
+3. Expresiones de refinamiento:
+   - "más barato", "menos precio" → reduce precio_max en 15-20%
+   - "más caro", "mayor presupuesto" → aumenta precio_max en 15-20%
+   - "más grande" → aumenta area_min o habitaciones_min
+   - "más pequeño" → reduce area_max o habitaciones_max
+   - "otra zona", "diferente sector" → REEMPLAZA ubicaciones
+   - "también en X" → AGREGA X a ubicaciones existentes
+4. Si el mensaje es muy corto (ej: "con piscina", "3 habitaciones"), es un REFINAMIENTO - mantén los demás criterios
+
+IMPORTANTE: Incluye TODOS los criterios (anteriores + nuevos/modificados) en tu respuesta JSON."""
+
+        system_prompt = f"""Eres un asistente experto en bienes raíces en Medellín, Colombia.
 Tu tarea es analizar mensajes de agentes inmobiliarios y extraer los criterios de búsqueda de propiedades.
 
 Debes extraer y estructurar la siguiente información cuando esté disponible:
@@ -166,12 +226,42 @@ IMPORTANTE - CONVERSIÓN DE PRECIOS COLOMBIANOS:
 - "Presupuesto 1000 millones" significa precio_max = 1,000,000,000
 - "Entre 500 y 800" significa precio_min = 500,000,000, precio_max = 800,000,000
 
-UBICACIONES EN ÁREA METROPOLITANA DE MEDELLÍN:
-- Medellín: El Poblado, Laureles, Belén, Estadio, Conquistadores, Floresta, Calasanz, Robledo, Ciudad del Río, Castropol, Lalinde
-- Envigado: Zúñiga, La Paz, El Portal, Las Antillas, El Dorado, Alcalá, La Cuenca, El Trianón
-- Sabaneta: Aves María, Mayorca, La Doctora
-- Itagüí: Ditaires, Santa María
-- Bello: Niquía, París
+UBICACIONES CANÓNICAS EN ÁREA METROPOLITANA DE MEDELLÍN:
+IMPORTANTE: Siempre usa estos nombres exactos (canónicos) para las ubicaciones:
+
+MEDELLÍN:
+- El Poblado (NO usar: "Poblado", "Santa María Poblado", "Altos del Poblado")
+- Laureles (NO usar: "Comuna 11 Laureles")
+- Belén (NO usar: "Belen" sin tilde)
+- Estadio, Conquistadores, Floresta, Calasanz, Robledo
+- Ciudad del Río (NO usar: "Ciudad del Rio" sin tilde)
+- Castropol, Lalinde, Manila, San Lucas, Los Balsos
+- Loma de los Bernal (NO usar: "Belén Loma de los Bernal")
+- Guayabal, Suramericana (NO usar: "Suramerica")
+
+ENVIGADO:
+- Loma del Escobero (NO usar: "El Escobero", "Escobero")
+- Zúñiga, La Paz, El Dorado, El Esmeraldal
+- Las Antillas, Alcalá, La Cuenca, El Trianón
+- Las Orquídeas, Camino Verde, Cumbres
+- Las Palmas (incluye Alto de las Palmas, Variante)
+
+SABANETA: Aves María, Mayorca, La Doctora, Calle Larga, San José, Asdesillas
+ITAGÜÍ: Ditaires, Santa María, Pilsen
+BELLO: Niquía, Cabañas, París
+RIONEGRO: Llanogrande, San Antonio de Pereira, Pontezuela
+LA ESTRELLA, EL RETIRO, LA CEJA
+
+UBICACIONES RELATIVAS - IMPORTANTE:
+Si el usuario menciona "cerca a [lugar]", conviértelo a las zonas correspondientes:
+- "cerca a la Universidad de Medellín" → ["Laureles", "Estadio", "Belén"]
+- "cerca al segundo parque de Laureles" → ["Laureles"]
+- "cerca a Santafé/Oviedo/El Tesoro" → ["El Poblado"]
+- "cerca a EAFIT" → ["El Poblado", "Manila"]
+- "cerca a Mayorca" → ["Sabaneta"]
+- "cerca al metro [estación]" → zonas cercanas a esa estación
+
+Si no puedes determinar la zona exacta de una ubicación relativa, usa la ciudad como fallback.
 
 DETECCIÓN DE PERFIL:
 - "Persona mayor", "primer piso por accesibilidad" → perfil_comprador: "senior"
@@ -185,7 +275,7 @@ TÉRMINOS COLOMBIANOS:
 - "Baño en cada habitación" = característica importante
 - "Portería", "vigilancia" = amenidades de seguridad
 - "Unidad completa" = conjunto residencial con todas las amenidades
-
+{previous_context}
 Responde SOLO con un JSON válido, sin texto adicional ni markdown."""
 
         user_message = f"""Analiza este mensaje de un agente inmobiliario y extrae los criterios de búsqueda:
@@ -219,12 +309,21 @@ Responde SOLO con el JSON de criterios."""
 
             criteria = json.loads(response_text)
 
-            # ===== ENRIQUECIMIENTO POST-EXTRACCIÓN v2.0 =====
+            # ===== ENRIQUECIMIENTO POST-EXTRACCIÓN v2.1 =====
+
+            # 0. Detectar flexibilidad de precio PRIMERO (afecta cálculo de rango)
+            if not criteria.get('flexibilidad_precio'):
+                query_lower = query.lower()
+                if 'máximo' in query_lower or 'hasta' in query_lower or 'maximo' in query_lower:
+                    criteria['flexibilidad_precio'] = 'estricto'
+                else:
+                    criteria['flexibilidad_precio'] = 'normal'
 
             # 1. Calcular rango de precio implícito si solo hay precio_max
             if criteria.get('precio_max') and not criteria.get('precio_min'):
                 precio_max = criteria['precio_max']
-                precio_min, precio_max_ajustado = calcular_rango_precio(precio_max)
+                flexibilidad = criteria.get('flexibilidad_precio', 'normal')
+                precio_min, precio_max_ajustado = calcular_rango_precio(precio_max, flexibilidad=flexibilidad)
                 criteria['precio_min_implicito'] = precio_min
                 criteria['precio_max_ajustado'] = precio_max_ajustado
                 criteria['segmento_precio'] = get_segmento_precio(precio_max)
@@ -239,24 +338,44 @@ Responde SOLO con el JSON de criterios."""
             elif perfil_claude == 'general':
                 criteria['perfil_comprador'] = perfil_detectado
 
-            # 3. Expandir zonas similares si hay ubicaciones
+            # 3. Normalizar y expandir ubicaciones v2.1
             if criteria.get('ubicaciones'):
+                ubicaciones_normalizadas = []
+                ubicaciones_geo = []  # Para búsquedas geoespaciales
+
+                for ubicacion in criteria['ubicaciones']:
+                    # Procesar ubicaciones relativas ("cerca a X")
+                    resultado = procesar_ubicacion_relativa(ubicacion)
+
+                    if resultado['tipo'] == 'coordenadas':
+                        # Guardar para búsqueda geoespacial
+                        ubicaciones_geo.append(resultado)
+                    elif resultado['tipo'] == 'zonas':
+                        # Agregar zonas del landmark
+                        for z in resultado['valor']:
+                            if z not in ubicaciones_normalizadas:
+                                ubicaciones_normalizadas.append(z)
+                    else:
+                        # Normalizar zona normal
+                        zona_normalizada = normalizar_zona(ubicacion)
+                        if zona_normalizada not in ubicaciones_normalizadas:
+                            ubicaciones_normalizadas.append(zona_normalizada)
+
+                # Guardar ubicaciones normalizadas
+                criteria['ubicaciones'] = ubicaciones_normalizadas
+                if ubicaciones_geo:
+                    criteria['ubicaciones_geo'] = ubicaciones_geo
+
+                # Expandir zonas similares
                 zonas_expandidas = []
-                for zona in criteria['ubicaciones']:
+                for zona in ubicaciones_normalizadas:
                     expandidas = get_zonas_expandidas(zona)
                     for z in expandidas:
                         if z not in zonas_expandidas:
                             zonas_expandidas.append(z)
                 criteria['zonas_expandidas'] = zonas_expandidas
 
-            # 4. Normalizar flexibilidad de precio
-            if not criteria.get('flexibilidad_precio'):
-                # Por defecto, si dice "hasta" o "máximo" es estricto
-                query_lower = query.lower()
-                if 'máximo' in query_lower or 'hasta' in query_lower or 'maximo' in query_lower:
-                    criteria['flexibilidad_precio'] = 'estricto'
-                else:
-                    criteria['flexibilidad_precio'] = 'normal'
+            # (flexibilidad_precio ya se detectó en paso 0)
 
             elapsed_ms = (time.time() - start_time) * 1000
             search_log.log_criteria_extraction(criteria, elapsed_ms)
@@ -341,21 +460,57 @@ Responde SOLO con el JSON de criterios."""
 
         # ========== FILTROS FLEXIBLES ==========
 
-        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
-        # Incluye zonas expandidas si están disponibles
-        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
-        if ubicaciones_buscar:
-            zona_conditions = []
-            for i, ubicacion in enumerate(ubicaciones_buscar):
-                # Buscar en zona, ciudad, dirección Y título (más flexible)
-                zona_conditions.append(
-                    f"(zona ILIKE %(ubicacion_{i})s OR "
-                    f"ciudad ILIKE %(ubicacion_{i})s OR "
-                    f"direccion_completa ILIKE %(ubicacion_{i})s OR "
-                    f"titulo ILIKE %(ubicacion_{i})s)"
-                )
-                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-            conditions.append(f"({' OR '.join(zona_conditions)})")
+        # v2.1: Búsqueda geoespacial si hay ubicaciones con coordenadas
+        if criteria.get('ubicaciones_geo'):
+            geo_conditions = []
+            for i, geo in enumerate(criteria['ubicaciones_geo']):
+                # Usar función de distancia Haversine
+                geo_conditions.append(f"""
+                    (latitud IS NOT NULL AND longitud IS NOT NULL AND
+                     distancia_km(%(lat_{i})s, %(lon_{i})s, latitud, longitud) <= %(radio_{i})s)
+                """)
+                params[f'lat_{i}'] = geo['lat']
+                params[f'lon_{i}'] = geo['lon']
+                params[f'radio_{i}'] = geo.get('radio_km', 2.0)
+
+            # Si también hay zonas normales, combinar con OR
+            ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
+            if ubicaciones_buscar:
+                zona_conditions = []
+                for i, ubicacion in enumerate(ubicaciones_buscar):
+                    # v2.1: Fuzzy matching con similarity() + ILIKE tradicional
+                    zona_conditions.append(f"""(
+                        zona ILIKE %(ubicacion_{i})s OR
+                        similarity(COALESCE(zona, ''), %(ubicacion_exact_{i})s) > 0.3 OR
+                        ciudad ILIKE %(ubicacion_{i})s OR
+                        titulo ILIKE %(ubicacion_{i})s
+                    )""")
+                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                    params[f'ubicacion_exact_{i}'] = ubicacion
+
+                # Combinar geo + zonas
+                conditions.append(f"(({' OR '.join(geo_conditions)}) OR ({' OR '.join(zona_conditions)}))")
+            else:
+                conditions.append(f"({' OR '.join(geo_conditions)})")
+
+        else:
+            # Filtro por ubicaciones (zonas, ciudad, dirección o título)
+            # Incluye zonas expandidas si están disponibles
+            ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
+            if ubicaciones_buscar:
+                zona_conditions = []
+                for i, ubicacion in enumerate(ubicaciones_buscar):
+                    # v2.1: Fuzzy matching con similarity() + ILIKE tradicional
+                    zona_conditions.append(f"""(
+                        zona ILIKE %(ubicacion_{i})s OR
+                        similarity(COALESCE(zona, ''), %(ubicacion_exact_{i})s) > 0.3 OR
+                        ciudad ILIKE %(ubicacion_{i})s OR
+                        direccion_completa ILIKE %(ubicacion_{i})s OR
+                        titulo ILIKE %(ubicacion_{i})s
+                    )""")
+                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                    params[f'ubicacion_exact_{i}'] = ubicacion
+                conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Filtro por habitaciones
         if criteria.get('habitaciones_min'):
@@ -726,35 +881,21 @@ Responde SOLO con el JSON de criterios."""
 
         # ===== FILTROS RELAJADOS =====
 
-        # UBICACIÓN: Expandir a ciudad completa usando el mapeo de search_config
-        if criteria.get('ubicaciones'):
-            ciudades_buscar = set()
-            zonas_originales = []
-
-            for ubicacion in criteria['ubicaciones']:
-                ubicacion_lower = ubicacion.lower()
-                zonas_originales.append(ubicacion)
-
-                # Usar el mapeo centralizado de search_config
-                ciudad = ZONA_A_CIUDAD.get(ubicacion_lower)
-                if ciudad:
-                    ciudades_buscar.add(ciudad)
-
-            # Buscar por ciudad O zona original
-            if ciudades_buscar or zonas_originales:
-                location_conditions = []
-
-                for i, ciudad in enumerate(ciudades_buscar):
-                    location_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
-                    params[f'ciudad_{i}'] = f'%{ciudad}%'
-
-                for i, zona in enumerate(zonas_originales):
-                    location_conditions.append(
-                        f"(zona ILIKE %(zona_orig_{i})s OR titulo ILIKE %(zona_orig_{i})s)"
-                    )
-                    params[f'zona_orig_{i}'] = f'%{zona}%'
-
-                conditions.append(f"({' OR '.join(location_conditions)})")
+        # UBICACIÓN: MANTENER zona/ciudad como filtro estricto
+        # v2.1: NO expandir a toda la ciudad - el usuario quiere esa zona específica
+        # Solo usar zonas expandidas (cercanas) como en búsqueda principal
+        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
+        if ubicaciones_buscar:
+            zona_conditions = []
+            for i, ubicacion in enumerate(ubicaciones_buscar):
+                # Buscar por zona, ciudad, o título (pero NO expandir a toda la ciudad)
+                zona_conditions.append(f"""(
+                    zona ILIKE %(ubicacion_fb_{i})s OR
+                    ciudad ILIKE %(ubicacion_fb_{i})s OR
+                    titulo ILIKE %(ubicacion_fb_{i})s
+                )""")
+                params[f'ubicacion_fb_{i}'] = f'%{ubicacion}%'
+            conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # HABITACIONES: Relajar -1 del mínimo
         if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
@@ -873,14 +1014,17 @@ Responde SOLO con el JSON de criterios."""
 
         return "\n".join(lines)
 
-    def search(self, query: str, limit: int = 10, sender: str = None) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 10, sender: str = None,
+               previous_criteria: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Búsqueda principal: procesa consulta en lenguaje natural y retorna propiedades
+        MEJORADO v2.1: Soporta contexto de búsquedas previas para refinamiento iterativo
 
         Args:
             query: Mensaje del agente inmobiliario
             limit: Número máximo de resultados a retornar
             sender: Teléfono del remitente (para logging)
+            previous_criteria: Criterios de búsqueda previa para contexto (opcional)
 
         Returns:
             Diccionario con criterios, resultados y metadatos
@@ -895,11 +1039,20 @@ Responde SOLO con el JSON de criterios."""
         print()
         print("📝 Consulta:")
         print(f"   {query[:200]}...")
+        if previous_criteria:
+            print()
+            print("📋 Contexto previo detectado:")
+            if previous_criteria.get('ubicaciones'):
+                print(f"   - Zonas: {', '.join(previous_criteria['ubicaciones'])}")
+            if previous_criteria.get('tipo_propiedad'):
+                print(f"   - Tipo: {previous_criteria['tipo_propiedad']}")
+            if previous_criteria.get('precio_max'):
+                print(f"   - Presupuesto: ${previous_criteria['precio_max']:,}")
         print()
 
-        # Paso 1: Extraer criterios con Claude
+        # Paso 1: Extraer criterios con Claude (con contexto previo si existe)
         print("🧠 Analizando criterios con Claude...")
-        criteria = self._extract_search_criteria(query)
+        criteria = self._extract_search_criteria(query, previous_criteria)
 
         if not criteria:
             search_log.log_error('No se pudieron extraer criterios de búsqueda', 'criteria_extraction')

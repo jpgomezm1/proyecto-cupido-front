@@ -974,6 +974,154 @@ def scrape_tu360():
             db.disconnect()
 
 
+@api_bp.route('/scrape-lobbie', methods=['POST'])
+def scrape_lobbie():
+    """
+    POST /api/scrape-lobbie
+
+    Scrapea una propiedad de Lobbie App y la guarda en la base de datos
+
+    Body:
+    {
+        "url": "https://app.lobbieapp.com/sp/..."
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "id": 123,
+            "slug": "...",
+            "title": "...",
+            ...
+        }
+    }
+    """
+    db = None
+    try:
+        # Obtener URL del body
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'URL is required'
+            }), 400
+
+        url = data['url']
+
+        # Validar que sea una URL de Lobbie
+        if 'lobbieapp.com' not in url:
+            return jsonify({
+                'success': False,
+                'error': 'La URL debe ser de lobbieapp.com'
+            }), 400
+
+        print(f"[API] Scrapeando URL Lobbie: {url}")
+
+        # Importar scraper
+        from src.scrapers.lobbie import LobbieScraper
+
+        # Crear scraper
+        scraper = LobbieScraper(verbose=True)
+
+        # Extraer datos de la propiedad
+        property_data = scraper.extract_property_data(url)
+
+        if not property_data:
+            return jsonify({
+                'success': False,
+                'error': 'No se pudo extraer información de la URL'
+            }), 400
+
+        print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
+
+        # Guardar en base de datos
+        db = get_db()
+        property_id = db.insert_property(property_data)
+
+        if not property_id:
+            return jsonify({
+                'success': False,
+                'error': 'Error al guardar la propiedad en la base de datos'
+            }), 500
+
+        print(f"[API] Propiedad guardada con ID: {property_id}")
+
+        # Procesar vectores automáticamente (en background)
+        try:
+            from src.core.property_processor import process_new_property
+            process_new_property(property_id, property_data)
+        except Exception as ve:
+            print(f"[API] ⚠️  Procesamiento vectorial no disponible: {ve}")
+
+        # Obtener la propiedad completa guardada
+        db.cursor.execute("""
+            SELECT
+                id,
+                codigo_propiedad as slug,
+                titulo as title,
+                tipo_propiedad as type,
+                precio as price_cop,
+                ciudad as city,
+                zona as barrio,
+                area_construida as area_m2,
+                habitaciones as bedrooms,
+                banos as bathrooms,
+                parqueaderos as parking,
+                estrato as stratum,
+                descripcion as description,
+                imagen_principal as cover_image,
+                imagenes_urls,
+                activa as published
+            FROM propiedades
+            WHERE id = %s
+        """, (property_id,))
+
+        saved_property = db.cursor.fetchone()
+
+        if not saved_property:
+            return jsonify({
+                'success': False,
+                'error': 'Propiedad guardada pero no se pudo recuperar'
+            }), 500
+
+        # Convertir a dict y procesar imágenes
+        result = dict(saved_property)
+
+        # Procesar imágenes
+        images = []
+        if result.get('cover_image'):
+            images.append(result['cover_image'])
+
+        if result.get('imagenes_urls'):
+            # Split por | y agregar a la lista
+            extra_images = result['imagenes_urls'].split('|')
+            for img in extra_images:
+                img = img.strip()
+                if img and img not in images:
+                    images.append(img)
+
+        result['images'] = images
+        del result['imagenes_urls']
+
+        return jsonify({
+            'success': True,
+            'data': result,
+            'message': 'Propiedad capturada y guardada exitosamente desde Lobbie'
+        }), 200
+
+    except Exception as e:
+        print(f"[API] Error en scrape_lobbie: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
 @api_bp.route('/properties/<slug>/similar', methods=['GET'])
 def get_similar_properties(slug: str):
     """

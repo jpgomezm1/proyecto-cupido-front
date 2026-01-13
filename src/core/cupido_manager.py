@@ -58,7 +58,7 @@ class CupidoManager:
 
         Returns:
             dict: {
-                'tipo': str,  # 'solicitud_mercado', 'captacion_wasi', 'captacion_tu360', 'chat_normal', 'comando'
+                'tipo': str,  # 'solicitud_mercado', 'captacion_wasi', 'captacion_tu360', 'captacion_lobbie', 'chat_normal', 'comando'
                 'confianza': float,  # 0.0 - 1.0
                 'data': dict  # Datos adicionales según el tipo
             }
@@ -85,6 +85,18 @@ class CupidoManager:
                 'confianza': 1.0,
                 'data': {
                     'url': tu360_link,
+                    'mensaje_completo': mensaje
+                }
+            }
+
+        # 2.5. Detectar si es captación de Lobbie (tiene link de Lobbie)
+        lobbie_link = self._extraer_link_lobbie(mensaje)
+        if lobbie_link:
+            return {
+                'tipo': 'captacion_lobbie',
+                'confianza': 1.0,
+                'data': {
+                    'url': lobbie_link,
                     'mensaje_completo': mensaje
                 }
             }
@@ -149,6 +161,34 @@ class CupidoManager:
             r'https?://[a-zA-Z0-9.-]*tu360inmobiliario-pulppo\.com[^\s]*',
             r'https?://asesor\.tu360inmobiliario-pulppo\.com[^\s]*',
             r'tu360inmobiliario-pulppo\.com/property/[^\s]*'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, mensaje, re.IGNORECASE)
+            if match:
+                url = match.group(0)
+                # Asegurar que tenga https://
+                if not url.startswith('http'):
+                    url = 'https://' + url
+                return url
+
+        return None
+
+    def _extraer_link_lobbie(self, mensaje: str) -> Optional[str]:
+        """
+        Extrae link de Lobbie App del mensaje
+
+        Args:
+            mensaje (str): Mensaje completo
+
+        Returns:
+            str: URL de Lobbie o None
+        """
+        # Patrones de URLs de Lobbie
+        patterns = [
+            r'https?://[a-zA-Z0-9.-]*lobbieapp\.com[^\s]*',
+            r'https?://app\.lobbieapp\.com[^\s]*',
+            r'lobbieapp\.com/sp/[^\s]*'
         ]
 
         for pattern in patterns:
@@ -499,6 +539,124 @@ class CupidoManager:
                     tipo_evento='Propiedad_Captada',
                     agente_telefono=agente_telefono,
                     datos_evento={'url': url_tu360, 'fuente': 'Tu360'},
+                    mensaje_whatsapp=mensaje_completo,
+                    grupo_origen=grupo_id,
+                    resultado='Error',
+                    mensaje_error=str(e)
+                )
+            finally:
+                db.disconnect()
+
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def procesar_captacion_lobbie(self, url_lobbie: str, agente_telefono: str,
+                                   origen: str, grupo_id: str = None,
+                                   mensaje_completo: str = None) -> Dict:
+        """
+        Procesa la captación de una propiedad desde un link de Lobbie
+
+        Args:
+            url_lobbie (str): URL de la propiedad en Lobbie
+            agente_telefono (str): Teléfono del agente que captó
+            origen (str): 'Grupo' o 'Chat_Privado'
+            grupo_id (str): ID del grupo si aplica
+            mensaje_completo (str): Mensaje completo del agente
+
+        Returns:
+            dict: Resultado de la captación
+        """
+        print(f"\n🏠 Procesando captación de Lobbie...")
+        print(f"   URL: {url_lobbie}")
+        print(f"   Agente: {agente_telefono}")
+        print(f"   Origen: {origen}")
+
+        try:
+            # 1. Scrappear la propiedad de Lobbie
+            from src.scrapers.lobbie import LobbieScraper
+            scraper = LobbieScraper()
+
+            propiedad_data = scraper.extract_property_data(url_lobbie)
+
+            if not propiedad_data:
+                return {
+                    'success': False,
+                    'error': 'No se pudo scrappear la propiedad de Lobbie'
+                }
+
+            # 2. Agregar metadatos de captación
+            propiedad_data['origen'] = 'Lobbie_Captado'
+            propiedad_data['agente_captador_telefono'] = agente_telefono
+            propiedad_data['grupo_captacion_id'] = grupo_id or self.grupo_cupido_id
+            propiedad_data['fuente'] = 'Lobbie'
+
+            print(f"   [OK] Origen: Lobbie_Captado | Grupo: {grupo_id or self.grupo_cupido_id}")
+
+            # 3. Guardar en base de datos
+            db = self._get_db()
+            try:
+                propiedad_id = db.insert_property(propiedad_data)
+                print(f"   [OK] Propiedad guardada con ID: {propiedad_id}")
+
+                if propiedad_id:
+                    # Actualizar estadísticas del agente
+                    agente = db.get_or_create_agente(agente_telefono)
+                    if agente:
+                        db.cursor.execute(
+                            "UPDATE agentes SET total_propiedades_captadas = total_propiedades_captadas + 1 WHERE id = %s",
+                            (agente['id'],)
+                        )
+                        db.conn.commit()
+
+                    # Procesar vectores automáticamente (en background)
+                    try:
+                        from src.core.property_processor import process_new_property
+                        process_new_property(propiedad_id, propiedad_data)
+                    except Exception as ve:
+                        print(f"⚠️  Procesamiento vectorial no disponible: {ve}")
+
+                    # Log del evento
+                    db.log_evento(
+                        tipo_evento='Propiedad_Captada',
+                        agente_telefono=agente_telefono,
+                        propiedad_id=propiedad_id,
+                        datos_evento={
+                            'url': url_lobbie,
+                            'codigo': propiedad_data.get('codigo_propiedad'),
+                            'titulo': propiedad_data.get('titulo'),
+                            'fuente': 'Lobbie'
+                        },
+                        mensaje_whatsapp=mensaje_completo,
+                        grupo_origen=grupo_id,
+                        resultado='Exitoso'
+                    )
+
+                    return {
+                        'success': True,
+                        'propiedad_id': propiedad_id,
+                        'codigo': propiedad_data.get('codigo_propiedad'),
+                        'titulo': propiedad_data.get('titulo')
+                    }
+
+                return {
+                    'success': False,
+                    'error': 'No se pudo guardar en la base de datos'
+                }
+            finally:
+                db.disconnect()
+
+        except Exception as e:
+            print(f"❌ Error en captación Lobbie: {e}")
+
+            # Log del error
+            db = self._get_db()
+            try:
+                db.log_evento(
+                    tipo_evento='Propiedad_Captada',
+                    agente_telefono=agente_telefono,
+                    datos_evento={'url': url_lobbie, 'fuente': 'Lobbie'},
                     mensaje_whatsapp=mensaje_completo,
                     grupo_origen=grupo_id,
                     resultado='Error',
