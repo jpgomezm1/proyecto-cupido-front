@@ -13,6 +13,7 @@ import json
 from src.db.database import DatabaseManager
 from src.core.search_agent import PropertySearchAgent
 from src.core.search_context import merge_criteria, generate_conversation_name
+from src.api.chat_auth import require_chat_auth, get_current_user
 
 conversations_bp = Blueprint('conversations', __name__, url_prefix='/api/conversations')
 
@@ -29,9 +30,10 @@ def get_search_agent():
 
 
 @conversations_bp.route('', methods=['GET'])
+@require_chat_auth
 def list_conversations():
     """
-    Lista todas las conversaciones activas
+    Lista todas las conversaciones activas del usuario autenticado
 
     Query params:
     - limit: int (default 50)
@@ -56,9 +58,10 @@ def list_conversations():
     try:
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
+        user_id = request.chat_user['id']
 
         with DatabaseManager() as db:
-            # Obtener conversaciones activas
+            # Obtener conversaciones activas del usuario
             query = """
                 SELECT
                     id,
@@ -75,11 +78,11 @@ def list_conversations():
                         ELSE TO_CHAR(fecha_actualizacion, 'DD Mon')
                     END as tiempo_relativo
                 FROM conversaciones_busqueda
-                WHERE activa = TRUE
+                WHERE activa = TRUE AND user_id = %s
                 ORDER BY fecha_actualizacion DESC
                 LIMIT %s OFFSET %s
             """
-            db.cursor.execute(query, (limit, offset))
+            db.cursor.execute(query, (user_id, limit, offset))
             rows = db.cursor.fetchall()
 
             conversations = []
@@ -98,9 +101,10 @@ def list_conversations():
                     }
                 conversations.append(conv)
 
-            # Obtener total
+            # Obtener total del usuario
             db.cursor.execute(
-                "SELECT COUNT(*) as count FROM conversaciones_busqueda WHERE activa = TRUE"
+                "SELECT COUNT(*) as count FROM conversaciones_busqueda WHERE activa = TRUE AND user_id = %s",
+                (user_id,)
             )
             total = db.cursor.fetchone()['count']
 
@@ -120,9 +124,10 @@ def list_conversations():
 
 
 @conversations_bp.route('', methods=['POST'])
+@require_chat_auth
 def create_conversation():
     """
-    Crea una nueva conversación
+    Crea una nueva conversación para el usuario autenticado
 
     Body JSON (opcional):
     {
@@ -142,15 +147,24 @@ def create_conversation():
     try:
         data = request.get_json() or {}
         nombre = data.get('nombre', 'Nueva Conversación')
+        user_id = request.chat_user['id']
 
         with DatabaseManager() as db:
             query = """
-                INSERT INTO conversaciones_busqueda (nombre)
-                VALUES (%s)
+                INSERT INTO conversaciones_busqueda (nombre, user_id)
+                VALUES (%s, %s)
                 RETURNING id, nombre, fecha_creacion
             """
-            db.cursor.execute(query, (nombre,))
+            db.cursor.execute(query, (nombre, user_id))
             row = db.cursor.fetchone()
+
+            # Registrar en log de uso
+            db.cursor.execute(
+                """INSERT INTO chat_usage_log (user_id, accion, conversacion_id, detalles)
+                   VALUES (%s, 'conversation_create', %s, '{}')""",
+                (user_id, row['id'] if isinstance(row, dict) else row[0])
+            )
+
             db.conn.commit()
 
             if isinstance(row, dict):
@@ -179,6 +193,7 @@ def create_conversation():
 
 
 @conversations_bp.route('/<int:conversation_id>', methods=['GET'])
+@require_chat_auth
 def get_conversation(conversation_id):
     """
     Obtiene una conversación con todos sus mensajes
@@ -209,15 +224,17 @@ def get_conversation(conversation_id):
     }
     """
     try:
+        user_id = request.chat_user['id']
+
         with DatabaseManager() as db:
-            # Obtener conversación
+            # Obtener conversación (solo si pertenece al usuario)
             query_conv = """
                 SELECT id, nombre, criterios_acumulados, total_mensajes,
                        fecha_creacion, fecha_actualizacion
                 FROM conversaciones_busqueda
-                WHERE id = %s AND activa = TRUE
+                WHERE id = %s AND activa = TRUE AND user_id = %s
             """
-            db.cursor.execute(query_conv, (conversation_id,))
+            db.cursor.execute(query_conv, (conversation_id, user_id))
             conv_row = db.cursor.fetchone()
 
             if not conv_row:
@@ -393,6 +410,7 @@ def get_public_conversation(conversation_id):
 
 
 @conversations_bp.route('/<int:conversation_id>', methods=['PUT'])
+@require_chat_auth
 def update_conversation(conversation_id):
     """
     Actualiza el nombre de una conversación
@@ -417,14 +435,16 @@ def update_conversation(conversation_id):
                 'error': 'El nombre no puede estar vacío'
             }), 400
 
+        user_id = request.chat_user['id']
+
         with DatabaseManager() as db:
             query = """
                 UPDATE conversaciones_busqueda
                 SET nombre = %s, fecha_actualizacion = NOW()
-                WHERE id = %s AND activa = TRUE
+                WHERE id = %s AND activa = TRUE AND user_id = %s
                 RETURNING id, nombre
             """
-            db.cursor.execute(query, (nombre, conversation_id))
+            db.cursor.execute(query, (nombre, conversation_id, user_id))
             row = db.cursor.fetchone()
             db.conn.commit()
 
@@ -452,19 +472,22 @@ def update_conversation(conversation_id):
 
 
 @conversations_bp.route('/<int:conversation_id>', methods=['DELETE'])
+@require_chat_auth
 def delete_conversation(conversation_id):
     """
     Elimina una conversación (soft delete)
     """
     try:
+        user_id = request.chat_user['id']
+
         with DatabaseManager() as db:
             query = """
                 UPDATE conversaciones_busqueda
                 SET activa = FALSE, fecha_actualizacion = NOW()
-                WHERE id = %s AND activa = TRUE
+                WHERE id = %s AND activa = TRUE AND user_id = %s
                 RETURNING id
             """
-            db.cursor.execute(query, (conversation_id,))
+            db.cursor.execute(query, (conversation_id, user_id))
             row = db.cursor.fetchone()
             db.conn.commit()
 
@@ -489,6 +512,7 @@ def delete_conversation(conversation_id):
 
 
 @conversations_bp.route('/<int:conversation_id>/messages', methods=['POST'])
+@require_chat_auth
 def send_message(conversation_id):
     """
     Envía un mensaje a la conversación y ejecuta búsqueda con contexto
@@ -522,13 +546,15 @@ def send_message(conversation_id):
                 'error': 'El mensaje no puede estar vacío'
             }), 400
 
+        user_id = request.chat_user['id']
+
         with DatabaseManager() as db:
-            # Verificar que la conversación existe y obtener criterios acumulados
+            # Verificar que la conversación existe y pertenece al usuario
             db.cursor.execute(
                 """SELECT id, nombre, criterios_acumulados, total_mensajes
                    FROM conversaciones_busqueda
-                   WHERE id = %s AND activa = TRUE""",
-                (conversation_id,)
+                   WHERE id = %s AND activa = TRUE AND user_id = %s""",
+                (conversation_id, user_id)
             )
             conv_row = db.cursor.fetchone()
 
@@ -682,6 +708,24 @@ def send_message(conversation_id):
                         "UPDATE conversaciones_busqueda SET nombre = %s WHERE id = %s",
                         (new_name, conversation_id)
                     )
+
+            # Registrar búsqueda en log de uso
+            search_details = json.dumps({
+                'query': content[:100],  # Primeros 100 caracteres
+                'results_count': total_found,
+                'criteria': list(accumulated_criteria.keys()) if accumulated_criteria else []
+            })
+            db.cursor.execute(
+                """INSERT INTO chat_usage_log (user_id, accion, conversacion_id, detalles)
+                   VALUES (%s, 'search', %s, %s)""",
+                (user_id, conversation_id, search_details)
+            )
+
+            # Actualizar total_busquedas del usuario
+            db.cursor.execute(
+                "UPDATE chat_users SET total_busquedas = total_busquedas + 1 WHERE id = %s",
+                (user_id,)
+            )
 
             db.conn.commit()
 

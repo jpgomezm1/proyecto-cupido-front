@@ -30,6 +30,7 @@ from src.api.property_chat import property_chat_bp
 from src.api.bulk_upload import bulk_bp
 from src.api.conversations import conversations_bp
 from src.api.chat_auth import chat_auth_bp
+from src.api.chat_users_admin import chat_users_admin_bp
 
 load_dotenv()
 
@@ -53,6 +54,7 @@ app.register_blueprint(property_chat_bp)
 app.register_blueprint(bulk_bp)
 app.register_blueprint(conversations_bp)
 app.register_blueprint(chat_auth_bp)
+app.register_blueprint(chat_users_admin_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()

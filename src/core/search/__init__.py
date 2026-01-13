@@ -13,6 +13,10 @@ Uso recomendado:
 
 Componentes disponibles:
     - PropertySearchAgent: Agente principal de búsqueda con IA
+    - CriteriaExtractor: Extractor de criterios usando Claude
+    - QueryBuilder: Constructor de queries SQL
+    - ResultRanker: Sistema de ranking de resultados
+    - ResponseFormatter: Formateador de respuestas
     - search_log: Logger especializado para búsquedas
 
 Configuración:
@@ -29,16 +33,29 @@ from src.core.search_agent import (
     FALLBACK_MODELS,
 )
 
+# Exportar nuevos módulos refactorizados
+from src.core.search.criteria_extractor import CriteriaExtractor
+from src.core.search.query_builder import QueryBuilder
+from src.core.search.ranker import ResultRanker
+from src.core.search.formatter import ResponseFormatter
+
 # Re-exportar logger
 from src.core.logger import get_search_logger
 
 search_log = get_search_logger()
 
 __all__ = [
+    # Agente principal (compatibilidad)
     'PropertySearchAgent',
     'ANTHROPIC_AVAILABLE',
     'VECTOR_SEARCH_AVAILABLE',
     'MODEL',
     'FALLBACK_MODELS',
+    # Nuevos módulos
+    'CriteriaExtractor',
+    'QueryBuilder',
+    'ResultRanker',
+    'ResponseFormatter',
+    # Logger
     'search_log',
 ]

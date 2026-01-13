@@ -683,17 +683,8 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("parqueaderos >= %(parqueaderos_min)s")
             params['parqueaderos_min'] = criteria['parqueaderos_min']
 
-        # Filtro por amenidades (ahora es opcional, no elimina resultados)
-        # Las amenidades se usan más para ranking que para filtrado duro
-        # Solo aplicar si hay pocas amenidades requeridas (máx 2)
-        if criteria.get('amenidades_requeridas'):
-            amenidades = criteria['amenidades_requeridas']
-            if len(amenidades) <= 2:  # Solo filtrar si son pocas
-                for i, amenidad in enumerate(amenidades):
-                    conditions.append(
-                        f"(amenidades_internas ILIKE %(amenidad_{i})s OR amenidades_externas ILIKE %(amenidad_{i})s)"
-                    )
-                    params[f'amenidad_{i}'] = f'%{amenidad}%'
+        # NOTA: Las amenidades NO se filtran en SQL - solo afectan el ranking
+        # Esto permite mostrar más resultados y rankear los mejores primero
 
         # Agregar condiciones a la query
         if conditions:
