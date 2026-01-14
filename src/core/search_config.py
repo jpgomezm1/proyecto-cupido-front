@@ -49,17 +49,18 @@ SEGMENTOS_PRECIO_COLOMBIA: Dict[str, Tuple[int, int]] = {
 }
 
 # Tolerancia de precio por segmento (qué tanto puede variar del presupuesto)
+# v2.2: Tolerancia uniforme del 10% para todos los segmentos
 TOLERANCIA_PRECIO_POR_SEGMENTO: Dict[str, float] = {
-    'vis': 0.10,        # ±10% - Poco margen en este segmento
-    'accesible': 0.12,  # ±12%
-    'medio': 0.15,      # ±15%
-    'medio_alto': 0.15, # ±15%
-    'premium': 0.18,    # ±18% - Más flexibilidad
-    'lujo': 0.20        # ±20% - Alta flexibilidad
+    'vis': 0.10,        # ±10%
+    'accesible': 0.10,  # ±10%
+    'medio': 0.10,      # ±10%
+    'medio_alto': 0.10, # ±10%
+    'premium': 0.10,    # ±10%
+    'lujo': 0.10        # ±10%
 }
 
 # Tolerancia por defecto si no se puede determinar segmento
-TOLERANCIA_PRECIO_DEFAULT = 0.15  # ±15%
+TOLERANCIA_PRECIO_DEFAULT = 0.10  # ±10%
 
 
 # =============================================================================
@@ -251,9 +252,16 @@ ZONAS_SIMILARES: Dict[str, List[str]] = {
     'floresta': ['laureles', 'estadio', 'belen', 'calasanz'],
     'belen': ['laureles', 'floresta', 'la mota', 'guayabal'],
 
-    # Envigado y sur
-    'envigado': ['poblado', 'sabaneta', 'zuñiga', 'la paz'],
-    'sabaneta': ['envigado', 'itagui', 'la estrella'],
+    # Envigado - zonas DENTRO de Envigado (NO incluir otras ciudades)
+    'envigado': ['zuñiga', 'la paz', 'el dorado', 'las antillas', 'alcala', 'la cuenca', 'el trianon', 'loma del escobero'],
+    'loma del escobero': ['envigado', 'las palmas'],
+    'zuñiga': ['envigado', 'la paz'],
+    'las antillas': ['envigado', 'alcala', 'el dorado'],
+
+    # Sabaneta - zonas DENTRO de Sabaneta (NO incluir otras ciudades)
+    'sabaneta': ['aves maria', 'mayorca', 'la doctora', 'calle larga'],
+    'aves maria': ['sabaneta', 'mayorca'],
+    'mayorca': ['sabaneta', 'aves maria'],
 
     # Calasanz y occidental
     'calasanz': ['floresta', 'santa monica', 'san joaquin', 'robledo'],
@@ -737,30 +745,24 @@ def calcular_rango_precio(precio_max: int, tolerancia: float = None, flexibilida
     """
     Calcula el rango de precio aceptable dado un presupuesto máximo
 
-    v2.1: Ajustado para ser más permisivo en el mínimo
-    Cuando el usuario dice "hasta X", quiere ver TODO hasta X, no solo lo caro
+    v2.2: Rango estricto de ±10% del presupuesto
+    Si el usuario dice "$500M", mostrar propiedades entre $450M y $550M
 
     Args:
         precio_max: Presupuesto máximo del cliente
-        tolerancia: Tolerancia override (si no se especifica, usa la del segmento)
-        flexibilidad: 'estricto' (usuario dijo "hasta/máximo") o 'normal'
+        tolerancia: Tolerancia override (si no se especifica, usa 10%)
+        flexibilidad: 'estricto' o 'normal' (ambos usan ±10% ahora)
 
     Returns:
         Tupla (precio_min, precio_max_ajustado)
     """
     if tolerancia is None:
-        tolerancia = get_tolerancia_precio(precio_max)
+        tolerancia = get_tolerancia_precio(precio_max)  # Ahora siempre 0.10
 
-    # v2.1: Cuando usuario dice "hasta X", el mínimo es mucho más bajo
-    # El objetivo es mostrar opciones variadas, no solo las más caras
-    if flexibilidad == 'estricto':
-        # "Hasta 1.2B" = mostrar desde 50% hasta 110% del presupuesto
-        precio_min = int(precio_max * 0.50)
-        precio_max_ajustado = int(precio_max * 1.10)
-    else:
-        # Búsqueda normal: rango más centrado
-        precio_min = int(precio_max * 0.70)  # 30% abajo
-        precio_max_ajustado = int(precio_max * 1.15)  # 15% arriba
+    # v2.2: Rango estricto de ±10% para todos los casos
+    # $500M → $450M a $550M
+    precio_min = int(precio_max * (1 - tolerancia))      # -10% = 90%
+    precio_max_ajustado = int(precio_max * (1 + tolerancia))  # +10% = 110%
 
     return precio_min, precio_max_ajustado
 
@@ -827,6 +829,50 @@ def get_zonas_expandidas(zona: str) -> List[str]:
     resultado.extend([z for z in similares if z.lower() != zona_lower])
 
     return resultado
+
+
+def get_ciudad_de_zona(zona: str) -> Optional[str]:
+    """
+    Obtiene la ciudad a la que pertenece una zona.
+
+    Args:
+        zona: Nombre de la zona
+
+    Returns:
+        Nombre de la ciudad o None si no se encuentra
+    """
+    zona_lower = zona.lower().strip()
+
+    # Buscar en ZONA_A_CIUDAD
+    ciudad = ZONA_A_CIUDAD.get(zona_lower)
+    if ciudad:
+        return ciudad
+
+    # Si la zona es una ciudad conocida, retornarla
+    ciudades_conocidas = ['Medellín', 'Envigado', 'Sabaneta', 'Itagüí', 'Bello', 'Rionegro', 'La Estrella', 'El Retiro', 'La Ceja']
+    for c in ciudades_conocidas:
+        if zona_lower == c.lower():
+            return c
+
+    return None
+
+
+def get_ciudades_de_zonas(zonas: List[str]) -> List[str]:
+    """
+    Obtiene las ciudades únicas de una lista de zonas.
+
+    Args:
+        zonas: Lista de nombres de zonas
+
+    Returns:
+        Lista de ciudades únicas
+    """
+    ciudades = set()
+    for zona in zonas:
+        ciudad = get_ciudad_de_zona(zona)
+        if ciudad:
+            ciudades.add(ciudad)
+    return list(ciudades)
 
 
 def get_pesos_perfil(perfil: str) -> Dict[str, float]:

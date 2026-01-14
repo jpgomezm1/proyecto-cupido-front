@@ -44,6 +44,8 @@ from src.core.search_config import (
     calcular_rango_precio,
     detectar_perfil_comprador,
     get_zonas_expandidas,
+    get_ciudad_de_zona,
+    get_ciudades_de_zonas,
     get_pesos_perfil,
     get_amenidades_preferidas,
     AMENIDADES_SEGURIDAD,
@@ -464,45 +466,58 @@ Responde SOLO con el JSON de criterios."""
         max_level: int = 4
     ) -> Tuple[List[Dict], Dict[str, Any]]:
         """
-        Búsqueda progresiva que relaja criterios hasta obtener min_results.
-        Protege PRECIO y UBICACIÓN como los factores más importantes.
+        Búsqueda progresiva con relajación escalonada.
+
+        ORDEN DE RELAJACIÓN:
+        1. Primero relaja UBICACIÓN (zona exacta → ciudad → zonas expandidas)
+        2. Luego relaja otros criterios (área, baños, habitaciones, precio)
 
         Args:
             criteria: Criterios de búsqueda originales
             db: Conexión a base de datos
             min_results: Mínimo de resultados deseados (default 5)
-            max_level: Máximo nivel de relajación (default 4)
+            max_level: Máximo nivel de relajación de otros criterios (default 4)
 
         Returns:
             Tuple de (resultados, metadata de progresión)
         """
         search_progression = {
             'nivel_final': 0,
+            'ubicacion_level': 0,
             'resultados_por_nivel': {},
-            'relajaciones_aplicadas': []
+            'relajaciones_aplicadas': [],
+            'ubicacion_relajada': False,
+            'mensaje_ubicacion': None
         }
 
         results = []
+        ubicaciones_originales = criteria.get('ubicaciones', [])
 
         # Log de diagnóstico: mostrar criterios clave
         print(f"   Criterios clave para SQL:")
-        if criteria.get('ubicaciones'):
-            print(f"     - Ubicaciones: {criteria['ubicaciones']}")
+        if ubicaciones_originales:
+            print(f"     - Ubicaciones: {ubicaciones_originales}")
+            ciudades = get_ciudades_de_zonas(ubicaciones_originales)
+            if ciudades:
+                print(f"     - Ciudades inferidas: {ciudades}")
         if criteria.get('precio_max'):
             print(f"     - Precio max: ${criteria['precio_max']:,}")
         if criteria.get('tipo_propiedad'):
             print(f"     - Tipo: {criteria['tipo_propiedad']}")
 
-        for level in range(max_level + 1):
-            # Construir criterios relajados para este nivel
-            relaxed_criteria = self._build_relaxed_criteria(criteria, level)
+        # ========== FASE 1: RELAJACIÓN DE UBICACIÓN ==========
+        # Intentar primero con diferentes niveles de ubicación ANTES de relajar otros criterios
 
-            # Construir y ejecutar query
-            sql_query, params = self._build_sql_query(relaxed_criteria)
+        ubicacion_levels = [0, 1, 2]  # 0=zona exacta, 1=ciudad, 2=zonas expandidas
+        ubicacion_names = ['zona exacta', 'ciudad', 'zonas similares']
 
-            # Log de diagnóstico en nivel 0
-            if level == 0:
-                print(f"   Query SQL (nivel 0): {sql_query[:300]}...")
+        for ub_level in ubicacion_levels:
+            # Construir query con ubicación relajada pero otros criterios exactos
+            sql_query, params = self._build_sql_query(criteria, ubicacion_level=ub_level)
+
+            # Log de diagnóstico
+            if ub_level == 0:
+                print(f"   Query SQL (zona exacta): {sql_query[:300]}...")
                 print(f"   Params: {params}")
 
             try:
@@ -525,32 +540,92 @@ Responde SOLO con el JSON de criterios."""
                             prop[key] = str(value)
                     results.append(prop)
 
-                search_progression['resultados_por_nivel'][level] = len(results)
-
-                level_name = ['exacta', 'área/parq', 'baños', 'habitaciones', 'precio'][level]
-                print(f"   Nivel {level} ({level_name}): {len(results)} resultados")
+                search_progression['resultados_por_nivel'][f'ub_{ub_level}'] = len(results)
+                print(f"   Ubicación nivel {ub_level} ({ubicacion_names[ub_level]}): {len(results)} resultados")
 
                 # Si tenemos suficientes resultados, parar
                 if len(results) >= min_results:
-                    search_progression['nivel_final'] = level
-                    search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(level)
+                    search_progression['nivel_final'] = 0
+                    search_progression['ubicacion_level'] = ub_level
+                    if ub_level > 0:
+                        search_progression['ubicacion_relajada'] = True
+                        ciudades = get_ciudades_de_zonas(ubicaciones_originales)
+                        if ub_level == 1 and ciudades:
+                            search_progression['mensaje_ubicacion'] = f"Ampliando búsqueda a toda {', '.join(ciudades)}"
+                        elif ub_level == 2:
+                            search_progression['mensaje_ubicacion'] = "Incluyendo zonas similares"
                     return results, search_progression
 
             except Exception as e:
-                print(f"⚠️  Error en nivel {level}: {e}")
-                print(f"   Query: {sql_query[:200]}...")
-                print(f"   Params: {list(params.keys())}")
+                print(f"⚠️  Error en ubicación nivel {ub_level}: {e}")
                 import traceback
                 traceback.print_exc()
-                # Rollback para limpiar la transacción fallida
                 try:
                     db.conn.rollback()
                 except:
                     pass
                 continue
 
-        # Si llegamos aquí, devolver lo que tengamos del último nivel
+        # ========== FASE 2: RELAJACIÓN DE OTROS CRITERIOS ==========
+        # Si no encontramos suficientes con ubicación relajada, ahora relajamos otros criterios
+        # Usamos ubicacion_level=1 (ciudad) como base
+
+        print(f"   Pasando a relajar otros criterios...")
+
+        for level in range(1, max_level + 1):
+            # Construir criterios relajados para este nivel
+            relaxed_criteria = self._build_relaxed_criteria(criteria, level)
+
+            # Usar ubicacion_level=1 (ciudad) para tener más cobertura
+            sql_query, params = self._build_sql_query(relaxed_criteria, ubicacion_level=1)
+
+            try:
+                db.cursor.execute(sql_query, params)
+                columns = [desc[0] for desc in db.cursor.description]
+                rows = db.cursor.fetchall()
+
+                results = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        prop = dict(row)
+                    else:
+                        prop = dict(zip(columns, row))
+
+                    for key, value in prop.items():
+                        if hasattr(value, 'isoformat'):
+                            prop[key] = value.isoformat()
+                        elif not isinstance(value, (int, float, str, bool, type(None))):
+                            prop[key] = str(value)
+                    results.append(prop)
+
+                search_progression['resultados_por_nivel'][f'rel_{level}'] = len(results)
+
+                level_name = ['', 'área/parq', 'baños', 'habitaciones', 'precio'][level]
+                print(f"   Nivel {level} ({level_name}): {len(results)} resultados")
+
+                if len(results) >= min_results:
+                    search_progression['nivel_final'] = level
+                    search_progression['ubicacion_level'] = 1
+                    search_progression['ubicacion_relajada'] = True
+                    search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(level)
+                    ciudades = get_ciudades_de_zonas(ubicaciones_originales)
+                    if ciudades:
+                        search_progression['mensaje_ubicacion'] = f"Búsqueda en {', '.join(ciudades)}"
+                    return results, search_progression
+
+            except Exception as e:
+                print(f"⚠️  Error en nivel {level}: {e}")
+                import traceback
+                traceback.print_exc()
+                try:
+                    db.conn.rollback()
+                except:
+                    pass
+                continue
+
+        # Si llegamos aquí, devolver lo que tengamos
         search_progression['nivel_final'] = max_level
+        search_progression['ubicacion_level'] = 1
         search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(max_level)
         return results, search_progression
 
@@ -570,12 +645,16 @@ Responde SOLO con el JSON de criterios."""
             descriptions.append("precio +10%")
         return descriptions
 
-    def _build_sql_query(self, criteria: Dict[str, Any]) -> tuple:
+    def _build_sql_query(self, criteria: Dict[str, Any], ubicacion_level: int = 0) -> tuple:
         """
         Construye una consulta SQL basada en los criterios extraídos.
 
         Args:
             criteria: Diccionario de criterios de búsqueda
+            ubicacion_level: Nivel de búsqueda de ubicación
+                0 = Solo zonas exactas
+                1 = Solo ciudad (ampliando desde zona)
+                2 = Zonas expandidas (zonas similares)
 
         Returns:
             Tupla (query_sql, params)
@@ -598,19 +677,21 @@ Responde SOLO con el JSON de criterios."""
         params = {}
 
         # ========== FILTROS DE PRECIO ==========
+        # v2.2: Filtro estricto ±10% del presupuesto
+        # Si el usuario dice "$500M", solo mostrar propiedades entre $450M y $550M
 
-        # Filtro de precio máximo (siempre se aplica)
         if criteria.get('precio_max'):
-            # Usar precio_max_ajustado si existe (incluye tolerancia del 15%)
+            # Usar precio_max_ajustado si existe (incluye tolerancia del +10%)
             precio_max_duro = criteria.get('precio_max_ajustado') or criteria['precio_max']
             conditions.append("precio <= %(precio_max_duro)s")
             params['precio_max_duro'] = precio_max_duro
 
-            # Precio mínimo SOLO si el usuario lo especificó explícitamente
-            # NO usar precio_min_implicito como filtro duro (es muy restrictivo)
-            if criteria.get('precio_min'):
+            # v2.2: SIEMPRE aplicar precio mínimo (-10% del presupuesto)
+            # Usar precio_min explícito si existe, sino usar precio_min_implicito
+            precio_min_duro = criteria.get('precio_min') or criteria.get('precio_min_implicito')
+            if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
-                params['precio_min_duro'] = criteria['precio_min']
+                params['precio_min_duro'] = precio_min_duro
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -625,23 +706,51 @@ Responde SOLO con el JSON de criterios."""
                 conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
                 params['tipo_propiedad'] = f"%{tipos}%"
 
-        # ========== FILTROS FLEXIBLES ==========
+        # ========== FILTRO DE UBICACIÓN ESCALONADO ==========
 
-        # Filtro por ubicaciones (zonas, ciudad, dirección o título)
-        # Usa solo ILIKE para compatibilidad (sin funciones avanzadas)
-        ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
-        if ubicaciones_buscar:
-            zona_conditions = []
-            for i, ubicacion in enumerate(ubicaciones_buscar):
-                # Búsqueda con ILIKE (compatible con todas las instalaciones PostgreSQL)
-                zona_conditions.append(f"""(
-                    zona ILIKE %(ubicacion_{i})s OR
-                    ciudad ILIKE %(ubicacion_{i})s OR
-                    direccion_completa ILIKE %(ubicacion_{i})s OR
-                    titulo ILIKE %(ubicacion_{i})s
-                )""")
-                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-            conditions.append(f"({' OR '.join(zona_conditions)})")
+        ubicaciones_originales = criteria.get('ubicaciones', [])
+
+        if ubicaciones_originales:
+            if ubicacion_level == 0:
+                # NIVEL 0: Solo zonas exactas (búsqueda estricta)
+                zona_conditions = []
+                for i, ubicacion in enumerate(ubicaciones_originales):
+                    # Solo buscar en zona y ciudad, NO en titulo/direccion
+                    zona_conditions.append(f"""(
+                        zona ILIKE %(ubicacion_{i})s OR
+                        ciudad ILIKE %(ubicacion_{i})s
+                    )""")
+                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                conditions.append(f"({' OR '.join(zona_conditions)})")
+
+            elif ubicacion_level == 1:
+                # NIVEL 1: Buscar por ciudad (ampliando desde zonas específicas)
+                ciudades = get_ciudades_de_zonas(ubicaciones_originales)
+                if ciudades:
+                    ciudad_conditions = []
+                    for i, ciudad in enumerate(ciudades):
+                        ciudad_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
+                        params[f'ciudad_{i}'] = f'%{ciudad}%'
+                    conditions.append(f"({' OR '.join(ciudad_conditions)})")
+                else:
+                    # Si no encontramos ciudades, usar zonas originales
+                    zona_conditions = []
+                    for i, ubicacion in enumerate(ubicaciones_originales):
+                        zona_conditions.append(f"ciudad ILIKE %(ubicacion_{i})s")
+                        params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                    conditions.append(f"({' OR '.join(zona_conditions)})")
+
+            elif ubicacion_level >= 2:
+                # NIVEL 2+: Zonas expandidas (zonas similares dentro de la misma ciudad)
+                zonas_expandidas = criteria.get('zonas_expandidas', ubicaciones_originales)
+                zona_conditions = []
+                for i, ubicacion in enumerate(zonas_expandidas):
+                    zona_conditions.append(f"""(
+                        zona ILIKE %(ubicacion_{i})s OR
+                        ciudad ILIKE %(ubicacion_{i})s
+                    )""")
+                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Filtro por habitaciones
         if criteria.get('habitaciones_min'):
@@ -1128,12 +1237,21 @@ Responde SOLO con el JSON de criterios."""
                 search_log.log_sql_query("progressive_search", {}, sql_elapsed)
 
                 print(f"📊 Propiedades encontradas: {len(results)}")
+                if search_progression.get('ubicacion_relajada'):
+                    print(f"   Ubicación relajada: {search_progression.get('mensaje_ubicacion')}")
                 if search_progression.get('nivel_final', 0) > 0:
                     print(f"   Nivel de relajación: {search_progression['nivel_final']}")
                     print(f"   Criterios relajados: {', '.join(search_progression.get('relajaciones_aplicadas', []))}")
 
-                # Si no hay resultados después de todos los niveles
-                search_type = 'exacta' if search_progression.get('nivel_final', 0) == 0 else 'progresiva'
+                # Determinar tipo de búsqueda
+                ubicacion_level = search_progression.get('ubicacion_level', 0)
+                nivel_final = search_progression.get('nivel_final', 0)
+                if ubicacion_level == 0 and nivel_final == 0:
+                    search_type = 'exacta'
+                elif ubicacion_level > 0 and nivel_final == 0:
+                    search_type = 'ubicacion_ampliada'
+                else:
+                    search_type = 'progresiva'
                 if len(results) == 0:
                     print("ℹ️  Sin resultados incluso con criterios relajados")
                     total_elapsed = (time.time() - total_start) * 1000
@@ -1248,11 +1366,21 @@ Responde SOLO con el JSON de criterios."""
         if criteria.get('piso') == 1:
             lines.append("  Piso: Primer piso")
 
-        # Indicador de tipo de búsqueda
+        # Indicador de tipo de búsqueda y ubicación
         search_type = search_response.get('search_type', 'principal')
-        if search_type == 'relajada':
-            lines.append("")
-            lines.append("(Resultados con criterios ampliados)")
+        search_progression = search_response.get('search_progression', {})
+
+        # Mostrar si la ubicación fue ampliada
+        if search_progression.get('ubicacion_relajada'):
+            mensaje_ub = search_progression.get('mensaje_ubicacion', '')
+            if mensaje_ub:
+                lines.append("")
+                lines.append(f"ℹ️ {mensaje_ub}")
+
+        # Mostrar si otros criterios fueron relajados
+        if search_type == 'progresiva' and search_progression.get('relajaciones_aplicadas'):
+            relajaciones = search_progression['relajaciones_aplicadas']
+            lines.append(f"   (Criterios flexibilizados: {', '.join(relajaciones[:2])})")
 
         lines.append("")
         lines.append(f"{len(results)} propiedades encontradas")
