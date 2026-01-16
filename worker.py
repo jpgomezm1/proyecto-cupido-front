@@ -5,6 +5,19 @@ Ejecutar con: python worker.py
 import os
 import redis
 from rq import Worker, Queue, Connection
+import sentry_sdk
+from sentry_sdk.integrations.rq import RqIntegration
+
+# Inicializar Sentry para el worker
+sentry_dsn = os.getenv('SENTRY_DSN')
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[RqIntegration()],
+        traces_sample_rate=0.1,
+        environment=os.getenv('FLASK_ENV', 'production'),
+    )
+    print("[WORKER] Sentry inicializado")
 
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 

@@ -39,8 +39,27 @@ from src.api.system_health import system_health_bp
 from src.api.activity import activity_bp
 from src.api.whatsapp_groups import whatsapp_groups_bp
 from src.api.dashboard import dashboard_bp
+import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
+from sentry_sdk.integrations.rq import RqIntegration
 
 load_dotenv()
+
+# Inicializar Sentry para error tracking y performance monitoring
+sentry_dsn = os.getenv('SENTRY_DSN')
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[
+            FlaskIntegration(),
+            RqIntegration(),
+        ],
+        traces_sample_rate=0.1,  # 10% de requests para performance monitoring
+        profiles_sample_rate=0.1,  # 10% para profiling
+        environment=os.getenv('FLASK_ENV', 'production'),
+        send_default_pii=False,  # No enviar datos personales
+    )
+    print("[OK] Sentry inicializado para error tracking")
 
 app = Flask(__name__)
 
