@@ -4,7 +4,7 @@ Ejecutar con: python worker.py
 """
 import os
 import redis
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 import sentry_sdk
 from sentry_sdk.integrations.rq import RqIntegration
 
@@ -30,7 +30,11 @@ else:
 if __name__ == '__main__':
     print(f"[WORKER] Iniciando worker...")
     print(f"[WORKER] Redis URL: {redis_url[:30]}...")
-    with Connection(conn):
-        worker = Worker(['captures'])
-        print(f"[WORKER] Escuchando cola 'captures'...")
-        worker.work()
+
+    # Crear la cola con la conexión
+    queue = Queue('captures', connection=conn)
+
+    # Crear worker con la conexión (API moderna de RQ)
+    worker = Worker([queue], connection=conn)
+    print(f"[WORKER] Escuchando cola 'captures'...")
+    worker.work()
