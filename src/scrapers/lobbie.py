@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 import re
 from typing import Dict, List, Optional
 from datetime import datetime
+import newrelic.agent
 from src.scrapers.utils import PropertyNormalizer
 
 # Importar sistema de logging
@@ -583,6 +584,10 @@ class LobbieScraper:
                     scraper_log.log_complete(data.get('codigo_propiedad', 'unknown'), total_elapsed)
                 except Exception:
                     pass
+
+            # === FASE 3: New Relic metrics ===
+            newrelic.agent.record_custom_metric('Custom/Scraper/Lobbie/Duration', total_elapsed)
+            newrelic.agent.record_custom_metric('Custom/Scraper/Lobbie/Success', 1)
 
             return data
 

@@ -7,9 +7,11 @@ Maneja detección de mensajes, captación, solicitudes y trazabilidad
 
 import re
 import os
+import time
 from typing import Dict, List, Tuple, Optional
 from src.db.database import DatabaseManager
 from dotenv import load_dotenv
+import sentry_sdk
 
 load_dotenv()
 
@@ -317,11 +319,18 @@ class CupidoManager:
         Returns:
             dict: Resultado del procesamiento
         """
-        print(f"\n🏠 Procesando captación de Wasi...")
-        print(f"   URL: {url_wasi}")
-        print(f"   Agente: {agente_telefono}")
-        if nombre_agente:
-            print(f"   Nombre: {nombre_agente}")
+        start_time = time.time()
+
+        # === FASE 1: Logging estructurado ===
+        print(f"[CAPTACION] START tipo=wasi url={url_wasi[:50]} agente={agente_telefono[:15] if agente_telefono else 'N/A'} grupo={grupo_id[:25] if grupo_id else 'N/A'}")
+
+        # === FASE 2: Sentry context ===
+        sentry_sdk.set_context("captacion", {
+            "tipo": "wasi",
+            "url": url_wasi,
+            "agente": agente_telefono,
+            "grupo_id": grupo_id
+        })
 
         try:
             # 1. Scrappear la propiedad de Wasi
@@ -389,6 +398,18 @@ class CupidoManager:
                         resultado='Exitoso'
                     )
 
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    # === FASE 1: Logging estructurado - éxito ===
+                    print(f"[CAPTACION] SUCCESS tipo=wasi propiedad_id={propiedad_id} codigo={propiedad_data.get('codigo_propiedad')} tiempo={elapsed_ms:.0f}ms")
+
+                    # === FASE 2: Sentry context - propiedad ===
+                    sentry_sdk.set_context("propiedad", {
+                        "id": propiedad_id,
+                        "titulo": propiedad_data.get('titulo', '')[:50],
+                        "precio": propiedad_data.get('precio'),
+                        "fuente": "Wasi"
+                    })
+
                     return {
                         'success': True,
                         'propiedad_id': propiedad_id,
@@ -396,6 +417,8 @@ class CupidoManager:
                         'titulo': propiedad_data.get('titulo')
                     }
 
+                # === FASE 1: Logging estructurado - fallo DB ===
+                print(f"[CAPTACION] ERROR tipo=wasi error=db_save_failed url={url_wasi[:50]}")
                 return {
                     'success': False,
                     'error': 'No se pudo guardar en la base de datos'
@@ -404,7 +427,9 @@ class CupidoManager:
                 db.disconnect()
 
         except Exception as e:
-            print(f"❌ Error en captación: {e}")
+            elapsed_ms = (time.time() - start_time) * 1000
+            # === FASE 1: Logging estructurado - error ===
+            print(f"[CAPTACION] ERROR tipo=wasi error={str(e)[:80]} tiempo={elapsed_ms:.0f}ms")
 
             # Log del error
             db = self._get_db()
@@ -442,11 +467,18 @@ class CupidoManager:
         Returns:
             dict: Resultado del procesamiento
         """
-        print(f"\n🏠 Procesando captación de Tu360...")
-        print(f"   URL: {url_tu360}")
-        print(f"   Agente: {agente_telefono}")
-        if nombre_agente:
-            print(f"   Nombre: {nombre_agente}")
+        start_time = time.time()
+
+        # === FASE 1: Logging estructurado ===
+        print(f"[CAPTACION] START tipo=tu360 url={url_tu360[:50]} agente={agente_telefono[:15] if agente_telefono else 'N/A'} grupo={grupo_id[:25] if grupo_id else 'N/A'}")
+
+        # === FASE 2: Sentry context ===
+        sentry_sdk.set_context("captacion", {
+            "tipo": "tu360",
+            "url": url_tu360,
+            "agente": agente_telefono,
+            "grupo_id": grupo_id
+        })
 
         try:
             # 1. Scrappear la propiedad de Tu360
@@ -515,6 +547,18 @@ class CupidoManager:
                         resultado='Exitoso'
                     )
 
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    # === FASE 1: Logging estructurado - éxito ===
+                    print(f"[CAPTACION] SUCCESS tipo=tu360 propiedad_id={propiedad_id} codigo={propiedad_data.get('codigo_propiedad')} tiempo={elapsed_ms:.0f}ms")
+
+                    # === FASE 2: Sentry context - propiedad ===
+                    sentry_sdk.set_context("propiedad", {
+                        "id": propiedad_id,
+                        "titulo": propiedad_data.get('titulo', '')[:50],
+                        "precio": propiedad_data.get('precio'),
+                        "fuente": "Tu360"
+                    })
+
                     return {
                         'success': True,
                         'propiedad_id': propiedad_id,
@@ -522,6 +566,8 @@ class CupidoManager:
                         'titulo': propiedad_data.get('titulo')
                     }
 
+                # === FASE 1: Logging estructurado - fallo DB ===
+                print(f"[CAPTACION] ERROR tipo=tu360 error=db_save_failed url={url_tu360[:50]}")
                 return {
                     'success': False,
                     'error': 'No se pudo guardar en la base de datos'
@@ -530,7 +576,9 @@ class CupidoManager:
                 db.disconnect()
 
         except Exception as e:
-            print(f"❌ Error en captación Tu360: {e}")
+            elapsed_ms = (time.time() - start_time) * 1000
+            # === FASE 1: Logging estructurado - error ===
+            print(f"[CAPTACION] ERROR tipo=tu360 error={str(e)[:80]} tiempo={elapsed_ms:.0f}ms")
 
             # Log del error
             db = self._get_db()
@@ -568,10 +616,18 @@ class CupidoManager:
         Returns:
             dict: Resultado de la captación
         """
-        print(f"\n🏠 Procesando captación de Lobbie...")
-        print(f"   URL: {url_lobbie}")
-        print(f"   Agente: {agente_telefono}")
-        print(f"   Origen: {origen}")
+        start_time = time.time()
+
+        # === FASE 1: Logging estructurado ===
+        print(f"[CAPTACION] START tipo=lobbie url={url_lobbie[:50]} agente={agente_telefono[:15] if agente_telefono else 'N/A'} grupo={grupo_id[:25] if grupo_id else 'N/A'}")
+
+        # === FASE 2: Sentry context ===
+        sentry_sdk.set_context("captacion", {
+            "tipo": "lobbie",
+            "url": url_lobbie,
+            "agente": agente_telefono,
+            "grupo_id": grupo_id
+        })
 
         try:
             # 1. Scrappear la propiedad de Lobbie
@@ -633,6 +689,18 @@ class CupidoManager:
                         resultado='Exitoso'
                     )
 
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    # === FASE 1: Logging estructurado - éxito ===
+                    print(f"[CAPTACION] SUCCESS tipo=lobbie propiedad_id={propiedad_id} codigo={propiedad_data.get('codigo_propiedad')} tiempo={elapsed_ms:.0f}ms")
+
+                    # === FASE 2: Sentry context - propiedad ===
+                    sentry_sdk.set_context("propiedad", {
+                        "id": propiedad_id,
+                        "titulo": propiedad_data.get('titulo', '')[:50],
+                        "precio": propiedad_data.get('precio'),
+                        "fuente": "Lobbie"
+                    })
+
                     return {
                         'success': True,
                         'propiedad_id': propiedad_id,
@@ -640,6 +708,8 @@ class CupidoManager:
                         'titulo': propiedad_data.get('titulo')
                     }
 
+                # === FASE 1: Logging estructurado - fallo DB ===
+                print(f"[CAPTACION] ERROR tipo=lobbie error=db_save_failed url={url_lobbie[:50]}")
                 return {
                     'success': False,
                     'error': 'No se pudo guardar en la base de datos'
@@ -648,7 +718,9 @@ class CupidoManager:
                 db.disconnect()
 
         except Exception as e:
-            print(f"❌ Error en captación Lobbie: {e}")
+            elapsed_ms = (time.time() - start_time) * 1000
+            # === FASE 1: Logging estructurado - error ===
+            print(f"[CAPTACION] ERROR tipo=lobbie error={str(e)[:80]} tiempo={elapsed_ms:.0f}ms")
 
             # Log del error
             db = self._get_db()

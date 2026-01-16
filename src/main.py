@@ -42,6 +42,7 @@ from src.api.dashboard import dashboard_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
+import newrelic.agent
 
 load_dotenv()
 
@@ -171,12 +172,26 @@ def webhook():
     UltraMSG envía los mensajes entrantes a este endpoint.
     El formato típico incluye: from, body, type, id, etc.
     """
+    # === FASE 3: New Relic - webhook recibido ===
+    newrelic.agent.record_custom_metric('Custom/Webhook/Received', 1)
+
     try:
         # Obtener datos del webhook
         webhook_data = request.get_json() if request.is_json else request.form.to_dict()
 
         # Procesar mensaje con el bot (el bot decide qué loguear)
         response = bot.handle_incoming_message(webhook_data)
+
+        # === FASE 3: New Relic - metricas por tipo de respuesta ===
+        status = response.get('status', 'unknown')
+        if status == 'queued':
+            newrelic.agent.record_custom_metric('Custom/Webhook/Queued', 1)
+        elif status == 'captacion_exitosa':
+            newrelic.agent.record_custom_metric('Custom/Webhook/CapturaDirecta', 1)
+        elif status == 'captacion_error':
+            newrelic.agent.record_custom_metric('Custom/Webhook/CapturaError', 1)
+        elif status == 'ignored':
+            newrelic.agent.record_custom_metric('Custom/Webhook/Ignored', 1)
 
         # Solo loguear captaciones exitosas o errores
         if response.get('status') in ['captacion_exitosa', 'captacion_error', 'error']:
@@ -189,6 +204,9 @@ def webhook():
         }), 200
 
     except Exception as e:
+        # === FASE 3: New Relic - error en webhook ===
+        newrelic.agent.record_custom_metric('Custom/Webhook/Exception', 1)
+
         print(f"❌ Error procesando webhook: {e}")
         import traceback
         traceback.print_exc()

@@ -19,6 +19,7 @@ import re
 import json
 from typing import Dict, List, Optional
 from datetime import datetime
+import newrelic.agent
 from src.scrapers.utils import PropertyNormalizer
 
 # Importar sistema de logging
@@ -317,6 +318,10 @@ class Tu360Scraper:
                 scraper_log.log_data_extraction('habitaciones', habitaciones, habitaciones > 0)
                 scraper_log.log_images_extracted(len(imagenes), len(imagenes))
                 scraper_log.log_complete(codigo_interno or codigo_mongo, total_elapsed)
+
+            # === FASE 3: New Relic metrics ===
+            newrelic.agent.record_custom_metric('Custom/Scraper/Tu360/Duration', total_elapsed)
+            newrelic.agent.record_custom_metric('Custom/Scraper/Tu360/Success', 1)
 
             return datos_normalizados
 

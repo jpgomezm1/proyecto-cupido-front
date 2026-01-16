@@ -14,6 +14,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import redis
 from rq import Queue
+import sentry_sdk
 from src.core.search_agent import PropertySearchAgent
 from src.core.cupido_manager import CupidoManager
 
@@ -595,16 +596,25 @@ class WhatsAppBot:
             if message_data.get('fromMe') or message_data.get('self'):
                 return {'status': 'ignored', 'reason': 'own_message'}
 
-            # Debug: mostrar de dónde viene el mensaje
-            print(f"📨 Webhook: from={sender[:30]}... to={to[:30]}... event={event_type}")
+            # Detectar si es mensaje de grupo
+            is_group_message = '@g.us' in sender or '@g.us' in to
+            grupo_id = sender if '@g.us' in sender else (to if '@g.us' in to else None)
+
+            # Verificar si tiene URL
+            url_pattern = r'https?://[^\s]+'
+            has_url = bool(re.search(url_pattern, message_body))
+
+            # === FASE 1: Logging estructurado ===
+            print(f"[WEBHOOK] from={sender[:20] if sender else 'N/A'} grupo={grupo_id[:25] if grupo_id else 'private'} has_url={has_url} type={message_type}")
+
+            # === FASE 4: Sentry tags ===
+            sentry_sdk.set_tag("message_source", "group" if is_group_message else "private")
+            sentry_sdk.set_tag("grupo_id", grupo_id[:25] if grupo_id else "none")
+            sentry_sdk.set_tag("has_url", str(has_url))
 
             # =====================================================================
             # FILTRO CRÍTICO: Solo procesar mensajes del grupo configurado
             # =====================================================================
-
-            # Detectar si es mensaje de grupo
-            is_group_message = '@g.us' in sender or '@g.us' in to
-            grupo_id = sender if '@g.us' in sender else (to if '@g.us' in to else None)
 
             # IGNORAR todos los mensajes que NO son de grupos
             if not is_group_message:
@@ -674,6 +684,11 @@ class WhatsAppBot:
             if USE_REDIS_QUEUE and deteccion['tipo'] in ['captacion_wasi', 'captacion_tu360', 'captacion_lobbie']:
                 from src.jobs.capture_jobs import process_capture_job
 
+                # === FASE 4: Sentry tags para captacion ===
+                capture_type = deteccion['tipo'].replace('captacion_', '')
+                sentry_sdk.set_tag("capture_type", capture_type)
+                sentry_sdk.set_user({"phone": sender})
+
                 queue = get_redis_queue()
                 job = queue.enqueue(
                     process_capture_job,
@@ -687,7 +702,10 @@ class WhatsAppBot:
                     },
                     job_timeout=120
                 )
-                print(f"   📤 Job encolado: {job.id}")
+
+                # === FASE 1: Logging estructurado ===
+                print(f"[WEBHOOK] ENQUEUED job_id={job.id} tipo={capture_type} agente={sender[:15]} grupo={grupo_id[:25]}")
+
                 return {
                     'status': 'queued',
                     'job_id': job.id,

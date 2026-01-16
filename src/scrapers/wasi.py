@@ -15,6 +15,7 @@ from datetime import datetime
 from tqdm import tqdm
 import os
 from urllib.parse import unquote
+import newrelic.agent
 
 # Importar sistema de logging
 try:
@@ -153,6 +154,10 @@ class WasiScraper:
 
             total_elapsed = (time.time() - total_start) * 1000
             self.log(f"[OK] Datos extraidos exitosamente de {url}")
+
+            # === FASE 3: New Relic metrics ===
+            newrelic.agent.record_custom_metric('Custom/Scraper/Wasi/Duration', total_elapsed)
+            newrelic.agent.record_custom_metric('Custom/Scraper/Wasi/Success', 1)
 
             if scraper_log:
                 try:
