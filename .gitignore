@@ -204,3 +204,9 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 yarn.lock
+
+# ========================================
+# UTILITY SCRIPTS (local only)
+# ========================================
+run_migration.py
+scripts/run_migration_*.py

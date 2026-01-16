@@ -29,7 +29,7 @@ def get_properties():
     Obtiene lista de propiedades con filtros opcionales
 
     Query params:
-    - published: boolean (default: true)
+    - status: string ('all', 'active', 'inactive') - default: 'active'
     - limit: int (default: 500)
     - offset: int (default: 0)
     - city: string
@@ -43,7 +43,7 @@ def get_properties():
         db = get_db()
 
         # Parámetros de query
-        published = request.args.get('published', 'true').lower() == 'true'
+        status = request.args.get('status', 'active')  # all, active, inactive
         limit = int(request.args.get('limit', 500))
         offset = int(request.args.get('offset', 0))
         city = request.args.get('city')
@@ -52,8 +52,16 @@ def get_properties():
         max_price = request.args.get('max_price')
         bedrooms = request.args.get('bedrooms')
 
+        # Construir condición de estado
+        if status == 'all':
+            status_condition = "TRUE"
+        elif status == 'inactive':
+            status_condition = "p.activa = FALSE"
+        else:
+            status_condition = "p.activa = TRUE"
+
         # Construir query SQL
-        query = """
+        query = f"""
             SELECT
                 p.id,
                 p.codigo_propiedad as slug,
@@ -87,13 +95,9 @@ def get_properties():
                 a.nombre as owner_name
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
-            WHERE p.activa = TRUE
+            WHERE {status_condition}
         """
         params = []
-
-        # Solo filtrar por published si es necesario
-        if not published:
-            query = query.replace("WHERE p.activa = TRUE", "WHERE p.activa = FALSE")
 
         # Agregar filtros
         if city:
@@ -669,6 +673,79 @@ def health_check():
             db.disconnect()
 
 
+@api_bp.route('/properties/<int:property_id>/status', methods=['PUT'])
+def update_property_status(property_id: int):
+    """
+    PUT /api/properties/:property_id/status
+
+    Actualiza el estado activo/inactivo de una propiedad
+
+    Body:
+    {
+        "activa": true/false
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "id": 123,
+            "codigo_propiedad": "WASI-123",
+            "titulo": "...",
+            "activa": false
+        }
+    }
+    """
+    db = None
+    try:
+        db = get_db()
+        data = request.get_json()
+
+        if data is None or 'activa' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Campo activa requerido'
+            }), 400
+
+        activa = bool(data['activa'])
+
+        db.cursor.execute("""
+            UPDATE propiedades
+            SET activa = %s, fecha_actualizacion = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING id, codigo_propiedad, titulo, activa
+        """, (activa, property_id))
+
+        result = db.cursor.fetchone()
+
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': 'Propiedad no encontrada'
+            }), 404
+
+        db.conn.commit()
+
+        return jsonify({
+            'success': True,
+            'data': dict(result),
+            'message': f"Propiedad {'activada' if activa else 'desactivada'} exitosamente"
+        }), 200
+
+    except Exception as e:
+        if db and db.conn:
+            db.conn.rollback()
+        print(f"❌ Error en update_property_status: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
 @api_bp.route('/scrape-wasi', methods=['POST'])
 def scrape_wasi():
     """
@@ -739,8 +816,27 @@ def scrape_wasi():
             property_data['fuente'] = 'Propia'
             print(f"[API] Marcada como propiedad propia")
 
+        # Agregar información del agente captador si se proporciona
+        agente_telefono = data.get('agente_telefono')
+        agente_nombre = data.get('agente_nombre')
+
+        if agente_telefono:
+            # Normalizar teléfono a formato +57
+            telefono_normalizado = agente_telefono.strip()
+            if not telefono_normalizado.startswith('+'):
+                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+            property_data['agente_captador_telefono'] = telefono_normalizado
+            print(f"[API] Agente captador: {telefono_normalizado}")
+
         # Guardar en base de datos
         db = get_db()
+
+        # Si hay nombre de agente, crear o actualizar en tabla agentes
+        if agente_telefono and agente_nombre:
+            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+            db.get_or_create_agente(telefono_normalizado, agente_nombre)
+            print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
+
         property_id = db.insert_property(property_data)
 
         if not property_id:
@@ -887,8 +983,27 @@ def scrape_tu360():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Agregar información del agente captador si se proporciona
+        agente_telefono = data.get('agente_telefono')
+        agente_nombre = data.get('agente_nombre')
+
+        if agente_telefono:
+            # Normalizar teléfono a formato +57
+            telefono_normalizado = agente_telefono.strip()
+            if not telefono_normalizado.startswith('+'):
+                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+            property_data['agente_captador_telefono'] = telefono_normalizado
+            print(f"[API] Agente captador: {telefono_normalizado}")
+
         # Guardar en base de datos
         db = get_db()
+
+        # Si hay nombre de agente, crear o actualizar en tabla agentes
+        if agente_telefono and agente_nombre:
+            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+            db.get_or_create_agente(telefono_normalizado, agente_nombre)
+            print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
+
         property_id = db.insert_property(property_data)
 
         if not property_id:
@@ -1035,8 +1150,27 @@ def scrape_lobbie():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Agregar información del agente captador si se proporciona
+        agente_telefono = data.get('agente_telefono')
+        agente_nombre = data.get('agente_nombre')
+
+        if agente_telefono:
+            # Normalizar teléfono a formato +57
+            telefono_normalizado = agente_telefono.strip()
+            if not telefono_normalizado.startswith('+'):
+                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+            property_data['agente_captador_telefono'] = telefono_normalizado
+            print(f"[API] Agente captador: {telefono_normalizado}")
+
         # Guardar en base de datos
         db = get_db()
+
+        # Si hay nombre de agente, crear o actualizar en tabla agentes
+        if agente_telefono and agente_nombre:
+            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+            db.get_or_create_agente(telefono_normalizado, agente_nombre)
+            print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
+
         property_id = db.insert_property(property_data)
 
         if not property_id:
@@ -1112,6 +1246,130 @@ def scrape_lobbie():
 
     except Exception as e:
         print(f"[API] Error en scrape_lobbie: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
+@api_bp.route('/properties/<int:property_id>/captador', methods=['PUT'])
+def update_property_captador(property_id: int):
+    """
+    PUT /api/properties/:property_id/captador
+
+    Actualiza la información del agente captador de una propiedad
+
+    Body:
+    {
+        "agente_telefono": "+573001234567" o "3001234567",
+        "agente_nombre": "Juan Pérez"  (opcional)
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "id": 123,
+            "agente_captador_telefono": "+573001234567",
+            "owner_name": "Juan Pérez"
+        }
+    }
+    """
+    db = None
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body is required'
+            }), 400
+
+        agente_telefono = data.get('agente_telefono')
+        agente_nombre = data.get('agente_nombre')
+
+        # Validar que al menos uno de los campos esté presente
+        if not agente_telefono and not agente_nombre:
+            return jsonify({
+                'success': False,
+                'error': 'Se requiere al menos agente_telefono o agente_nombre'
+            }), 400
+
+        db = get_db()
+
+        # Verificar que la propiedad existe
+        db.cursor.execute("SELECT id FROM propiedades WHERE id = %s", (property_id,))
+        if not db.cursor.fetchone():
+            return jsonify({
+                'success': False,
+                'error': 'Propiedad no encontrada'
+            }), 404
+
+        # Normalizar teléfono si se proporciona
+        telefono_normalizado = None
+        if agente_telefono:
+            telefono_normalizado = agente_telefono.strip()
+            if not telefono_normalizado.startswith('+'):
+                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+
+            # Validar formato básico
+            import re
+            if not re.match(r'^\+57\d{10}$', telefono_normalizado):
+                return jsonify({
+                    'success': False,
+                    'error': 'Formato de teléfono inválido. Use formato: 3001234567 o +573001234567'
+                }), 400
+
+        # Si hay nombre de agente y teléfono, crear o actualizar en tabla agentes
+        if telefono_normalizado and agente_nombre:
+            db.get_or_create_agente(telefono_normalizado, agente_nombre)
+            print(f"[API] Agente actualizado/creado: {agente_nombre} ({telefono_normalizado})")
+        elif telefono_normalizado and not agente_nombre:
+            # Solo actualizar el nombre si se proporciona teléfono sin nombre
+            # Verificar si ya existe el agente
+            db.cursor.execute("SELECT nombre FROM agentes WHERE telefono = %s", (telefono_normalizado,))
+            existing = db.cursor.fetchone()
+            if not existing:
+                # Crear agente sin nombre
+                db.get_or_create_agente(telefono_normalizado, None)
+
+        # Actualizar la propiedad
+        if telefono_normalizado:
+            db.cursor.execute("""
+                UPDATE propiedades
+                SET agente_captador_telefono = %s
+                WHERE id = %s
+            """, (telefono_normalizado, property_id))
+            db.conn.commit()
+
+        # Obtener la propiedad actualizada con info del agente
+        db.cursor.execute("""
+            SELECT
+                p.id,
+                p.codigo_propiedad as slug,
+                p.titulo as title,
+                p.agente_captador_telefono as owner_phone,
+                a.nombre as owner_name
+            FROM propiedades p
+            LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
+            WHERE p.id = %s
+        """, (property_id,))
+
+        updated_property = db.cursor.fetchone()
+
+        return jsonify({
+            'success': True,
+            'data': dict(updated_property) if updated_property else None,
+            'message': 'Información del captador actualizada exitosamente'
+        }), 200
+
+    except Exception as e:
+        if db and db.conn:
+            db.conn.rollback()
+        print(f"[API] Error en update_property_captador: {str(e)}")
         traceback.print_exc()
         return jsonify({
             'success': False,
@@ -1361,12 +1619,26 @@ Responde SOLO con un JSON válido en este formato exacto (sin markdown, sin ```)
 
 Los highlights deben ser 3-5 características únicas y atractivas de la propiedad (no información genérica como "tiene baños")."""
 
+        import time
+        start_time = time.time()
+
         message = client.messages.create(
             model="claude-3-5-haiku-20241022",
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt}
             ]
+        )
+
+        # Track AI usage
+        from src.core.ai_usage_tracker import get_ai_tracker
+        get_ai_tracker().track_anthropic_response(
+            model='claude-3-5-haiku-20241022',
+            usage_type='description_improvement',
+            function_name='properties.improve_property_description',
+            response=message,
+            start_time=start_time,
+            context={'description_length': len(original_description)}
         )
 
         response_text = message.content[0].text.strip()

@@ -676,7 +676,7 @@ def get_market_demand():
     """
     GET /api/analytics/market/demand
 
-    Insights de demanda: qué buscan los clientes, preferencias, presupuestos
+    Insights de demanda basados en búsquedas del Chat UI (chat_usage_log y mensajes_conversacion)
     Ideal para vender a constructoras
     """
     db = None
@@ -684,22 +684,30 @@ def get_market_demand():
         db = get_db()
         days = int(request.args.get('days', 90))
 
-        # Rangos de precio más buscados
+        # Total de búsquedas en el período
+        db.cursor.execute("""
+            SELECT COUNT(*) as total
+            FROM chat_usage_log
+            WHERE accion = 'search' AND fecha >= CURRENT_DATE - INTERVAL '%s days'
+        """ % days)
+        total_searches = db.cursor.fetchone()['total']
+
+        # Rangos de precio más buscados (desde mensajes_conversacion)
         db.cursor.execute("""
             SELECT
                 CASE
-                    WHEN (criterios_extraidos->>'precio_max')::numeric < 200000000 THEN '< 200M'
-                    WHEN (criterios_extraidos->>'precio_max')::numeric < 400000000 THEN '200M - 400M'
-                    WHEN (criterios_extraidos->>'precio_max')::numeric < 600000000 THEN '400M - 600M'
-                    WHEN (criterios_extraidos->>'precio_max')::numeric < 800000000 THEN '600M - 800M'
-                    WHEN (criterios_extraidos->>'precio_max')::numeric < 1000000000 THEN '800M - 1.000M'
+                    WHEN (criterios_mensaje->>'precio_max')::numeric < 200000000 THEN '< 200M'
+                    WHEN (criterios_mensaje->>'precio_max')::numeric < 400000000 THEN '200M - 400M'
+                    WHEN (criterios_mensaje->>'precio_max')::numeric < 600000000 THEN '400M - 600M'
+                    WHEN (criterios_mensaje->>'precio_max')::numeric < 800000000 THEN '600M - 800M'
+                    WHEN (criterios_mensaje->>'precio_max')::numeric < 1000000000 THEN '800M - 1.000M'
                     ELSE '> 1.000M'
                 END as price_range,
                 COUNT(*) as search_count,
-                AVG((criterios_extraidos->>'precio_max')::numeric) as avg_max_budget
-            FROM solicitudes_mercado
-            WHERE fecha_solicitud >= CURRENT_DATE - INTERVAL '%s days'
-            AND criterios_extraidos->>'precio_max' IS NOT NULL
+                AVG((criterios_mensaje->>'precio_max')::numeric) as avg_max_budget
+            FROM mensajes_conversacion
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
+            AND criterios_mensaje->>'precio_max' IS NOT NULL
             GROUP BY price_range
             ORDER BY search_count DESC
         """ % days)
@@ -714,12 +722,12 @@ def get_market_demand():
         # Tipo de propiedad más buscado
         db.cursor.execute("""
             SELECT
-                criterios_extraidos->>'tipo_propiedad' as type,
+                criterios_mensaje->>'tipo_propiedad' as type,
                 COUNT(*) as search_count
-            FROM solicitudes_mercado
-            WHERE fecha_solicitud >= CURRENT_DATE - INTERVAL '%s days'
-            AND criterios_extraidos->>'tipo_propiedad' IS NOT NULL
-            GROUP BY criterios_extraidos->>'tipo_propiedad'
+            FROM mensajes_conversacion
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
+            AND criterios_mensaje->>'tipo_propiedad' IS NOT NULL
+            GROUP BY criterios_mensaje->>'tipo_propiedad'
             ORDER BY search_count DESC
         """ % days)
         demand_by_type = [
@@ -731,15 +739,15 @@ def get_market_demand():
         db.cursor.execute("""
             SELECT
                 COALESCE(
-                    criterios_extraidos->>'habitaciones_min',
-                    criterios_extraidos->>'habitaciones'
+                    criterios_mensaje->>'habitaciones_min',
+                    criterios_mensaje->>'habitaciones'
                 ) as bedrooms,
                 COUNT(*) as search_count
-            FROM solicitudes_mercado
-            WHERE fecha_solicitud >= CURRENT_DATE - INTERVAL '%s days'
+            FROM mensajes_conversacion
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
             AND (
-                criterios_extraidos->>'habitaciones_min' IS NOT NULL
-                OR criterios_extraidos->>'habitaciones' IS NOT NULL
+                criterios_mensaje->>'habitaciones_min' IS NOT NULL
+                OR criterios_mensaje->>'habitaciones' IS NOT NULL
             )
             GROUP BY bedrooms
             ORDER BY search_count DESC
@@ -753,16 +761,16 @@ def get_market_demand():
         # Presupuesto promedio por tipo
         db.cursor.execute("""
             SELECT
-                criterios_extraidos->>'tipo_propiedad' as type,
-                AVG((criterios_extraidos->>'precio_max')::numeric) as avg_budget,
-                MIN((criterios_extraidos->>'precio_max')::numeric) as min_budget,
-                MAX((criterios_extraidos->>'precio_max')::numeric) as max_budget,
+                criterios_mensaje->>'tipo_propiedad' as type,
+                AVG((criterios_mensaje->>'precio_max')::numeric) as avg_budget,
+                MIN((criterios_mensaje->>'precio_max')::numeric) as min_budget,
+                MAX((criterios_mensaje->>'precio_max')::numeric) as max_budget,
                 COUNT(*) as search_count
-            FROM solicitudes_mercado
-            WHERE fecha_solicitud >= CURRENT_DATE - INTERVAL '%s days'
-            AND criterios_extraidos->>'tipo_propiedad' IS NOT NULL
-            AND criterios_extraidos->>'precio_max' IS NOT NULL
-            GROUP BY criterios_extraidos->>'tipo_propiedad'
+            FROM mensajes_conversacion
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
+            AND criterios_mensaje->>'tipo_propiedad' IS NOT NULL
+            AND criterios_mensaje->>'precio_max' IS NOT NULL
+            GROUP BY criterios_mensaje->>'tipo_propiedad'
             ORDER BY search_count DESC
         """ % days)
         budget_by_type = []
@@ -775,24 +783,44 @@ def get_market_demand():
                 'search_count': row['search_count']
             })
 
-        # Búsquedas recientes sin resultados (demanda no atendida)
+        # Ciudades/zonas más buscadas (desde el array 'ubicaciones')
         db.cursor.execute("""
             SELECT
-                query_original,
-                criterios_extraidos,
-                fecha_solicitud
-            FROM solicitudes_mercado
-            WHERE fecha_solicitud >= CURRENT_DATE - INTERVAL '%s days'
-            AND total_propiedades_encontradas = 0
-            ORDER BY fecha_solicitud DESC
+                elem as location,
+                COUNT(*) as search_count
+            FROM mensajes_conversacion
+            CROSS JOIN LATERAL jsonb_array_elements_text(criterios_mensaje->'ubicaciones') as elem
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
+            AND criterios_mensaje ? 'ubicaciones'
+            GROUP BY elem
+            ORDER BY search_count DESC
+            LIMIT 15
+        """ % days)
+        demand_by_location = [
+            {'location': row['location'], 'search_count': row['search_count']}
+            for row in db.cursor.fetchall()
+        ]
+
+        # Búsquedas sin resultados (demanda no atendida)
+        db.cursor.execute("""
+            SELECT
+                content as query,
+                criterios_mensaje as criteria,
+                fecha_creacion
+            FROM mensajes_conversacion
+            WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '%s days'
+            AND total_resultados = 0
+            AND role = 'user'
+            AND content IS NOT NULL
+            ORDER BY fecha_creacion DESC
             LIMIT 20
         """ % days)
         unmet_demand = []
         for row in db.cursor.fetchall():
             unmet_demand.append({
-                'query': row['query_original'][:100] if row['query_original'] else '',
-                'criteria': row['criterios_extraidos'],
-                'date': row['fecha_solicitud'].isoformat() if row['fecha_solicitud'] else None
+                'query': row['query'][:100] if row['query'] else '',
+                'criteria': row['criteria'],
+                'date': row['fecha_creacion'].isoformat() if row['fecha_creacion'] else None
             })
 
         return jsonify({
@@ -802,8 +830,9 @@ def get_market_demand():
                 'demand_by_type': demand_by_type,
                 'demand_by_bedrooms': demand_by_bedrooms,
                 'budget_by_type': budget_by_type,
+                'demand_by_location': demand_by_location,
                 'unmet_demand': unmet_demand,
-                'total_searches': sum(d['search_count'] for d in demand_by_type)
+                'total_searches': total_searches
             }
         }), 200
 
@@ -921,19 +950,25 @@ def get_market_inventory():
     GET /api/analytics/market/inventory
 
     Estado del inventario: distribución, características, fuentes
+    Categorías igual que el filtro de Propiedades: Propia, Wasi, Tu360, Lobbie
     """
     db = None
     try:
         db = get_db()
 
-        # Total inventario
-        # Los valores de fuente pueden variar: 'Wasi', 'Wasi_Captado', 'Tu360_Captado', 'Pulppo', 'Propia'
+        # Total inventario por fuente/origen
+        # Categorías igual que el filtro de Propiedades:
+        # - Propia: fuente = 'Propia'
+        # - Wasi: origen = 'Wasi_Captado'
+        # - Tu360: origen = 'Tu360_Captado'
+        # - Lobbie: origen = 'Lobbie_Captado'
         db.cursor.execute("""
             SELECT
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE LOWER(fuente) = 'pulppo') as pulppo,
-                COUNT(*) FILTER (WHERE LOWER(fuente) LIKE '%wasi%' OR LOWER(fuente) = 'propia') as wasi,
-                COUNT(*) FILTER (WHERE LOWER(fuente) LIKE '%tu360%') as tu360,
+                COUNT(*) FILTER (WHERE fuente = 'Propia') as propia,
+                COUNT(*) FILTER (WHERE origen = 'Wasi_Captado') as wasi,
+                COUNT(*) FILTER (WHERE origen = 'Tu360_Captado') as tu360,
+                COUNT(*) FILTER (WHERE origen = 'Lobbie_Captado') as lobbie,
                 AVG(precio) as avg_price,
                 AVG(area_construida) as avg_area
             FROM propiedades
@@ -1008,9 +1043,10 @@ def get_market_inventory():
             'data': {
                 'totals': {
                     'total': totals['total'],
-                    'pulppo': totals['pulppo'],
+                    'propia': totals['propia'],
                     'wasi': totals['wasi'],
                     'tu360': totals['tu360'],
+                    'lobbie': totals['lobbie'],
                     'avg_price': int(totals['avg_price']) if totals['avg_price'] else 0,
                     'avg_area': int(totals['avg_area']) if totals['avg_area'] else 0
                 },

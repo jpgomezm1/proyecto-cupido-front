@@ -86,6 +86,7 @@ def get_deals():
                 p.zona as propiedad_zona,
                 p.imagen_principal as propiedad_imagen,
                 p.fuente as propiedad_fuente,
+                p.codigo_propiedad as propiedad_slug,
                 -- Contacto
                 c.nombre as contacto_nombre,
                 c.telefono as contacto_telefono,

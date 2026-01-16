@@ -39,13 +39,25 @@ class EmbeddingsManager:
             return []
 
         try:
+            import time
             # Limpiar y truncar texto (máximo ~8000 tokens para el modelo)
             clean_text = self._clean_text(text)
 
+            start_time = time.time()
             response = self.client.embeddings.create(
                 model=self.model,
                 input=clean_text,
                 dimensions=self.dimensions
+            )
+
+            # Track AI usage
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_openai_embedding(
+                model=self.model,
+                function_name='EmbeddingsManager.generate_embedding',
+                response=response,
+                start_time=start_time,
+                context={'text_length': len(clean_text)}
             )
 
             return response.data[0].embedding

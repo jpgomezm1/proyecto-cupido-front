@@ -39,18 +39,70 @@ class WhatsAppBot:
         # En producción esto debería ser Redis o una BD
         self.user_sessions = {}
 
-        # ID del grupo de Cupido (configurar en .env como GRUPO_CUPIDO_ID)
-        self.grupo_cupido_id = os.getenv('GRUPO_CUPIDO_ID', '')
+        # Cache de grupos activos (se actualiza cada X minutos)
+        self._grupos_activos_cache = set()
+        self._cache_timestamp = None
+        self._cache_ttl = 60  # segundos
 
         # URL base del frontend (para links en WhatsApp)
         self.frontend_url = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
+
+        # Cargar grupos activos desde DB
+        self._refresh_grupos_activos()
 
         print(f"[OK] WhatsApp Bot inicializado (Proyecto Cupido)")
         print(f"   Instance ID: {self.instance_id}")
         print(f"   Base URL: {self.base_url}")
         print(f"   Frontend URL: {self.frontend_url}")
-        if self.grupo_cupido_id:
-            print(f"   Grupo Cupido: {self.grupo_cupido_id}")
+        print(f"   Grupos activos: {len(self._grupos_activos_cache)}")
+
+    def _refresh_grupos_activos(self):
+        """Recarga los grupos activos desde la base de datos."""
+        from src.db.database import DatabaseManager
+        try:
+            with DatabaseManager() as db:
+                db.cursor.execute(
+                    "SELECT grupo_id FROM grupos_whatsapp WHERE activo = true"
+                )
+                rows = db.cursor.fetchall()
+                self._grupos_activos_cache = {row['grupo_id'] for row in rows}
+                self._cache_timestamp = datetime.now()
+                print(f"[OK] Grupos activos cargados: {len(self._grupos_activos_cache)}")
+        except Exception as e:
+            print(f"[WARN] No se pudieron cargar grupos desde DB: {e}")
+            # Fallback: usar variable de entorno si existe
+            env_grupo = os.getenv('GRUPO_CUPIDO_ID', '')
+            if env_grupo:
+                self._grupos_activos_cache = {env_grupo}
+                print(f"[OK] Usando grupo de .env como fallback: {env_grupo}")
+
+    def _get_grupos_activos(self) -> set:
+        """Obtiene los grupos activos, actualizando cache si es necesario."""
+        now = datetime.now()
+        if (self._cache_timestamp is None or
+            (now - self._cache_timestamp).total_seconds() > self._cache_ttl):
+            self._refresh_grupos_activos()
+        return self._grupos_activos_cache
+
+    def _is_grupo_activo(self, grupo_id: str) -> bool:
+        """Verifica si un grupo está activo."""
+        grupos = self._get_grupos_activos()
+        return grupo_id in grupos
+
+    def _update_grupo_stats(self, grupo_id: str):
+        """Actualiza estadísticas del grupo después de una captación."""
+        from src.db.database import DatabaseManager
+        try:
+            with DatabaseManager() as db:
+                db.cursor.execute("""
+                    UPDATE grupos_whatsapp
+                    SET total_capturas = total_capturas + 1,
+                        ultima_captura = CURRENT_TIMESTAMP
+                    WHERE grupo_id = %s
+                """, (grupo_id,))
+                db.conn.commit()
+        except Exception as e:
+            print(f"[WARN] No se pudo actualizar stats del grupo: {e}")
 
     def send_message(self, to: str, body: str) -> Dict[str, Any]:
         """
@@ -494,6 +546,12 @@ class WhatsAppBot:
         """
         Manejar mensaje entrante desde webhook
 
+        MODO ACTUAL: Solo captación silenciosa desde el grupo configurado.
+        - Ignora TODOS los mensajes privados
+        - Solo procesa mensajes del grupo GRUPO_CUPIDO_ID
+        - Solo capta propiedades (links Wasi/Tu360) de forma silenciosa
+        - NO responde nada al grupo
+
         Args:
             webhook_data: Datos del webhook de UltraMSG
 
@@ -502,7 +560,6 @@ class WhatsAppBot:
         """
         try:
             # UltraMSG envía los datos dentro de 'data'
-            # Extraer el objeto 'data' si existe
             if 'data' in webhook_data:
                 message_data = webhook_data['data']
             else:
@@ -515,259 +572,160 @@ class WhatsAppBot:
             message_type = message_data.get('type', 'chat')
             event_type = webhook_data.get('event_type', '')
 
-            print(f"\n📩 Mensaje recibido de: {sender}")
-            print(f"📝 Contenido: {message_body[:100]}...")
-            print(f"📋 Tipo: {message_type}")
-            print(f"📋 Evento: {event_type}")
-
             # Ignorar eventos que no son mensajes nuevos
             if event_type not in ['message_received', '']:
-                print(f"⚠️  Ignorando evento tipo: {event_type}")
                 return {'status': 'ignored', 'reason': 'not_message_received'}
 
             # Ignorar mensajes propios (fromMe)
             if message_data.get('fromMe') or message_data.get('self'):
-                print(f"⚠️  Ignorando mensaje propio")
                 return {'status': 'ignored', 'reason': 'own_message'}
+
+            # Debug: mostrar de dónde viene el mensaje
+            print(f"📨 Webhook: from={sender[:30]}... to={to[:30]}... event={event_type}")
+
+            # =====================================================================
+            # FILTRO CRÍTICO: Solo procesar mensajes del grupo configurado
+            # =====================================================================
 
             # Detectar si es mensaje de grupo
             is_group_message = '@g.us' in sender or '@g.us' in to
             grupo_id = sender if '@g.us' in sender else (to if '@g.us' in to else None)
 
-            # Si es mensaje de grupo, solo procesar si es el grupo de Cupido
-            if is_group_message:
-                if not self.grupo_cupido_id or grupo_id != self.grupo_cupido_id:
-                    print(f"⚠️  Ignorando mensaje de grupo (no es grupo Cupido)")
-                    return {'status': 'ignored', 'reason': 'group_message_not_cupido'}
+            # IGNORAR todos los mensajes que NO son de grupos
+            if not is_group_message:
+                # Mensaje privado - IGNORAR completamente
+                return {'status': 'ignored', 'reason': 'private_message_not_allowed'}
 
-                print(f"✅ Mensaje del grupo Cupido - procesando...")
-                # Extraer teléfono del participante del mensaje
-                # En UltraMSG el participante viene en 'author', no en 'participant'
-                author = message_data.get('author', '')
-                if author and '@c.us' in author:
-                    sender = author.replace('@c.us', '')
-                    if not sender.startswith('+'):
-                        sender = '+' + sender
-                    print(f"   👤 Participante identificado: {sender}")
-                else:
-                    print(f"⚠️  No se pudo identificar participante en grupo")
-                    print(f"   author recibido: {author}")
-                    return {'status': 'ignored', 'reason': 'no_participant_info'}
+            # Es mensaje de grupo - verificar que sea un grupo activo en la DB
+            if not self._is_grupo_activo(grupo_id):
+                return {'status': 'ignored', 'reason': 'group_not_active'}
 
-            # UltraMSG envía el número con @c.us, quitarlo
-            if '@c.us' in sender:
-                sender = sender.replace('@c.us', '')
+            print(f"   ✅ Mensaje de grupo activo: {grupo_id[:30]}...")
 
-            # Convertir a formato internacional si es necesario
-            if not sender.startswith('+'):
-                sender = '+' + sender
+            # =====================================================================
+            # PROCESAMIENTO: Solo mensajes del grupo Cupido llegan aquí
+            # =====================================================================
 
             # Ignorar mensajes que no son de texto
             if message_type != 'chat':
-                print(f"⚠️  Tipo de mensaje no soportado: {message_type}")
                 return {'status': 'ignored', 'reason': 'unsupported_type'}
 
-            # Ignorar mensajes vacíos (pero permitir comandos cortos como "hola", "hi", etc.)
+            # Ignorar mensajes vacíos
             if not message_body or len(message_body.strip()) < 1:
-                print(f"⚠️  Mensaje vacío, ignorando")
                 return {'status': 'ignored', 'reason': 'empty_message'}
 
-            # Comandos especiales
-            message_lower = message_body.lower().strip()
-
-            if message_lower in ['hola', 'hi', 'hello', 'inicio', 'empezar']:
-                welcome_msg = "👋 *¡Hola! Bienvenido al Buscador Inteligente de Propiedades TU360*\n\n"
-                welcome_msg += "🏠 Puedo ayudarte a encontrar la propiedad perfecta para ti.\n\n"
-                welcome_msg += "📝 *¿Cómo funciona?*\n"
-                welcome_msg += "Solo envíame un mensaje con lo que buscas. Por ejemplo:\n\n"
-                welcome_msg += "_\"Busco apto en Laureles, 2 habitaciones, hasta 500 millones\"_\n\n"
-                welcome_msg += "o\n\n"
-                welcome_msg += "_\"Casa en Envigado, 3 alcobas, con jardín y parqueadero\"_\n\n"
-                welcome_msg += "💬 Cuéntame qué necesitas y yo me encargo del resto!"
-
-                self.send_message(sender, welcome_msg)
-                return {'status': 'welcome_sent'}
-
-            if message_lower in ['ayuda', 'help', '?']:
-                help_msg = "❓ *AYUDA - Buscador de Propiedades*\n\n"
-                help_msg += "📋 *Puedo entender criterios como:*\n\n"
-                help_msg += "📍 Ubicación: Laureles, Poblado, Envigado, etc.\n"
-                help_msg += "🏠 Tipo: Apartamento, Casa, Penthouse, Duplex\n"
-                help_msg += "💰 Presupuesto: \"hasta 500 millones\", \"entre 300 y 600\"\n"
-                help_msg += "🛏️ Habitaciones: \"2 alcobas\", \"3 habitaciones\"\n"
-                help_msg += "📐 Área: \"80m² o más\"\n"
-                help_msg += "🌟 Amenidades: piscina, gimnasio, portería, etc.\n\n"
-                help_msg += "💡 *Ejemplo:*\n"
-                help_msg += "_Apto en Laureles o Poblado, 2 habitaciones, hasta 600 millones, con parqueadero_"
-
-                self.send_message(sender, help_msg)
-                return {'status': 'help_sent'}
-
             # =====================================================================
-            # FLUJO PROYECTO CUPIDO - DETECCIÓN INTELIGENTE DE TIPO DE MENSAJE
+            # FILTRO RÁPIDO: Solo procesar mensajes que contengan URL
+            # (Ahorra tokens de AI - no se procesa nada sin URL)
             # =====================================================================
 
-            # 1. Verificar si el usuario tiene una sesión activa (está seleccionando propiedades)
-            if sender in self.user_sessions and not is_group_message:
-                # Intentar procesar como selección de propiedades
-                selection_result = self.handle_property_selection(sender, message_body)
+            url_pattern = r'https?://[^\s]+'
+            if not re.search(url_pattern, message_body):
+                # No hay URL en el mensaje - ignorar silenciosamente
+                return {'status': 'ignored', 'reason': 'no_url_in_message'}
 
-                if selection_result['status'] in ['selected', 'none_selected']:
-                    return selection_result
+            # =====================================================================
+            # El mensaje tiene URL - proceder con captación
+            # =====================================================================
 
-                # Si no se entendió la selección pero hay números, asumir que es selección
-                if re.search(r'\d+', message_body) or 'todas' in message_lower or 'ninguna' in message_lower:
-                    return selection_result
+            print(f"\n📩 Mensaje del grupo Cupido (contiene URL)")
+            print(f"📝 Contenido: {message_body[:100]}...")
 
-            # 2. Usar Cupido Manager para detectar tipo de mensaje
-            deteccion = self.cupido.detectar_tipo_mensaje(message_body, sender, is_group_message)
-
-            print(f"🔍 Tipo detectado: {deteccion['tipo']} (confianza: {deteccion['confianza']})")
-
-            # 3. CASO: Captación de propiedad (link de Wasi)
-            if deteccion['tipo'] == 'captacion_wasi':
-                url_wasi = deteccion['data']['url']
-                print(f"📥 Captando propiedad de Wasi: {url_wasi}")
-
-                # Extraer nombre del agente (pushname del webhook)
-                nombre_agente = message_data.get('pushname', None)
-                if nombre_agente:
-                    print(f"   👤 Nombre del agente: {nombre_agente}")
-
-                # Procesar captación
-                result = self.cupido.procesar_captacion_wasi(
-                    url_wasi=url_wasi,
-                    agente_telefono=sender,
-                    mensaje_completo=message_body,
-                    grupo_id=grupo_id if is_group_message else None,
-                    nombre_agente=nombre_agente
-                )
-
-                if result['success']:
-                    # Captación exitosa - guardada en DB sin notificar al agente
-                    print(f"   ✅ Propiedad captada y guardada en DB (sin notificación)")
-                    return {
-                        'status': 'captacion_exitosa',
-                        'propiedad_id': result['propiedad_id']
-                    }
-                else:
-                    # Error en captación - solo registrar en logs, sin notificar
-                    print(f"   ❌ Error en captación: {result.get('error', 'Desconocido')}")
-                    return {
-                        'status': 'captacion_error',
-                        'error': result.get('error')
-                    }
-
-            # 4. CASO: Captación de propiedad (link de Tu360)
-            elif deteccion['tipo'] == 'captacion_tu360':
-                url_tu360 = deteccion['data']['url']
-                print(f"📥 Captando propiedad de Tu360: {url_tu360}")
-
-                # Extraer nombre del agente (pushname del webhook)
-                nombre_agente = message_data.get('pushname', None)
-                if nombre_agente:
-                    print(f"   👤 Nombre del agente: {nombre_agente}")
-
-                # Procesar captación
-                result = self.cupido.procesar_captacion_tu360(
-                    url_tu360=url_tu360,
-                    agente_telefono=sender,
-                    mensaje_completo=message_body,
-                    grupo_id=grupo_id if is_group_message else None,
-                    nombre_agente=nombre_agente
-                )
-
-                if result['success']:
-                    # Captación exitosa - guardada en DB sin notificar al agente
-                    print(f"   ✅ Propiedad Tu360 captada y guardada en DB (sin notificación)")
-                    return {
-                        'status': 'captacion_exitosa',
-                        'propiedad_id': result['propiedad_id'],
-                        'fuente': 'Tu360'
-                    }
-                else:
-                    # Error en captación - solo registrar en logs, sin notificar
-                    print(f"   ❌ Error en captación Tu360: {result.get('error', 'Desconocido')}")
-                    return {
-                        'status': 'captacion_error',
-                        'error': result.get('error'),
-                        'fuente': 'Tu360'
-                    }
-
-            # 5. CASO: Solicitud de mercado (búsqueda de propiedad)
-            elif deteccion['tipo'] == 'solicitud_mercado':
-                query = deteccion['data']['query']
-                origen = 'Grupo' if is_group_message else 'Chat_Privado'
-
-                print(f"🔍 Procesando solicitud de mercado (origen: {origen})")
-
-                # Procesar solicitud de mercado
-                result = self.cupido.procesar_solicitud_mercado(
-                    query=query,
-                    agente_telefono=sender,
-                    origen=origen,
-                    grupo_id=grupo_id if is_group_message else None
-                )
-
-                if result['success']:
-                    # Si es del grupo, responder por privado
-                    destinatario = sender
-
-                    if is_group_message:
-                        # Confirmar en el grupo que se está procesando
-                        msg_grupo = "✅ ¡Entendido! Te envío las opciones por privado."
-                        # Nota: En producción necesitarías enviar al grupo, por ahora solo al privado
-
-                    # Enviar resultados por privado
-                    self.send_search_results_cupido(
-                        destinatario,
-                        result['propiedades'],
-                        result['solicitud_id']
-                    )
-
-                    return {
-                        'status': 'solicitud_procesada',
-                        'solicitud_id': result['solicitud_id'],
-                        'total_found': result['total_found']
-                    }
-                else:
-                    msg_error = f"⚠️ Error en la búsqueda: {result.get('error')}"
-                    self.send_message(sender, msg_error)
-
-                    return {
-                        'status': 'solicitud_error',
-                        'error': result.get('error')
-                    }
-
-            # 6. CASO: Chat normal (no es captación ni solicitud)
+            # Extraer teléfono del participante
+            author = message_data.get('author', '')
+            if author and '@c.us' in author:
+                sender = author.replace('@c.us', '')
+                if not sender.startswith('+'):
+                    sender = '+' + sender
+                print(f"   👤 Participante: {sender}")
             else:
-                # Solo responder en chats privados
-                if not is_group_message:
-                    help_msg = "🤔 No entendí tu mensaje.\n\n"
-                    help_msg += "📋 *Puedo ayudarte con:*\n\n"
-                    help_msg += "1️⃣ *Buscar propiedades*\n"
-                    help_msg += "   Ejemplo: _Busco apto en Laureles, 2 habitaciones_\n\n"
-                    help_msg += "2️⃣ *Captar propiedades*\n"
-                    help_msg += "   Comparte un link de Wasi o Tu360\n\n"
-                    help_msg += "Escribe *ayuda* para más información."
+                return {'status': 'ignored', 'reason': 'no_participant_info'}
 
-                    self.send_message(sender, help_msg)
+            # Extraer nombre del agente
+            nombre_agente = message_data.get('pushname', None)
+            if nombre_agente:
+                print(f"   👤 Nombre: {nombre_agente}")
 
-                return {'status': 'chat_normal'}
+            # =====================================================================
+            # CAPTACIÓN SILENCIOSA: Detectar tipo de link (Wasi, Tu360, Lobbie)
+            # =====================================================================
+
+            deteccion = self.cupido.detectar_tipo_mensaje(message_body, sender, True)
+            print(f"🔍 Tipo detectado: {deteccion['tipo']}")
+
+            # CASO 1: Link de Wasi
+            if deteccion['tipo'] == 'captacion_wasi':
+                url = deteccion['data']['url']
+                print(f"📥 Captando propiedad de Wasi: {url}")
+
+                result = self.cupido.procesar_captacion_wasi(
+                    url_wasi=url,
+                    agente_telefono=sender,
+                    mensaje_completo=message_body,
+                    grupo_id=grupo_id,
+                    nombre_agente=nombre_agente
+                )
+
+                if result['success']:
+                    print(f"   ✅ Wasi captada (ID: {result['propiedad_id']})")
+                    self._update_grupo_stats(grupo_id)
+                    return {'status': 'captacion_exitosa', 'propiedad_id': result['propiedad_id'], 'fuente': 'Wasi'}
+                else:
+                    print(f"   ❌ Error: {result.get('error', 'Desconocido')}")
+                    return {'status': 'captacion_error', 'error': result.get('error'), 'fuente': 'Wasi'}
+
+            # CASO 2: Link de Tu360
+            elif deteccion['tipo'] == 'captacion_tu360':
+                url = deteccion['data']['url']
+                print(f"📥 Captando propiedad de Tu360: {url}")
+
+                result = self.cupido.procesar_captacion_tu360(
+                    url_tu360=url,
+                    agente_telefono=sender,
+                    mensaje_completo=message_body,
+                    grupo_id=grupo_id,
+                    nombre_agente=nombre_agente
+                )
+
+                if result['success']:
+                    print(f"   ✅ Tu360 captada (ID: {result['propiedad_id']})")
+                    self._update_grupo_stats(grupo_id)
+                    return {'status': 'captacion_exitosa', 'propiedad_id': result['propiedad_id'], 'fuente': 'Tu360'}
+                else:
+                    print(f"   ❌ Error: {result.get('error', 'Desconocido')}")
+                    return {'status': 'captacion_error', 'error': result.get('error'), 'fuente': 'Tu360'}
+
+            # CASO 3: Link de LobiApp
+            elif deteccion['tipo'] == 'captacion_lobbie':
+                url = deteccion['data']['url']
+                print(f"📥 Captando propiedad de LobiApp: {url}")
+
+                result = self.cupido.procesar_captacion_lobbie(
+                    url_lobbie=url,
+                    agente_telefono=sender,
+                    origen='Grupo',
+                    grupo_id=grupo_id,
+                    mensaje_completo=message_body
+                )
+
+                if result['success']:
+                    print(f"   ✅ LobiApp captada (ID: {result['propiedad_id']})")
+                    self._update_grupo_stats(grupo_id)
+                    return {'status': 'captacion_exitosa', 'propiedad_id': result['propiedad_id'], 'fuente': 'Lobbie'}
+                else:
+                    print(f"   ❌ Error: {result.get('error', 'Desconocido')}")
+                    return {'status': 'captacion_error', 'error': result.get('error'), 'fuente': 'Lobbie'}
+
+            # CASO 4: Tiene URL pero no es de ninguna fuente conocida
+            else:
+                print(f"   ⏭️  URL no reconocida (no es Wasi/Tu360/Lobbie)")
+                return {'status': 'ignored', 'reason': 'unknown_url_source'}
 
         except Exception as e:
             print(f"❌ Error manejando mensaje entrante: {e}")
             import traceback
             traceback.print_exc()
-
-            # Intentar enviar mensaje de error al usuario
-            try:
-                if sender:
-                    error_msg = "❌ Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo."
-                    self.send_message(sender, error_msg)
-            except:
-                pass
-
+            # NO enviar mensajes de error - modo silencioso
             return {
                 'status': 'error',
                 'error': str(e)

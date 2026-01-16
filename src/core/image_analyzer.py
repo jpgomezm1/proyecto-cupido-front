@@ -48,6 +48,9 @@ class ImageAnalyzer:
             system_prompt = self._build_system_prompt()
             user_prompt = self._build_analysis_prompt(property_context)
 
+            import time
+            start_time = time.time()
+
             # Llamar a Claude Vision
             response = self.client.messages.create(
                 model=self.model,
@@ -72,6 +75,17 @@ class ImageAnalyzer:
                     }
                 ],
                 system=system_prompt
+            )
+
+            # Track AI usage
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_anthropic_response(
+                model=self.model,
+                usage_type='image_analysis',
+                function_name='ImageAnalyzer.analyze_image',
+                response=response,
+                start_time=start_time,
+                context={'image_url': image_url[:200] if image_url else None}
             )
 
             # Parsear respuesta JSON

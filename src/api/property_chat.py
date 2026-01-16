@@ -322,12 +322,26 @@ def chat_with_property(property_id: int):
             'content': user_message
         })
 
+        import time
+        start_time = time.time()
+
         # Llamar a Claude
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=500,
             system=system_prompt,
             messages=messages
+        )
+
+        # Track AI usage
+        from src.core.ai_usage_tracker import get_ai_tracker
+        get_ai_tracker().track_anthropic_response(
+            model='claude-sonnet-4-20250514',
+            usage_type='property_chat',
+            function_name='property_chat.chat_with_property',
+            response=response,
+            start_time=start_time,
+            context={'property_id': property_id, 'history_length': len(history)}
         )
 
         assistant_message = response.content[0].text

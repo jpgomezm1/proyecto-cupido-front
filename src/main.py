@@ -31,6 +31,14 @@ from src.api.bulk_upload import bulk_bp
 from src.api.conversations import conversations_bp
 from src.api.chat_auth import chat_auth_bp
 from src.api.chat_users_admin import chat_users_admin_bp
+from src.api.shared_selections import shared_selections_bp
+from src.api.favorites import favorites_bp
+from src.api.transcribe import transcribe_bp
+from src.api.ai_costs import ai_costs_bp
+from src.api.system_health import system_health_bp
+from src.api.activity import activity_bp
+from src.api.whatsapp_groups import whatsapp_groups_bp
+from src.api.dashboard import dashboard_bp
 
 load_dotenv()
 
@@ -38,7 +46,7 @@ app = Flask(__name__)
 
 # Habilitar CORS para permitir peticiones desde el frontend
 CORS(app,
-     origins=["https://dash-admin-hrjg.netlify.app", "http://localhost:8080", "http://localhost:5173"],
+     origins=["https://dash-admin-hrjg.netlify.app", "http://localhost:8080", "http://localhost:5173", "http://localhost:4242"],
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -55,6 +63,14 @@ app.register_blueprint(bulk_bp)
 app.register_blueprint(conversations_bp)
 app.register_blueprint(chat_auth_bp)
 app.register_blueprint(chat_users_admin_bp)
+app.register_blueprint(shared_selections_bp)
+app.register_blueprint(favorites_bp)
+app.register_blueprint(transcribe_bp)
+app.register_blueprint(ai_costs_bp)
+app.register_blueprint(system_health_bp)
+app.register_blueprint(activity_bp)
+app.register_blueprint(whatsapp_groups_bp)
+app.register_blueprint(dashboard_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
@@ -140,20 +156,12 @@ def webhook():
         # Obtener datos del webhook
         webhook_data = request.get_json() if request.is_json else request.form.to_dict()
 
-        print("\n" + "=" * 80)
-        print("📨 WEBHOOK RECIBIDO")
-        print("=" * 80)
-        print(f"🕐 Timestamp: {datetime.now().isoformat()}")
-        print(f"📋 Data: {json.dumps(webhook_data, indent=2, ensure_ascii=False)}")
-        print("=" * 80 + "\n")
-
-        # Procesar mensaje con el bot
+        # Procesar mensaje con el bot (el bot decide qué loguear)
         response = bot.handle_incoming_message(webhook_data)
 
-        # Log del webhook
-        log_webhook(webhook_data, response)
-
-        print(f"✅ Webhook procesado: {response.get('status')}\n")
+        # Solo loguear captaciones exitosas o errores
+        if response.get('status') in ['captacion_exitosa', 'captacion_error', 'error']:
+            log_webhook(webhook_data, response)
 
         return jsonify({
             'status': 'success',

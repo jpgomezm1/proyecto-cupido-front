@@ -767,6 +767,86 @@ def calcular_rango_precio(precio_max: int, tolerancia: float = None, flexibilida
     return precio_min, precio_max_ajustado
 
 
+# =============================================================================
+# TOLERANCIA DE ÁREA - v2.2
+# =============================================================================
+
+TOLERANCIA_AREA_INFERIOR = 0.05  # -5% hacia abajo
+TOLERANCIA_AREA_SUPERIOR = 0.20  # +20% hacia arriba
+
+
+def calcular_rango_area(area_min: int = None, area_max: int = None) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Calcula el rango de área aceptable con tolerancia -5% / +20%
+
+    v2.2: Si el usuario dice "80m²", mostrar propiedades entre 76m² y 96m²
+
+    Args:
+        area_min: Área mínima especificada por el usuario
+        area_max: Área máxima especificada por el usuario
+
+    Returns:
+        Tupla (area_min_ajustado, area_max_ajustado)
+    """
+    area_min_ajustado = None
+    area_max_ajustado = None
+
+    if area_min:
+        # -5% del área mínima (ej: 80m² → 76m²)
+        area_min_ajustado = int(area_min * (1 - TOLERANCIA_AREA_INFERIOR))
+
+    if area_max:
+        # +20% del área máxima (ej: 100m² → 120m²)
+        area_max_ajustado = int(area_max * (1 + TOLERANCIA_AREA_SUPERIOR))
+    elif area_min:
+        # Si solo especificó área mínima, usar +20% de esa como máximo implícito
+        area_max_ajustado = int(area_min * (1 + TOLERANCIA_AREA_SUPERIOR))
+
+    return area_min_ajustado, area_max_ajustado
+
+
+# =============================================================================
+# TOLERANCIA DE HABITACIONES - v2.2
+# =============================================================================
+
+TOLERANCIA_HABITACIONES = 1  # ±1 habitación de tolerancia en filtro SQL
+
+
+def calcular_rango_habitaciones(hab_min: int = None, hab_max: int = None) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Calcula el rango de habitaciones con tolerancia ±1 para el filtro SQL.
+
+    Esto permite que propiedades "cercanas" pasen el filtro y sean evaluadas
+    por el scoring, donde se penalizarán o bonificarán según qué tan cerca
+    estén del valor ideal.
+
+    v2.2: Si el usuario dice "3 habitaciones", el filtro acepta 2-4,
+    pero el scoring favorecerá las de exactamente 3.
+
+    Args:
+        hab_min: Habitaciones mínimas especificadas
+        hab_max: Habitaciones máximas especificadas
+
+    Returns:
+        Tupla (hab_min_filtro, hab_max_filtro) para usar en SQL
+    """
+    hab_min_filtro = None
+    hab_max_filtro = None
+
+    if hab_min:
+        # -1 del mínimo (pero nunca menos de 1)
+        hab_min_filtro = max(1, hab_min - TOLERANCIA_HABITACIONES)
+
+    if hab_max:
+        # +1 del máximo
+        hab_max_filtro = hab_max + TOLERANCIA_HABITACIONES
+    elif hab_min:
+        # Si solo especificó mínimo, poner un máximo razonable (+2)
+        hab_max_filtro = hab_min + TOLERANCIA_HABITACIONES + 1
+
+    return hab_min_filtro, hab_max_filtro
+
+
 def detectar_perfil_comprador(query: str, criterios: Dict = None) -> str:
     """
     Detecta el perfil del comprador basado en la query y criterios

@@ -101,7 +101,7 @@ class DatabaseManager:
                 'descripcion', 'descripcion_length',
                 'fecha_extraccion',
                 # Campos de captación (quién envió la propiedad)
-                'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo'
+                'origen', 'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo'
             ]
 
             # Campos AI enriquecidos (opcionales)

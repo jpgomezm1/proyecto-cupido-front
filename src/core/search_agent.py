@@ -42,6 +42,8 @@ from src.core.search_config import (
     get_segmento_precio,
     get_tolerancia_precio,
     calcular_rango_precio,
+    calcular_rango_area,  # v2.2: Tolerancia de área -5%/+20%
+    calcular_rango_habitaciones,  # v2.2: Tolerancia de habitaciones ±1
     detectar_perfil_comprador,
     get_zonas_expandidas,
     get_ciudad_de_zona,
@@ -300,6 +302,17 @@ Responde SOLO con el JSON de criterios."""
                 ]
             )
 
+            # Track AI usage
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_anthropic_response(
+                model=self.model,
+                usage_type='search_criteria_extraction',
+                function_name='PropertySearchAgent._extract_search_criteria',
+                response=message,
+                start_time=start_time,
+                context={'query': query[:500]}
+            )
+
             # Extraer el JSON de la respuesta
             response_text = message.content[0].text.strip()
 
@@ -330,6 +343,30 @@ Responde SOLO con el JSON de criterios."""
                 criteria['precio_max_ajustado'] = precio_max_ajustado
                 criteria['segmento_precio'] = get_segmento_precio(precio_max)
                 criteria['tolerancia_aplicada'] = get_tolerancia_precio(precio_max)
+
+            # 1.5 v2.2: Calcular rango de área con tolerancia -5%/+20%
+            if criteria.get('area_min') or criteria.get('area_max'):
+                area_min_ajustado, area_max_ajustado = calcular_rango_area(
+                    criteria.get('area_min'),
+                    criteria.get('area_max')
+                )
+                if area_min_ajustado:
+                    criteria['area_min_ajustado'] = area_min_ajustado
+                if area_max_ajustado:
+                    criteria['area_max_ajustado'] = area_max_ajustado
+
+            # 1.6 v2.2: Calcular rango de habitaciones con tolerancia ±1
+            # Permite que propiedades "cercanas" pasen el filtro SQL
+            # y sean evaluadas por el scoring
+            if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
+                hab_min_filtro, hab_max_filtro = calcular_rango_habitaciones(
+                    criteria.get('habitaciones_min'),
+                    criteria.get('habitaciones_max')
+                )
+                if hab_min_filtro:
+                    criteria['habitaciones_min_filtro'] = hab_min_filtro
+                if hab_max_filtro:
+                    criteria['habitaciones_max_filtro'] = hab_max_filtro
 
             # 2. Detectar/confirmar perfil de comprador
             perfil_claude = criteria.get('perfil_comprador', 'general')
@@ -409,14 +446,19 @@ Responde SOLO con el JSON de criterios."""
         relaxed = criteria.copy()
 
         if level >= 1:
-            # Área: expandir de ±20% a ±35%
+            # Área: expandir a -15%/+35% (más relajado que el -5%/+20% inicial)
             if criteria.get('area_min') or criteria.get('area_max'):
                 area_min = criteria.get('area_min', 0)
                 area_max = criteria.get('area_max', area_min)
                 area_base = (area_min + area_max) / 2 if area_min else area_max
                 if area_base > 0:
-                    relaxed['area_min'] = int(area_base * 0.65)
-                    relaxed['area_max'] = int(area_base * 1.35)
+                    relaxed_min = int(area_base * 0.85)  # -15%
+                    relaxed_max = int(area_base * 1.35)  # +35%
+                    relaxed['area_min'] = relaxed_min
+                    relaxed['area_max'] = relaxed_max
+                    # v2.2: También actualizar valores ajustados para que SQL los use
+                    relaxed['area_min_ajustado'] = relaxed_min
+                    relaxed['area_max_ajustado'] = relaxed_max
 
             # Parqueaderos: -1 del mínimo
             if criteria.get('parqueaderos_min') and criteria['parqueaderos_min'] > 1:
@@ -430,20 +472,30 @@ Responde SOLO con el JSON de criterios."""
                 relaxed['banos_max'] = criteria['banos_max'] + 1
 
         if level >= 3:
-            # Área: expandir aún más a ±40%
+            # Área: expandir aún más a -25%/+45%
             if criteria.get('area_min') or criteria.get('area_max'):
                 area_min = criteria.get('area_min', 0)
                 area_max = criteria.get('area_max', area_min)
                 area_base = (area_min + area_max) / 2 if area_min else area_max
                 if area_base > 0:
-                    relaxed['area_min'] = int(area_base * 0.60)
-                    relaxed['area_max'] = int(area_base * 1.40)
+                    relaxed_min = int(area_base * 0.75)  # -25%
+                    relaxed_max = int(area_base * 1.45)  # +45%
+                    relaxed['area_min'] = relaxed_min
+                    relaxed['area_max'] = relaxed_max
+                    # v2.2: También actualizar valores ajustados
+                    relaxed['area_min_ajustado'] = relaxed_min
+                    relaxed['area_max_ajustado'] = relaxed_max
 
-            # Habitaciones: ±1
+            # Habitaciones: ±1 adicional (sobre la tolerancia base)
             if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
-                relaxed['habitaciones_min'] = criteria['habitaciones_min'] - 1
+                hab_min_relajado = criteria['habitaciones_min'] - 1
+                relaxed['habitaciones_min'] = hab_min_relajado
+                # v2.2: También actualizar valores de filtro
+                relaxed['habitaciones_min_filtro'] = max(1, hab_min_relajado - 1)
             if criteria.get('habitaciones_max'):
-                relaxed['habitaciones_max'] = criteria['habitaciones_max'] + 1
+                hab_max_relajado = criteria['habitaciones_max'] + 1
+                relaxed['habitaciones_max'] = hab_max_relajado
+                relaxed['habitaciones_max_filtro'] = hab_max_relajado + 1
 
             # Parqueaderos: ignorar completamente
             relaxed.pop('parqueaderos_min', None)
@@ -752,14 +804,18 @@ Responde SOLO con el JSON de criterios."""
                     params[f'ubicacion_{i}'] = f'%{ubicacion}%'
                 conditions.append(f"({' OR '.join(zona_conditions)})")
 
-        # Filtro por habitaciones
-        if criteria.get('habitaciones_min'):
-            conditions.append("habitaciones >= %(habitaciones_min)s")
-            params['habitaciones_min'] = criteria['habitaciones_min']
+        # Filtro por habitaciones (v2.2: con tolerancia ±1 para permitir near-matches)
+        # Usa valores de filtro tolerantes, el scoring diferenciará exactos vs cercanos
+        hab_min_filtro = criteria.get('habitaciones_min_filtro') or criteria.get('habitaciones_min')
+        hab_max_filtro = criteria.get('habitaciones_max_filtro') or criteria.get('habitaciones_max')
 
-        if criteria.get('habitaciones_max'):
-            conditions.append("habitaciones <= %(habitaciones_max)s")
-            params['habitaciones_max'] = criteria['habitaciones_max']
+        if hab_min_filtro:
+            conditions.append("habitaciones >= %(hab_min_filtro)s")
+            params['hab_min_filtro'] = hab_min_filtro
+
+        if hab_max_filtro:
+            conditions.append("habitaciones <= %(hab_max_filtro)s")
+            params['hab_max_filtro'] = hab_max_filtro
 
         # Filtro por baños (MEJORADO v2.0: ahora incluye banos_max)
         if criteria.get('banos_min'):
@@ -770,14 +826,18 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("banos <= %(banos_max)s")
             params['banos_max'] = criteria['banos_max']
 
-        # Filtro por área
-        if criteria.get('area_min'):
-            conditions.append("area_construida >= %(area_min)s")
-            params['area_min'] = criteria['area_min']
+        # Filtro por área (v2.2: con tolerancia -5%/+20%)
+        # Usar valores ajustados si existen, sino los originales
+        area_min_filtro = criteria.get('area_min_ajustado') or criteria.get('area_min')
+        area_max_filtro = criteria.get('area_max_ajustado') or criteria.get('area_max')
 
-        if criteria.get('area_max'):
-            conditions.append("area_construida <= %(area_max)s")
-            params['area_max'] = criteria['area_max']
+        if area_min_filtro:
+            conditions.append("area_construida >= %(area_min_filtro)s")
+            params['area_min_filtro'] = area_min_filtro
+
+        if area_max_filtro:
+            conditions.append("area_construida <= %(area_max_filtro)s")
+            params['area_max_filtro'] = area_max_filtro
 
         # Filtro por piso
         if criteria.get('piso'):
@@ -896,7 +956,8 @@ Responde SOLO con el JSON de criterios."""
                             reasons.append(f"Zona cercana: {result.get('zona')}")
                             break
 
-            # 3. HABITACIONES - Exacto vs rango
+            # 3. HABITACIONES - v2.2: Scoring mejorado con más peso y diferenciación
+            # Este es un criterio IMPORTANTE - hasta 18 puntos posibles
             if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
                 hab = result.get('habitaciones', 0)
                 if not isinstance(hab, (int, float)):
@@ -905,33 +966,63 @@ Responde SOLO con el JSON de criterios."""
                     except:
                         hab = 0
 
-                hab_min = criteria.get('habitaciones_min', 0)
-                hab_max = criteria.get('habitaciones_max', 99)
+                # Valores originales del usuario (no los de filtro)
+                hab_min_ideal = criteria.get('habitaciones_min', 0)
+                hab_max_ideal = criteria.get('habitaciones_max', hab_min_ideal if hab_min_ideal else 99)
 
-                if hab_min <= hab <= hab_max:
-                    if hab == hab_min or (hab_max and hab == hab_max):
-                        score += 10
-                        match_details['habitaciones'] = 'exacto'
-                        reasons.append(f"{hab} habitaciones (exacto)")
+                # Calcular el número "óptimo" de habitaciones
+                # Si el usuario dijo "3 habitaciones" → óptimo = 3
+                # Si dijo "2-3 habitaciones" → óptimo = 2.5 (promedio)
+                if hab_min_ideal and hab_max_ideal and hab_max_ideal != 99:
+                    hab_optimo = (hab_min_ideal + hab_max_ideal) / 2
+                else:
+                    hab_optimo = hab_min_ideal if hab_min_ideal else hab_max_ideal
+
+                # Diferencia con el óptimo
+                diferencia = abs(hab - hab_optimo)
+
+                if hab_min_ideal <= hab <= hab_max_ideal:
+                    # CASO 1: Dentro del rango exacto solicitado
+                    if diferencia == 0 or (hab == hab_min_ideal or hab == hab_max_ideal):
+                        score += 18  # Match perfecto
+                        match_details['habitaciones'] = 'perfecto'
+                        reasons.append(f"✓ {hab} hab (exacto)")
                     else:
-                        score += 7
+                        score += 14  # Dentro del rango
                         match_details['habitaciones'] = 'rango'
-                        reasons.append(f"{hab} habitaciones")
-                elif hab > hab_max:
-                    score -= 5  # Penalizar si excede el máximo
+                        reasons.append(f"{hab} hab")
+                elif diferencia <= 1:
+                    # CASO 2: A ±1 del rango (cercano pero no exacto)
+                    score += 8
+                    match_details['habitaciones'] = 'cercano'
+                    if hab < hab_min_ideal:
+                        reasons.append(f"{hab} hab (1 menos)")
+                    else:
+                        reasons.append(f"{hab} hab (1 más)")
+                elif hab > hab_max_ideal:
+                    # CASO 3: Más habitaciones de las pedidas (+2 o más)
+                    score += 2  # Pequeño bonus, más habitaciones puede ser aceptable
                     match_details['habitaciones'] = 'excede'
+                    reasons.append(f"{hab} hab (+{int(hab - hab_max_ideal)})")
+                else:
+                    # CASO 4: Menos habitaciones de las pedidas (-2 o más)
+                    score -= 8  # Penalización significativa
+                    match_details['habitaciones'] = 'insuficiente'
+                    reasons.append(f"⚠ {hab} hab ({int(hab - hab_min_ideal)})")
 
             # 4. BAÑOS - Ahora incluye max
             if criteria.get('banos_min') or criteria.get('banos_max'):
-                banos = result.get('banos', 0)
-                if not isinstance(banos, (int, float)):
+                banos = result.get('banos')
+                if banos is None:
+                    banos = 0
+                elif not isinstance(banos, (int, float)):
                     try:
                         banos = int(banos)
                     except:
                         banos = 0
 
-                banos_min = criteria.get('banos_min', 0)
-                banos_max = criteria.get('banos_max', 99)
+                banos_min = criteria.get('banos_min') or 0
+                banos_max = criteria.get('banos_max') or 99
 
                 if banos_min <= banos <= banos_max:
                     score += 5

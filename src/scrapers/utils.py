@@ -521,6 +521,9 @@ class PropertyNormalizer:
             return None
 
         try:
+            import time
+            start_time = time.time()
+
             message = client.messages.create(
                 model="claude-3-5-haiku-20241022",  # Modelo rápido y económico
                 max_tokens=100,
@@ -536,6 +539,17 @@ Título original: "{titulo}"
 Responde SOLO con el título limpio, sin comillas ni explicaciones."""
                     }
                 ]
+            )
+
+            # Track AI usage
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_anthropic_response(
+                model='claude-3-5-haiku-20241022',
+                usage_type='title_cleaning',
+                function_name='PropertyNormalizer._limpiar_titulo_con_ai',
+                response=message,
+                start_time=start_time,
+                context={'titulo_length': len(titulo)}
             )
 
             titulo_limpio = message.content[0].text.strip()

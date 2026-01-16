@@ -67,6 +67,17 @@ class CriteriaExtractor:
                 messages=[{"role": "user", "content": user_message}]
             )
 
+            # Track AI usage
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_anthropic_response(
+                model=self.model,
+                usage_type='criteria_extraction',
+                function_name='CriteriaExtractor.extract',
+                response=message,
+                start_time=start_time,
+                context={'query': query[:500]}
+            )
+
             # Extraer y parsear JSON
             response_text = message.content[0].text.strip()
             criteria = self._parse_response(response_text)
