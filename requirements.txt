@@ -50,3 +50,4 @@ zipp==3.23.0
 redis>=4.5.0
 rq>=1.15.0
 sentry-sdk[flask]>=1.29.0
+newrelic>=9.0.0
