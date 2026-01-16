@@ -12,10 +12,25 @@ import re
 from typing import Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
+import redis
+from rq import Queue
 from src.core.search_agent import PropertySearchAgent
 from src.core.cupido_manager import CupidoManager
 
 load_dotenv()
+
+# Habilitar/deshabilitar Redis Queue para procesamiento asincrono
+USE_REDIS_QUEUE = os.getenv('USE_REDIS_QUEUE', 'false').lower() == 'true'
+
+
+def get_redis_queue():
+    """Obtiene la cola de Redis para capturas."""
+    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+    if redis_url.startswith('rediss://'):
+        conn = redis.from_url(redis_url, ssl_cert_reqs=None)
+    else:
+        conn = redis.from_url(redis_url)
+    return Queue('captures', connection=conn)
 
 
 class WhatsAppBot:
@@ -652,6 +667,36 @@ class WhatsAppBot:
 
             deteccion = self.cupido.detectar_tipo_mensaje(message_body, sender, True)
             print(f"🔍 Tipo detectado: {deteccion['tipo']}")
+
+            # =====================================================================
+            # REDIS QUEUE: Si esta habilitado, encolar para procesamiento async
+            # =====================================================================
+            if USE_REDIS_QUEUE and deteccion['tipo'] in ['captacion_wasi', 'captacion_tu360', 'captacion_lobbie']:
+                from src.jobs.capture_jobs import process_capture_job
+
+                queue = get_redis_queue()
+                job = queue.enqueue(
+                    process_capture_job,
+                    {
+                        'tipo': deteccion['tipo'],
+                        'url': deteccion['data']['url'],
+                        'agente_telefono': sender,
+                        'mensaje_completo': message_body,
+                        'grupo_id': grupo_id,
+                        'nombre_agente': nombre_agente
+                    },
+                    job_timeout=120
+                )
+                print(f"   📤 Job encolado: {job.id}")
+                return {
+                    'status': 'queued',
+                    'job_id': job.id,
+                    'tipo': deteccion['tipo']
+                }
+
+            # =====================================================================
+            # PROCESAMIENTO SINCRONO (fallback si Redis no esta habilitado)
+            # =====================================================================
 
             # CASO 1: Link de Wasi
             if deteccion['tipo'] == 'captacion_wasi':
