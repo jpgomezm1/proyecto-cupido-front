@@ -19,8 +19,15 @@ BOGOTA_TZ = pytz.timezone('America/Bogota')
 
 
 def get_bogota_now():
-    """Get current time in Bogota timezone."""
-    return datetime.now(BOGOTA_TZ)
+    """
+    Get current time in Bogota timezone as naive datetime.
+
+    PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns need naive datetimes
+    for correct comparison. We convert to Bogotá time and strip timezone.
+    """
+    bogota_time = datetime.now(BOGOTA_TZ)
+    # Return naive datetime (sin timezone) para compatibilidad con PostgreSQL
+    return bogota_time.replace(tzinfo=None)
 
 
 def get_days_param():
@@ -155,16 +162,18 @@ def get_capture_activity():
         start_date = get_bogota_now() - timedelta(days=days)
 
         with DatabaseManager() as db:
-            # Capturas por día y fuente (convertir a zona horaria Bogotá)
+            # Capturas por día y fuente
+            # Nota: fecha_creacion se guarda en UTC (servidor Heroku)
+            # Convertimos: UTC -> Bogotá para agrupar por día correctamente
             db.cursor.execute("""
                 SELECT
-                    DATE(fecha_creacion AT TIME ZONE 'America/Bogota') as date,
+                    DATE((fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota') as date,
                     origen,
                     COUNT(*) as count
                 FROM propiedades
                 WHERE origen IN ('Wasi_Captado', 'Tu360_Captado', 'Lobbie_Captado')
                 AND fecha_creacion >= %s
-                GROUP BY DATE(fecha_creacion AT TIME ZONE 'America/Bogota'), origen
+                GROUP BY DATE((fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota'), origen
                 ORDER BY date
             """, (start_date,))
             by_day_raw = db.cursor.fetchall()
@@ -279,13 +288,13 @@ def get_chat_activity():
             # Actividad por día (timezone Bogotá)
             db.cursor.execute("""
                 SELECT
-                    DATE(fecha AT TIME ZONE 'America/Bogota') as date,
+                    DATE((fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota') as date,
                     COUNT(*) as total_actions,
                     COUNT(CASE WHEN accion = 'search' THEN 1 END) as searches,
                     COUNT(CASE WHEN accion = 'login' THEN 1 END) as logins
                 FROM chat_usage_log
                 WHERE fecha >= %s
-                GROUP BY DATE(fecha AT TIME ZONE 'America/Bogota')
+                GROUP BY DATE((fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')
                 ORDER BY date
             """, (start_date,))
             by_day_raw = db.cursor.fetchall()
@@ -293,11 +302,11 @@ def get_chat_activity():
             # Horas pico de búsqueda (timezone Bogotá)
             db.cursor.execute("""
                 SELECT
-                    EXTRACT(HOUR FROM fecha AT TIME ZONE 'America/Bogota')::integer as hour,
+                    EXTRACT(HOUR FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::integer as hour,
                     COUNT(*) as count
                 FROM chat_usage_log
                 WHERE accion = 'search' AND fecha >= %s
-                GROUP BY EXTRACT(HOUR FROM fecha AT TIME ZONE 'America/Bogota')
+                GROUP BY EXTRACT(HOUR FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')
                 ORDER BY hour
             """, (start_date,))
             peak_hours_raw = db.cursor.fetchall()
@@ -363,7 +372,7 @@ def get_chat_activity():
                 SELECT
                     COUNT(CASE WHEN accion = 'search' THEN 1 END) as total_searches,
                     COUNT(DISTINCT user_id) as unique_users,
-                    COUNT(DISTINCT DATE(fecha AT TIME ZONE 'America/Bogota')) as active_days
+                    COUNT(DISTINCT DATE((fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')) as active_days
                 FROM chat_usage_log
                 WHERE fecha >= %s
             """, (start_date,))
@@ -501,27 +510,27 @@ def get_hourly_activity():
             # Capturas por hora y día de semana (timezone Bogotá)
             db.cursor.execute("""
                 SELECT
-                    EXTRACT(HOUR FROM fecha_creacion AT TIME ZONE 'America/Bogota')::integer as hour,
-                    EXTRACT(DOW FROM fecha_creacion AT TIME ZONE 'America/Bogota')::integer as day_of_week,
+                    EXTRACT(HOUR FROM (fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::integer as hour,
+                    EXTRACT(DOW FROM (fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::integer as day_of_week,
                     COUNT(*) as count
                 FROM propiedades
                 WHERE origen IN ('Wasi_Captado', 'Tu360_Captado', 'Lobbie_Captado')
                 AND fecha_creacion >= %s
-                GROUP BY EXTRACT(HOUR FROM fecha_creacion AT TIME ZONE 'America/Bogota'),
-                         EXTRACT(DOW FROM fecha_creacion AT TIME ZONE 'America/Bogota')
+                GROUP BY EXTRACT(HOUR FROM (fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota'),
+                         EXTRACT(DOW FROM (fecha_creacion AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')
             """, (start_date,))
             capture_hourly_raw = db.cursor.fetchall()
 
             # Búsquedas por hora y día de semana (timezone Bogotá)
             db.cursor.execute("""
                 SELECT
-                    EXTRACT(HOUR FROM fecha AT TIME ZONE 'America/Bogota')::integer as hour,
-                    EXTRACT(DOW FROM fecha AT TIME ZONE 'America/Bogota')::integer as day_of_week,
+                    EXTRACT(HOUR FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::integer as hour,
+                    EXTRACT(DOW FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::integer as day_of_week,
                     COUNT(*) as count
                 FROM chat_usage_log
                 WHERE accion = 'search' AND fecha >= %s
-                GROUP BY EXTRACT(HOUR FROM fecha AT TIME ZONE 'America/Bogota'),
-                         EXTRACT(DOW FROM fecha AT TIME ZONE 'America/Bogota')
+                GROUP BY EXTRACT(HOUR FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota'),
+                         EXTRACT(DOW FROM (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')
             """, (start_date,))
             search_hourly_raw = db.cursor.fetchall()
 
