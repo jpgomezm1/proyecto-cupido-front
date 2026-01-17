@@ -876,7 +876,7 @@ def detectar_perfil_comprador(query: str, criterios: Dict = None) -> str:
             scores['senior'] = scores.get('senior', 0) + 2
 
         # Muchas habitaciones indica familia
-        if criterios.get('habitaciones_min', 0) >= 3:
+        if (criterios.get('habitaciones_min') or 0) >= 3:
             scores['familia'] = scores.get('familia', 0) + 1
 
         # Inversión explícita

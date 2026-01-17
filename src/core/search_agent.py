@@ -79,15 +79,13 @@ search_log = get_search_logger()
 
 # Configuración
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
-MODEL = "claude-3-5-sonnet-20241022"  # Modelo por defecto
+MODEL = "claude-sonnet-4-20250514"  # Modelo por defecto (Claude Sonnet 4)
 
-# Modelos alternativos en orden de preferencia
+# Modelos alternativos en orden de preferencia (solo modelos activos)
 FALLBACK_MODELS = [
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-sonnet-20240620",
-    "claude-3-opus-20240229",
-    "claude-3-sonnet-20240229",
-    "claude-3-haiku-20240307"
+    "claude-sonnet-4-20250514",     # Claude Sonnet 4 (más reciente)
+    "claude-3-5-sonnet-20241022",   # Claude 3.5 Sonnet v2
+    "claude-3-5-haiku-20241022",    # Claude 3.5 Haiku (más económico)
 ]
 
 

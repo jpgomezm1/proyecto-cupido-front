@@ -147,7 +147,7 @@ El usuario ya realizó una búsqueda con estos criterios:
 REGLAS DE REFINAMIENTO:
 1. Si el usuario menciona un criterio EXPLÍCITAMENTE en su nuevo mensaje, USA ESE VALOR (sobrescribe el anterior)
 2. Si el usuario NO menciona un criterio, MANTÉN EL VALOR ANTERIOR
-3. Expresiones de refinamiento:
+3. Expresiones de refinamiento RELATIVAS (sin número):
    - "más barato", "menos precio" → reduce precio_max en 15-20%
    - "más caro", "mayor presupuesto" → aumenta precio_max en 15-20%
    - "más grande" → aumenta area_min o habitaciones_min
@@ -155,6 +155,20 @@ REGLAS DE REFINAMIENTO:
    - "otra zona", "diferente sector" → REEMPLAZA ubicaciones
    - "también en X" → AGREGA X a ubicaciones existentes
 4. Si el mensaje es muy corto (ej: "con piscina", "3 habitaciones"), es un REFINAMIENTO - mantén los demás criterios
+5. EXTRACCIÓN DE CRITERIOS CON NÚMEROS (CRÍTICO - SIEMPRE extraer si hay número):
+   ÁREA:
+   - "más de 100 m2", "mínimo 100 metros" → area_min = 100
+   - "hasta 150 m2", "máximo 200 metros" → area_max = 150/200
+   - "entre 80 y 120 m2" → area_min = 80, area_max = 120
+   PRECIO:
+   - "hasta 800 millones", "máximo $1.200 MM" → precio_max = valor
+   - "no supere 1000 millones" → precio_max = 1000000000
+   - "entre 500 y 800 millones" → precio_min = 500M, precio_max = 800M
+   HABITACIONES:
+   - "quiero 3 habitaciones", "mínimo 2 alcobas" → habitaciones_min = valor
+   - "máximo 4 cuartos" → habitaciones_max = valor
+   BAÑOS:
+   - "con 2 baños", "mínimo 3 baños" → banos_min = valor
 
 IMPORTANTE: Incluye TODOS los criterios (anteriores + nuevos/modificados) en tu respuesta JSON."""
 

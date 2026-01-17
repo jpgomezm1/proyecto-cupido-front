@@ -1530,9 +1530,13 @@ def improve_description():
     Usa Claude AI para mejorar la descripción de una propiedad
     haciéndola más clara, organizada y profesional.
 
+    OPTIMIZADO: Si property_id se proporciona, cachea el resultado en DB
+    para evitar llamadas repetidas a la API de AI.
+
     Body:
     {
         "description": "texto de descripción original...",
+        "property_id": 123,  // opcional, para cachear en DB
         "property_info": {  // opcional, para contexto
             "title": "...",
             "type": "Apartamento",
@@ -1549,13 +1553,15 @@ def improve_description():
         "success": true,
         "data": {
             "improved_description": "texto mejorado...",
-            "highlights": ["highlight1", "highlight2", ...]
+            "highlights": ["highlight1", "highlight2", ...],
+            "cached": true/false  // indica si vino de cache
         }
     }
     """
     try:
         import anthropic
         import os
+        import json
 
         data = request.get_json()
         if not data or 'description' not in data:
@@ -1566,6 +1572,40 @@ def improve_description():
 
         original_description = data['description']
         property_info = data.get('property_info', {})
+        property_id = data.get('property_id')
+
+        # === PASO 1: Verificar cache en DB si tenemos property_id ===
+        if property_id:
+            try:
+                with DatabaseManager() as db:
+                    db.cursor.execute("""
+                        SELECT descripcion_ai, highlights_ai
+                        FROM propiedades
+                        WHERE id = %s AND descripcion_ai IS NOT NULL
+                    """, (property_id,))
+                    cached = db.cursor.fetchone()
+
+                    if cached and cached.get('descripcion_ai'):
+                        # Retornar descripción cacheada
+                        highlights = []
+                        if cached.get('highlights_ai'):
+                            try:
+                                highlights = json.loads(cached['highlights_ai'])
+                            except json.JSONDecodeError:
+                                highlights = []
+
+                        print(f"[API] improve-description: usando cache para propiedad {property_id}")
+                        return jsonify({
+                            'success': True,
+                            'data': {
+                                'improved_description': cached['descripcion_ai'],
+                                'highlights': highlights,
+                                'cached': True
+                            }
+                        }), 200
+            except Exception as e:
+                # Si falla la lectura de cache, continuar con generación
+                print(f"[API] Error al leer cache de descripción AI: {e}")
 
         # Si la descripción es muy corta, no vale la pena procesarla
         if len(original_description) < 50:
@@ -1644,7 +1684,6 @@ Los highlights deben ser 3-5 características únicas y atractivas de la propied
         response_text = message.content[0].text.strip()
 
         # Intentar parsear JSON
-        import json
         try:
             result = json.loads(response_text)
         except json.JSONDecodeError:
@@ -1654,6 +1693,26 @@ Los highlights deben ser 3-5 características únicas y atractivas de la propied
                 'improved_description': original_description,
                 'highlights': []
             }
+
+        # === PASO 2: Guardar en DB si tenemos property_id y generación exitosa ===
+        if property_id and result.get('improved_description') and result['improved_description'] != original_description:
+            try:
+                with DatabaseManager() as db:
+                    highlights_json = json.dumps(result.get('highlights', []))
+                    db.cursor.execute("""
+                        UPDATE propiedades
+                        SET descripcion_ai = %s,
+                            highlights_ai = %s,
+                            descripcion_ai_fecha = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (result['improved_description'], highlights_json, property_id))
+                    db.conn.commit()
+                    print(f"[API] improve-description: descripción AI guardada para propiedad {property_id}")
+            except Exception as e:
+                print(f"[API] Error al guardar descripción AI en cache: {e}")
+
+        # Agregar flag de que no vino de cache
+        result['cached'] = False
 
         return jsonify({
             'success': True,

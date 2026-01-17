@@ -72,6 +72,39 @@ class LobbieScraper:
         ]
         return any(re.search(patron, url) for patron in patrones)
 
+    def _extraer_meta_tags(self, soup: BeautifulSoup) -> Dict:
+        """
+        Extrae datos desde OpenGraph meta tags (fuente más confiable)
+
+        Args:
+            soup: BeautifulSoup object
+
+        Returns:
+            Dict con og:title, og:description, og:image
+        """
+        data = {
+            'og_title': None,
+            'og_description': None,
+            'og_image': None
+        }
+
+        # og:title
+        og_title = soup.find('meta', property='og:title')
+        if og_title and og_title.get('content'):
+            data['og_title'] = og_title.get('content').strip()
+
+        # og:description
+        og_desc = soup.find('meta', property='og:description')
+        if og_desc and og_desc.get('content'):
+            data['og_description'] = og_desc.get('content').strip()
+
+        # og:image
+        og_image = soup.find('meta', property='og:image')
+        if og_image and og_image.get('content'):
+            data['og_image'] = og_image.get('content').strip()
+
+        return data
+
     def _extraer_codigo_propiedad(self, soup: BeautifulSoup, url: str) -> Optional[str]:
         """
         Extrae el código de la propiedad
@@ -375,6 +408,7 @@ class LobbieScraper:
     def _extraer_imagenes(self, soup: BeautifulSoup) -> Dict:
         """
         Extrae URLs de imágenes
+        PRIORIDAD: orbit-holder carousel > og:image > S3 images
 
         Args:
             soup: BeautifulSoup object
@@ -390,25 +424,40 @@ class LobbieScraper:
 
         images = []
 
-        # Buscar imágenes de Lobbie S3
-        for img in soup.find_all('img', src=re.compile(r'lobbie.*s3.*amazonaws')):
-            src = img.get('src', '')
-            if src and src not in images:
-                # Filtrar iconos pequeños
-                if 'properties' in src and ('photos' in src or 'images' in src):
+        # Método 1: Carrusel orbit-holder (galería principal de Lobbie)
+        orbit = soup.find('ul', class_='orbit-holder')
+        if orbit:
+            for img in orbit.find_all('img', src=True):
+                src = img.get('src', '')
+                if src and src not in images:
                     images.append(src)
 
-        # También buscar en data-src (lazy loading)
-        for img in soup.find_all('img', attrs={'data-src': re.compile(r'lobbie.*s3')}):
-            src = img.get('data-src', '')
-            if src and src not in images:
-                images.append(src)
+        # Método 2: og:image como respaldo para imagen principal
+        meta_tags = self._extraer_meta_tags(soup)
+        if meta_tags.get('og_image') and meta_tags['og_image'] not in images:
+            images.insert(0, meta_tags['og_image'])
 
-        # Buscar en enlaces también
-        for a in soup.find_all('a', href=re.compile(r'lobbie.*s3.*amazonaws')):
-            href = a.get('href', '')
-            if href and href not in images and ('photos' in href or 'images' in href):
-                images.append(href)
+        # Método 3: Buscar imágenes de S3 de Lobbie (fallback)
+        if not images:
+            for img in soup.find_all('img', src=re.compile(r'lobbie.*s3.*amazonaws')):
+                src = img.get('src', '')
+                if src and src not in images:
+                    if 'properties' in src and ('photos' in src or 'images' in src):
+                        images.append(src)
+
+        # Método 4: data-src para lazy loading
+        if not images:
+            for img in soup.find_all('img', attrs={'data-src': re.compile(r'lobbie.*s3')}):
+                src = img.get('data-src', '')
+                if src and src not in images:
+                    images.append(src)
+
+        # Método 5: Buscar en enlaces (último recurso)
+        if not images:
+            for a in soup.find_all('a', href=re.compile(r'lobbie.*s3.*amazonaws')):
+                href = a.get('href', '')
+                if href and href not in images and ('photos' in href or 'images' in href):
+                    images.append(href)
 
         data['imagenes_urls'] = ' | '.join(images) if images else None
         data['imagen_principal'] = images[0] if images else None
@@ -418,39 +467,78 @@ class LobbieScraper:
 
     def _extraer_descripcion(self, soup: BeautifulSoup) -> Dict:
         """
-        Extrae la descripción de la propiedad
+        Extrae la descripción y título de la propiedad
+        PRIORIDAD: OpenGraph > elementos específicos > fallbacks
 
         Args:
             soup: BeautifulSoup object
 
         Returns:
-            Dict con descripción
+            Dict con descripción y titulo
         """
         data = {
             'descripcion': None,
             'titulo': None
         }
 
-        # Buscar descripción en párrafos largos
-        paragraphs = soup.find_all('p')
-        longest_text = ''
+        # Extraer meta tags primero
+        meta_tags = self._extraer_meta_tags(soup)
 
-        for p in paragraphs:
-            text = p.get_text(strip=True)
-            # Ignorar textos muy cortos o que son claramente no descripción
-            if len(text) > 50 and len(text) > len(longest_text):
-                # Verificar que no sea un texto de marketing de Lobbie
-                if 'lobbie' not in text.lower() and 'app' not in text.lower():
-                    longest_text = text
-
-        if longest_text:
-            data['descripcion'] = longest_text
-
-        # Extraer título (primer h1 o h2)
-        title_tag = soup.find('h1') or soup.find('h2')
-        if title_tag:
-            titulo_raw = title_tag.get_text(strip=True)
+        # === TÍTULO ===
+        # Prioridad 1: og:title (más confiable)
+        if meta_tags.get('og_title'):
+            titulo_raw = meta_tags['og_title']
+            # Limpiar prefijos comunes de Lobbie
+            titulo_raw = re.sub(r'^(Lobbie\s*[-|:]\s*)', '', titulo_raw, flags=re.IGNORECASE)
             data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(titulo_raw)
+
+        # Prioridad 2: h4 dentro de .card (título de propiedad)
+        if not data['titulo']:
+            card = soup.find('div', class_='card')
+            if card:
+                h4_title = card.find('h4')
+                if h4_title:
+                    titulo_raw = h4_title.get_text(strip=True)
+                    # Verificar que no sea precio o código
+                    if not re.search(r'(precio|código|\$)', titulo_raw, re.IGNORECASE):
+                        data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(titulo_raw)
+
+        # Prioridad 3: <title> del documento
+        if not data['titulo']:
+            title_tag = soup.find('title')
+            if title_tag:
+                titulo_raw = title_tag.get_text(strip=True)
+                # Remover "Lobbie" del título
+                titulo_raw = re.sub(r'\s*[-|]\s*Lobbie.*$', '', titulo_raw, flags=re.IGNORECASE)
+                titulo_raw = re.sub(r'^Lobbie\s*[-|:]\s*', '', titulo_raw, flags=re.IGNORECASE)
+                if titulo_raw and len(titulo_raw) > 5:
+                    data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(titulo_raw)
+
+        # === DESCRIPCIÓN ===
+        # Prioridad 1: og:description
+        if meta_tags.get('og_description'):
+            data['descripcion'] = meta_tags['og_description']
+
+        # Prioridad 2: elemento <pre> (usado por Lobbie para descripciones largas)
+        if not data['descripcion']:
+            pre_tag = soup.find('pre')
+            if pre_tag:
+                desc_text = pre_tag.get_text(strip=True)
+                if len(desc_text) > 30:
+                    data['descripcion'] = desc_text
+
+        # Prioridad 3: párrafos largos (sin filtro restrictivo de "lobbie")
+        if not data['descripcion']:
+            paragraphs = soup.find_all('p')
+            longest_text = ''
+            for p in paragraphs:
+                text = p.get_text(strip=True)
+                if len(text) > 50 and len(text) > len(longest_text):
+                    # Solo excluir textos que sean claramente marketing del sitio
+                    if not re.search(r'(descarga\s+la\s+app|registrate|crear\s+cuenta)', text, re.IGNORECASE):
+                        longest_text = text
+            if longest_text:
+                data['descripcion'] = longest_text
 
         return data
 
@@ -571,12 +659,14 @@ class LobbieScraper:
 
             # Log de éxito
             self._log(f"\n[OK] Propiedad extraída exitosamente")
+            self._log(f"  Título: {data.get('titulo')}")
             self._log(f"  Código: {data.get('codigo_propiedad')}")
             self._log(f"  Precio: {data.get('precio_texto')}")
             self._log(f"  Ubicación: {data.get('zona')}, {data.get('ciudad')}")
             self._log(f"  Tipo: {data.get('tipo_propiedad')}")
             self._log(f"  Características: {data.get('habitaciones')} hab, {data.get('banos')} baños, {data.get('area_construida')} m²")
             self._log(f"  Imágenes: {data.get('total_imagenes')}")
+            self._log(f"  Descripción: {data.get('descripcion')[:80] + '...' if data.get('descripcion') else 'N/A'}")
             self._log(f"  Tiempo: {total_elapsed:.0f}ms\n")
 
             if scraper_log:
