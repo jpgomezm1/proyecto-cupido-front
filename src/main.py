@@ -88,11 +88,22 @@ def rate_limit_key_func():
         return None  # None = no aplicar rate limit
     return get_remote_address()
 
+# Configurar storage para rate limiter
+# Heroku Redis usa certificados auto-firmados, necesita ssl_cert_reqs=None
+redis_url = os.getenv('REDIS_URL')
+if redis_url and redis_url.startswith('rediss://'):
+    # Redis con SSL (Heroku) - agregar parametro para certificados auto-firmados
+    storage_uri = f"{redis_url}?ssl_cert_reqs=none"
+elif redis_url:
+    storage_uri = redis_url
+else:
+    storage_uri = 'memory://'
+
 limiter = Limiter(
     app=app,
     key_func=rate_limit_key_func,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri=os.getenv('REDIS_URL', 'memory://')
+    storage_uri=storage_uri
 )
 print("[OK] Rate limiter inicializado")
 
