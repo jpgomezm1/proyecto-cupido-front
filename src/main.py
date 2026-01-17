@@ -83,10 +83,32 @@ CORS(app,
 # Usa Redis en produccion, memoria en desarrollo
 # IMPORTANTE: Excluir OPTIONS requests para no bloquear CORS preflight
 def rate_limit_key_func():
-    """Key function que excluye OPTIONS requests del rate limiting."""
+    """
+    Key function que obtiene la IP del cliente para rate limiting.
+    - Excluye OPTIONS requests (CORS preflight)
+    - Maneja correctamente proxies de Heroku (X-Forwarded-For)
+    - Retorna IP por defecto si no puede determinar el cliente
+    """
     if request.method == 'OPTIONS':
         return None  # None = no aplicar rate limit
-    return get_remote_address()
+
+    # Heroku pasa la IP real en X-Forwarded-For
+    # Formato: "client_ip, proxy1_ip, proxy2_ip"
+    forwarded_for = request.headers.get('X-Forwarded-For', '')
+    if forwarded_for:
+        # Tomar la primera IP (cliente original)
+        client_ip = forwarded_for.split(',')[0].strip()
+        if client_ip:
+            return client_ip
+
+    # Fallback a get_remote_address
+    remote_addr = get_remote_address()
+    if remote_addr:
+        return remote_addr
+
+    # Ultimo fallback - usar IP genérica para no romper el rate limiter
+    # Esto agrupa todos los requests sin IP identificable
+    return "unknown-client"
 
 # Configurar storage para rate limiter
 # Heroku Redis usa certificados auto-firmados, necesita ssl_cert_reqs=None
