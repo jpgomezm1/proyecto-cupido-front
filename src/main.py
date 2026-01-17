@@ -81,9 +81,16 @@ CORS(app,
 
 # Rate limiting para prevenir abuso (DoS, brute force)
 # Usa Redis en produccion, memoria en desarrollo
+# IMPORTANTE: Excluir OPTIONS requests para no bloquear CORS preflight
+def rate_limit_key_func():
+    """Key function que excluye OPTIONS requests del rate limiting."""
+    if request.method == 'OPTIONS':
+        return None  # None = no aplicar rate limit
+    return get_remote_address()
+
 limiter = Limiter(
     app=app,
-    key_func=get_remote_address,
+    key_func=rate_limit_key_func,
     default_limits=["200 per day", "50 per hour"],
     storage_uri=os.getenv('REDIS_URL', 'memory://')
 )
