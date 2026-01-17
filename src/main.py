@@ -66,7 +66,13 @@ app = Flask(__name__)
 
 # Habilitar CORS para permitir peticiones desde el frontend
 CORS(app,
-     origins=["https://dash-admin-hrjg.netlify.app", "http://localhost:8080", "http://localhost:5173", "http://localhost:4242"],
+     origins=[
+         "https://fyndercol.netlify.app",
+         "https://dash-admin-hrjg.netlify.app",
+         "http://localhost:8080",
+         "http://localhost:5173",
+         "http://localhost:4242"
+     ],
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])

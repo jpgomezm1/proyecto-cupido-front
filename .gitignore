@@ -210,3 +210,5 @@ yarn.lock
 # ========================================
 run_migration.py
 scripts/run_migration_*.py
+scripts/check_migrations.py
+scripts/delete_*.py
