@@ -8,6 +8,7 @@ Login con JWT tokens para el panel de administración
 import os
 import jwt
 import hashlib
+import bcrypt
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Blueprint, request, jsonify, g
@@ -66,13 +67,35 @@ if not AUTHORIZED_USERS:
 
 
 def hash_password(password: str) -> str:
-    """Hashea una contraseña con SHA256"""
+    """
+    Hashea una contraseña con bcrypt (seguro para produccion).
+    bcrypt incluye salt automatico y es resistente a ataques de fuerza bruta.
+    """
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def _hash_password_sha256(password: str) -> str:
+    """Hash SHA256 - SOLO para migracion de passwords antiguos."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def _is_bcrypt_hash(password_hash: str) -> bool:
+    """Detecta si un hash es bcrypt (empieza con $2a$, $2b$, o $2y$)."""
+    return password_hash.startswith(('$2a$', '$2b$', '$2y$'))
+
+
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verifica si una contraseña coincide con su hash"""
-    return hash_password(password) == password_hash
+    """
+    Verifica si una contraseña coincide con su hash.
+    Soporta tanto bcrypt (nuevo) como SHA256 (legacy) para migracion gradual.
+    """
+    if _is_bcrypt_hash(password_hash):
+        # Hash bcrypt - verificacion segura
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    else:
+        # Hash SHA256 legacy - para compatibilidad con passwords existentes
+        # NOTA: Estos passwords deben migrarse a bcrypt en el siguiente login
+        return _hash_password_sha256(password) == password_hash
 
 
 def generate_token(email: str, user_data: dict) -> str:

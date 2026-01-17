@@ -14,6 +14,8 @@ if sys.platform == 'win32':
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import os
 import json
 from datetime import datetime
@@ -76,6 +78,16 @@ CORS(app,
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+# Rate limiting para prevenir abuso (DoS, brute force)
+# Usa Redis en produccion, memoria en desarrollo
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri=os.getenv('REDIS_URL', 'memory://')
+)
+print("[OK] Rate limiter inicializado")
 
 # Registrar blueprints de la API
 app.register_blueprint(api_bp)
@@ -171,6 +183,7 @@ def health():
 
 
 @app.route('/webhook', methods=['POST'])
+@limiter.limit("100 per minute")  # Alto para webhooks legitimos de UltraMSG
 def webhook():
     """
     Endpoint para recibir webhooks de UltraMSG
@@ -414,9 +427,10 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5050))
 
     # Correr servidor
-    # debug=True solo para desarrollo
+    # debug mode controlado por variable de entorno (seguro para produccion)
+    DEBUG_MODE = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     try:
-        app.run(host='0.0.0.0', port=port, debug=True)
+        app.run(host='0.0.0.0', port=port, debug=DEBUG_MODE)
     finally:
         # Detener scheduler al cerrar servidor
         if scheduler:

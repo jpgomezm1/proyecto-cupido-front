@@ -51,3 +51,5 @@ redis>=4.5.0
 rq>=1.15.0
 sentry-sdk[flask]>=1.29.0
 newrelic>=9.0.0
+bcrypt>=4.0.0
+flask-limiter>=3.0.0
