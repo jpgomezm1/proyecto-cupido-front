@@ -27,16 +27,9 @@ USE_REDIS_QUEUE = os.getenv('USE_REDIS_QUEUE', 'false').lower() == 'true'
 def get_redis_queue():
     """Obtiene la cola de Redis para capturas."""
     redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-    # SSL verification: habilitado por defecto en produccion
-    # Solo deshabilitar con REDIS_SSL_VERIFY=false para desarrollo local sin SSL
-    redis_ssl_verify = os.getenv('REDIS_SSL_VERIFY', 'true').lower() == 'true'
-
+    # Heroku Redis usa certificados auto-firmados, requiere ssl_cert_reqs=None
     if redis_url.startswith('rediss://'):
-        if redis_ssl_verify:
-            conn = redis.from_url(redis_url)
-        else:
-            # Solo para desarrollo local - NO usar en produccion
-            conn = redis.from_url(redis_url, ssl_cert_reqs=None)
+        conn = redis.from_url(redis_url, ssl_cert_reqs=None)
     else:
         conn = redis.from_url(redis_url)
     return Queue('captures', connection=conn)
