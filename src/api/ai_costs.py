@@ -381,13 +381,15 @@ def get_roi_metrics():
                 ORDER BY total_cost DESC
             """, (start_date,))
 
-            cost_by_operation = {}
+            # Return as array for frontend compatibility
+            cost_by_operation = []
             for row in db.cursor.fetchall():
-                cost_by_operation[row['usage_type']] = {
-                    'calls': row['calls'],
-                    'total_usd': round(float(row['total_cost']), 4),
-                    'avg_per_call_usd': round(float(row['avg_cost_per_call']), 6)
-                }
+                cost_by_operation.append({
+                    'usage_type': row['usage_type'],
+                    'total_calls': row['calls'],
+                    'total_cost': round(float(row['total_cost']), 4),
+                    'avg_cost_per_call': round(float(row['avg_cost_per_call']), 6)
+                })
 
             # ============================================
             # BÚSQUEDAS EXITOSAS (para calcular costo por búsqueda)
@@ -465,18 +467,16 @@ def get_roi_metrics():
                     'total_cost_usd': round(total_cost, 4),
                     'total_calls': total_calls,
                     'total_searches': total_searches,
-                    'cost_per_search_usd': round(cost_per_search, 4),
+                    'cost_per_search': round(cost_per_search, 4) if total_searches > 0 else None,
                     'cost_by_operation': cost_by_operation,
+                    'daily_average_usd': round(avg_daily_cost, 4),
                     'monthly_projection': {
-                        'month_cost_so_far_usd': round(month_cost_so_far, 4),
-                        'days_elapsed': days_elapsed,
-                        'days_remaining': days_remaining,
-                        'avg_daily_cost_usd': round(avg_daily_cost, 4),
                         'estimated_usd': round(projected_total, 2),
                         'pessimistic_usd': round(projected_pessimistic, 2),
                         'optimistic_usd': round(projected_optimistic, 2),
+                        'days_remaining': days_remaining,
                     },
-                    'comparison_vs_last_month': calculate_change(month_cost_so_far, prev_month_cost)
+                    'comparison_vs_last_period': calculate_change(month_cost_so_far, prev_month_cost)
                 }
             })
 
