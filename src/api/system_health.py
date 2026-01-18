@@ -64,11 +64,41 @@ def get_status_from_connection_time(ms: float) -> str:
     return 'critical'
 
 
+def calculate_change(current: float, previous: float) -> dict:
+    """
+    Calcula el cambio porcentual entre dos valores.
+    Retorna dirección (up/down/stable) y porcentaje de cambio.
+    """
+    if previous == 0:
+        if current == 0:
+            return {"current": current, "previous": previous, "change_percent": 0, "direction": "stable"}
+        return {"current": current, "previous": previous, "change_percent": 100, "direction": "up"}
+
+    change = ((current - previous) / previous) * 100
+    if change > 1:
+        direction = "up"
+    elif change < -1:
+        direction = "down"
+    else:
+        direction = "stable"
+
+    return {
+        "current": current,
+        "previous": previous,
+        "change_percent": round(abs(change), 1),
+        "direction": direction
+    }
+
+
 @system_health_bp.route('/overview', methods=['GET'])
 def get_overview():
-    """Get system-wide health summary."""
+    """Get system-wide health summary with temporal comparisons."""
     try:
         with DatabaseManager() as db:
+            # ============================================
+            # MÉTRICAS ACTUALES (últimas 24h)
+            # ============================================
+
             # Errors in last 24h
             db.cursor.execute("""
                 SELECT COUNT(*) as error_count
@@ -122,7 +152,64 @@ def get_overview():
             """)
             active_properties = db.cursor.fetchone()['count']
 
-            # Determine overall status
+            # ============================================
+            # MÉTRICAS DE AYER (24-48h) para comparativas
+            # ============================================
+
+            # Errors yesterday (24-48h ago)
+            db.cursor.execute("""
+                SELECT COUNT(*) as error_count
+                FROM eventos_log
+                WHERE resultado = 'Error'
+                AND fecha_evento >= NOW() - INTERVAL '48 hours'
+                AND fecha_evento < NOW() - INTERVAL '24 hours'
+            """)
+            errors_yesterday = db.cursor.fetchone()['error_count']
+
+            # AI stats yesterday (24-48h ago)
+            db.cursor.execute("""
+                SELECT
+                    COUNT(*) as total_calls,
+                    COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) as successful_calls,
+                    COALESCE(AVG(response_time_ms), 0) as avg_response_time
+                FROM ai_usage_log
+                WHERE created_at >= NOW() - INTERVAL '48 hours'
+                AND created_at < NOW() - INTERVAL '24 hours'
+            """)
+            ai_stats_yesterday = db.cursor.fetchone()
+            ai_total_yesterday = ai_stats_yesterday['total_calls'] or 0
+            ai_successful_yesterday = ai_stats_yesterday['successful_calls'] or 0
+            ai_success_rate_yesterday = (ai_successful_yesterday / ai_total_yesterday * 100) if ai_total_yesterday > 0 else 100
+            avg_response_time_yesterday = float(ai_stats_yesterday['avg_response_time'] or 0)
+
+            # Search stats yesterday (24-48h ago)
+            db.cursor.execute("""
+                SELECT COUNT(*) as total_searches
+                FROM solicitudes_mercado
+                WHERE fecha_solicitud >= NOW() - INTERVAL '48 hours'
+                AND fecha_solicitud < NOW() - INTERVAL '24 hours'
+            """)
+            searches_yesterday = db.cursor.fetchone()['total_searches']
+
+            # Bot activity yesterday (24-48h ago)
+            db.cursor.execute("""
+                SELECT
+                    COUNT(*) as total_messages,
+                    COALESCE(SUM(CASE WHEN resultado = 'Exitoso' THEN 1 ELSE 0 END), 0) as successful
+                FROM eventos_log
+                WHERE tipo_evento IN ('Mensaje_Grupo', 'Mensaje_Privado', 'Webhook_Received',
+                                      'Solicitud_Mercado', 'Propiedad_Captada')
+                AND fecha_evento >= NOW() - INTERVAL '48 hours'
+                AND fecha_evento < NOW() - INTERVAL '24 hours'
+            """)
+            bot_stats_yesterday = db.cursor.fetchone()
+            bot_total_yesterday = bot_stats_yesterday['total_messages'] or 0
+            bot_successful_yesterday = bot_stats_yesterday['successful'] or 0
+            bot_success_rate_yesterday = (bot_successful_yesterday / bot_total_yesterday * 100) if bot_total_yesterday > 0 else 100
+
+            # ============================================
+            # DETERMINAR STATUS
+            # ============================================
             db_status = 'healthy'  # If we got here, DB is connected
             ai_status = get_status_from_success_rate(ai_success_rate)
             bot_status = get_status_from_success_rate(bot_success_rate)
@@ -156,6 +243,15 @@ def get_overview():
                         'ai_service': ai_status,
                         'whatsapp_bot': bot_status,
                         'api_endpoints': endpoint_status,
+                    },
+                    # NUEVO: Comparativas temporales (hoy vs ayer)
+                    'comparisons': {
+                        'errors_24h': calculate_change(errors_24h, errors_yesterday),
+                        'ai_success_rate': calculate_change(ai_success_rate, ai_success_rate_yesterday),
+                        'avg_response_time_ms': calculate_change(avg_response_time, avg_response_time_yesterday),
+                        'bot_messages_24h': calculate_change(bot_total, bot_total_yesterday),
+                        'bot_success_rate': calculate_change(bot_success_rate, bot_success_rate_yesterday),
+                        'searches_24h': calculate_change(searches_24h, searches_yesterday),
                     }
                 }
             })
@@ -181,6 +277,7 @@ def get_overview():
                     'whatsapp_bot': 'critical',
                     'api_endpoints': 'critical',
                 },
+                'comparisons': {},
                 'error': str(e)
             }
         })
@@ -708,6 +805,159 @@ def get_bot_health():
                         'total_captures_period': total_captures,
                         'active_captures': active_captures,
                         'capture_success_rate': round(capture_success_rate, 2)
+                    }
+                }
+            })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@system_health_bp.route('/performance', methods=['GET'])
+def get_performance_metrics():
+    """
+    Get detailed performance metrics with percentiles P50/P95/P99.
+    Includes temporal comparisons and slowest endpoints identification.
+    """
+    try:
+        days = int(request.args.get('days', 7))
+        start_date, _ = get_date_range(days)
+
+        with DatabaseManager() as db:
+            # ============================================
+            # PERCENTILES GLOBALES Y POR ENDPOINT
+            # ============================================
+
+            # Percentiles by usage_type (endpoint)
+            db.cursor.execute("""
+                SELECT
+                    usage_type as endpoint,
+                    COUNT(*) as total_calls,
+                    ROUND(COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p50_ms,
+                    ROUND(COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p95_ms,
+                    ROUND(COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p99_ms,
+                    ROUND(COALESCE(AVG(response_time_ms), 0)::numeric, 0) as avg_ms,
+                    COALESCE(MIN(response_time_ms), 0) as min_ms,
+                    COALESCE(MAX(response_time_ms), 0) as max_ms,
+                    COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) as successful,
+                    COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END), 0) as failed
+                FROM ai_usage_log
+                WHERE created_at >= %s
+                  AND response_time_ms IS NOT NULL
+                GROUP BY usage_type
+                ORDER BY p95_ms DESC
+            """, (start_date,))
+
+            by_endpoint = []
+            total_p50 = 0
+            total_p95 = 0
+            total_p99 = 0
+            total_calls_with_time = 0
+
+            for row in db.cursor.fetchall():
+                total = row['total_calls'] or 1
+                successful = row['successful'] or 0
+                success_rate = round((successful / total) * 100, 2) if total > 0 else 100
+                p95 = int(row['p95_ms'])
+
+                by_endpoint.append({
+                    'endpoint': row['endpoint'],
+                    'total_calls': total,
+                    'p50_ms': int(row['p50_ms']),
+                    'p95_ms': p95,
+                    'p99_ms': int(row['p99_ms']),
+                    'avg_ms': int(row['avg_ms']),
+                    'min_ms': int(row['min_ms']),
+                    'max_ms': int(row['max_ms']),
+                    'success_rate': success_rate,
+                    'status': get_status_from_response_time(p95)
+                })
+
+                # Acumular para calcular globales ponderados
+                total_p50 += int(row['p50_ms']) * total
+                total_p95 += int(row['p95_ms']) * total
+                total_p99 += int(row['p99_ms']) * total
+                total_calls_with_time += total
+
+            # Calcular percentiles globales (promedio ponderado)
+            global_p50 = int(total_p50 / total_calls_with_time) if total_calls_with_time > 0 else 0
+            global_p95 = int(total_p95 / total_calls_with_time) if total_calls_with_time > 0 else 0
+            global_p99 = int(total_p99 / total_calls_with_time) if total_calls_with_time > 0 else 0
+
+            # ============================================
+            # ENDPOINTS MÁS LENTOS (P95 > 5000ms)
+            # ============================================
+            slowest_endpoints = [ep for ep in by_endpoint if ep['p95_ms'] > 5000]
+
+            # ============================================
+            # TENDENCIA HORARIA (últimas 24h)
+            # ============================================
+            db.cursor.execute("""
+                SELECT
+                    DATE_TRUNC('hour', created_at) as hour,
+                    ROUND(COALESCE(AVG(response_time_ms), 0)::numeric, 0) as avg_ms,
+                    ROUND(COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p95_ms,
+                    COUNT(*) as call_count
+                FROM ai_usage_log
+                WHERE created_at >= NOW() - INTERVAL '24 hours'
+                  AND response_time_ms IS NOT NULL
+                GROUP BY DATE_TRUNC('hour', created_at)
+                ORDER BY hour
+            """)
+
+            hourly_trend = []
+            for h in db.cursor.fetchall():
+                hourly_trend.append({
+                    'hour': h['hour'].isoformat() if h['hour'] else None,
+                    'avg_ms': int(h['avg_ms']),
+                    'p95_ms': int(h['p95_ms']),
+                    'calls': h['call_count']
+                })
+
+            # ============================================
+            # COMPARATIVAS: Hoy vs Ayer
+            # ============================================
+
+            # P95 de hoy (últimas 24h)
+            db.cursor.execute("""
+                SELECT
+                    ROUND(COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p95_ms,
+                    COUNT(*) as total_calls
+                FROM ai_usage_log
+                WHERE created_at >= NOW() - INTERVAL '24 hours'
+                  AND response_time_ms IS NOT NULL
+            """)
+            today_stats = db.cursor.fetchone()
+            p95_today = int(today_stats['p95_ms']) if today_stats else 0
+
+            # P95 de ayer (24-48h)
+            db.cursor.execute("""
+                SELECT
+                    ROUND(COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms), 0)::numeric, 0) as p95_ms,
+                    COUNT(*) as total_calls
+                FROM ai_usage_log
+                WHERE created_at >= NOW() - INTERVAL '48 hours'
+                  AND created_at < NOW() - INTERVAL '24 hours'
+                  AND response_time_ms IS NOT NULL
+            """)
+            yesterday_stats = db.cursor.fetchone()
+            p95_yesterday = int(yesterday_stats['p95_ms']) if yesterday_stats else 0
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'period_days': days,
+                    'global_percentiles': {
+                        'p50_ms': global_p50,
+                        'p95_ms': global_p95,
+                        'p99_ms': global_p99,
+                        'status': get_status_from_response_time(global_p95)
+                    },
+                    'by_endpoint': by_endpoint,
+                    'slowest_endpoints': slowest_endpoints,
+                    'hourly_trend': hourly_trend,
+                    'comparisons': {
+                        'p95_today_vs_yesterday': calculate_change(p95_today, p95_yesterday)
                     }
                 }
             })

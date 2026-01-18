@@ -312,3 +312,173 @@ def get_comparison():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def calculate_change(current: float, previous: float) -> dict:
+    """
+    Calcula el cambio porcentual entre dos valores.
+    """
+    if previous == 0:
+        if current == 0:
+            return {"current": current, "previous": previous, "change_percent": 0, "direction": "stable"}
+        return {"current": current, "previous": previous, "change_percent": 100, "direction": "up"}
+
+    change = ((current - previous) / previous) * 100
+    if change > 1:
+        direction = "up"
+    elif change < -1:
+        direction = "down"
+    else:
+        direction = "stable"
+
+    return {
+        "current": round(current, 4),
+        "previous": round(previous, 4),
+        "change_percent": round(abs(change), 1),
+        "direction": direction
+    }
+
+
+@ai_costs_bp.route('/ai-costs/roi', methods=['GET'])
+def get_roi_metrics():
+    """
+    Get ROI metrics: cost per search, monthly projection, breakdown by operation.
+    """
+    try:
+        days = int(request.args.get('days', 30))
+        start_date, _ = get_date_range(days)
+        now = get_bogota_now()
+
+        with DatabaseManager() as db:
+            # ============================================
+            # COSTO TOTAL DEL PERÍODO
+            # ============================================
+            db.cursor.execute("""
+                SELECT
+                    COALESCE(SUM(estimated_cost_usd), 0) as total_cost,
+                    COUNT(*) as total_calls
+                FROM ai_usage_log
+                WHERE created_at >= %s
+                  AND success = true
+            """, (start_date,))
+            totals = db.cursor.fetchone()
+            total_cost = float(totals['total_cost'])
+            total_calls = totals['total_calls']
+
+            # ============================================
+            # COSTO POR OPERACIÓN (DESGLOSE)
+            # ============================================
+            db.cursor.execute("""
+                SELECT
+                    usage_type,
+                    COUNT(*) as calls,
+                    COALESCE(SUM(estimated_cost_usd), 0) as total_cost,
+                    COALESCE(AVG(estimated_cost_usd), 0) as avg_cost_per_call
+                FROM ai_usage_log
+                WHERE created_at >= %s
+                  AND success = true
+                GROUP BY usage_type
+                ORDER BY total_cost DESC
+            """, (start_date,))
+
+            cost_by_operation = {}
+            for row in db.cursor.fetchall():
+                cost_by_operation[row['usage_type']] = {
+                    'calls': row['calls'],
+                    'total_usd': round(float(row['total_cost']), 4),
+                    'avg_per_call_usd': round(float(row['avg_cost_per_call']), 6)
+                }
+
+            # ============================================
+            # BÚSQUEDAS EXITOSAS (para calcular costo por búsqueda)
+            # ============================================
+            db.cursor.execute("""
+                SELECT COUNT(*) as total_searches
+                FROM solicitudes_mercado
+                WHERE fecha_solicitud >= %s
+            """, (start_date,))
+            total_searches = db.cursor.fetchone()['total_searches'] or 0
+
+            # Costo por búsqueda
+            cost_per_search = (total_cost / total_searches) if total_searches > 0 else 0
+
+            # ============================================
+            # PROYECCIÓN MENSUAL
+            # ============================================
+
+            # Costo diario promedio
+            db.cursor.execute("""
+                SELECT
+                    DATE(created_at) as date,
+                    COALESCE(SUM(estimated_cost_usd), 0) as daily_cost
+                FROM ai_usage_log
+                WHERE created_at >= %s
+                GROUP BY DATE(created_at)
+            """, (start_date,))
+
+            daily_costs = [float(row['daily_cost']) for row in db.cursor.fetchall()]
+            avg_daily_cost = sum(daily_costs) / len(daily_costs) if daily_costs else 0
+
+            # Días restantes del mes
+            days_in_month = 30  # Simplificación
+            current_day = now.day
+            days_remaining = days_in_month - current_day
+            days_elapsed = current_day
+
+            # Costo acumulado del mes actual
+            current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            db.cursor.execute("""
+                SELECT COALESCE(SUM(estimated_cost_usd), 0) as month_cost
+                FROM ai_usage_log
+                WHERE created_at >= %s
+            """, (current_month_start,))
+            month_cost_so_far = float(db.cursor.fetchone()['month_cost'])
+
+            # Proyecciones
+            projected_total = month_cost_so_far + (avg_daily_cost * days_remaining)
+            projected_pessimistic = month_cost_so_far + (avg_daily_cost * 1.2 * days_remaining)  # +20%
+            projected_optimistic = month_cost_so_far + (avg_daily_cost * 0.8 * days_remaining)   # -20%
+
+            # ============================================
+            # COMPARATIVA: Este mes vs mes anterior
+            # ============================================
+
+            # Mes anterior
+            if now.month == 1:
+                prev_month_start = current_month_start.replace(year=now.year - 1, month=12)
+            else:
+                prev_month_start = current_month_start.replace(month=now.month - 1)
+
+            prev_month_end = current_month_start - timedelta(seconds=1)
+
+            db.cursor.execute("""
+                SELECT COALESCE(SUM(estimated_cost_usd), 0) as cost
+                FROM ai_usage_log
+                WHERE created_at >= %s AND created_at <= %s
+            """, (prev_month_start, prev_month_end))
+            prev_month_cost = float(db.cursor.fetchone()['cost'])
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'period_days': days,
+                    'total_cost_usd': round(total_cost, 4),
+                    'total_calls': total_calls,
+                    'total_searches': total_searches,
+                    'cost_per_search_usd': round(cost_per_search, 4),
+                    'cost_by_operation': cost_by_operation,
+                    'monthly_projection': {
+                        'month_cost_so_far_usd': round(month_cost_so_far, 4),
+                        'days_elapsed': days_elapsed,
+                        'days_remaining': days_remaining,
+                        'avg_daily_cost_usd': round(avg_daily_cost, 4),
+                        'estimated_usd': round(projected_total, 2),
+                        'pessimistic_usd': round(projected_pessimistic, 2),
+                        'optimistic_usd': round(projected_optimistic, 2),
+                    },
+                    'comparison_vs_last_month': calculate_change(month_cost_so_far, prev_month_cost)
+                }
+            })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
