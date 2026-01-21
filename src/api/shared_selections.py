@@ -32,7 +32,8 @@ def create_selection():
     Body:
     {
         "conversation_id": 123,  // opcional
-        "property_ids": [1, 2, 3]
+        "property_ids": [1, 2, 3],
+        "user_id": 5  // opcional - ID del chat_user que crea el share
     }
 
     Returns:
@@ -54,6 +55,7 @@ def create_selection():
 
         property_ids = data.get('property_ids', [])
         conversation_id = data.get('conversation_id')
+        user_id = data.get('user_id')  # ID del chat_user que crea el share
 
         if not property_ids or len(property_ids) == 0:
             return jsonify({'success': False, 'error': 'Se requiere al menos una propiedad'}), 400
@@ -70,17 +72,18 @@ def create_selection():
                 property_ids INTEGER[] NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days'),
-                view_count INTEGER DEFAULT 0
+                view_count INTEGER DEFAULT 0,
+                user_id INTEGER REFERENCES chat_users(id) ON DELETE SET NULL
             )
         """)
         db.conn.commit()
 
-        # Insertar la selección
+        # Insertar la selección con user_id
         db.cursor.execute("""
-            INSERT INTO shared_property_selections (share_id, conversation_id, property_ids)
-            VALUES (%s, %s, %s)
+            INSERT INTO shared_property_selections (share_id, conversation_id, property_ids, user_id)
+            VALUES (%s, %s, %s, %s)
             RETURNING id, share_id
-        """, (share_id, conversation_id, property_ids))
+        """, (share_id, conversation_id, property_ids, user_id))
 
         result = db.cursor.fetchone()
         db.conn.commit()
@@ -117,7 +120,12 @@ def get_selection(share_id: str):
         "data": {
             "id": 1,
             "share_id": "abc123...",
-            "properties": [...]
+            "properties": [...],
+            "agent": {
+                "name": "Nombre Agente",
+                "phone": "+573001234567",
+                "whatsapp": "573001234567"
+            }
         }
     }
     """
@@ -125,12 +133,21 @@ def get_selection(share_id: str):
     try:
         db = get_db()
 
-        # Obtener la selección
+        # Obtener la selección con JOIN a chat_users para obtener teléfono del agente
         db.cursor.execute("""
-            SELECT id, share_id, conversation_id, property_ids, created_at
-            FROM shared_property_selections
-            WHERE share_id = %s
-            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            SELECT
+                s.id,
+                s.share_id,
+                s.conversation_id,
+                s.property_ids,
+                s.created_at,
+                s.user_id,
+                cu.nombre as agent_name,
+                cu.telefono as agent_phone
+            FROM shared_property_selections s
+            LEFT JOIN chat_users cu ON s.user_id = cu.id
+            WHERE s.share_id = %s
+            AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
         """, (share_id,))
 
         selection = db.cursor.fetchone()
@@ -149,6 +166,16 @@ def get_selection(share_id: str):
         # Obtener las propiedades
         property_ids = selection['property_ids']
 
+        # Construir info del agente si existe
+        agent_info = None
+        if selection.get('user_id') and selection.get('agent_phone'):
+            agent_phone = selection['agent_phone']
+            agent_info = {
+                'name': selection['agent_name'] or 'Fynder',
+                'phone': agent_phone,
+                'whatsapp': agent_phone.replace('+', '') if agent_phone else None
+            }
+
         if not property_ids:
             return jsonify({
                 'success': True,
@@ -156,7 +183,8 @@ def get_selection(share_id: str):
                     'id': selection['id'],
                     'share_id': selection['share_id'],
                     'properties': [],
-                    'created_at': selection['created_at'].isoformat() if selection['created_at'] else None
+                    'created_at': selection['created_at'].isoformat() if selection['created_at'] else None,
+                    'agent': agent_info
                 }
             }), 200
 
@@ -190,7 +218,8 @@ def get_selection(share_id: str):
                 'id': selection['id'],
                 'share_id': selection['share_id'],
                 'properties': properties,
-                'created_at': selection['created_at'].isoformat() if selection['created_at'] else None
+                'created_at': selection['created_at'].isoformat() if selection['created_at'] else None,
+                'agent': agent_info
             }
         }), 200
 

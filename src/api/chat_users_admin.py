@@ -63,6 +63,7 @@ def list_users():
                     u.id,
                     u.email,
                     u.nombre,
+                    u.telefono,
                     u.activo,
                     u.fecha_creacion,
                     u.ultimo_login,
@@ -119,6 +120,7 @@ def list_users():
                         'id': u['id'],
                         'email': u['email'],
                         'nombre': u['nombre'],
+                        'telefono': u['telefono'],
                         'activo': u['activo'],
                         'fecha_creacion': u['fecha_creacion'].isoformat() if u['fecha_creacion'] else None,
                         'ultimo_login': u['ultimo_login'].isoformat() if u['ultimo_login'] else None,
@@ -157,7 +159,8 @@ def create_user():
     {
         "email": "user@example.com",
         "nombre": "Nombre Usuario",
-        "password": "password123" (opcional, se genera automáticamente si no se envía)
+        "password": "password123" (opcional, se genera automáticamente si no se envía),
+        "telefono": "+573001234567" (opcional, formato con código de país)
     }
 
     Returns:
@@ -181,6 +184,7 @@ def create_user():
         email = data['email'].strip().lower()
         nombre = data['nombre'].strip()
         password = data.get('password', generate_password())
+        telefono = data.get('telefono', '').strip() or None
 
         # Validar email
         if '@' not in email:
@@ -200,10 +204,10 @@ def create_user():
 
             # Crear usuario con password hasheado usando pgcrypto
             db.cursor.execute("""
-                INSERT INTO chat_users (email, nombre, password_hash)
-                VALUES (%s, %s, crypt(%s, gen_salt('bf')))
-                RETURNING id, email, nombre, activo, fecha_creacion
-            """, (email, nombre, password))
+                INSERT INTO chat_users (email, nombre, password_hash, telefono)
+                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s)
+                RETURNING id, email, nombre, telefono, activo, fecha_creacion
+            """, (email, nombre, password, telefono))
 
             user = db.cursor.fetchone()
             db.conn.commit()
@@ -217,6 +221,7 @@ def create_user():
                         'id': user['id'],
                         'email': user['email'],
                         'nombre': user['nombre'],
+                        'telefono': user['telefono'],
                         'activo': user['activo'],
                         'fecha_creacion': user['fecha_creacion'].isoformat() if user['fecha_creacion'] else None
                     },
@@ -246,6 +251,7 @@ def get_user(user_id):
                     u.id,
                     u.email,
                     u.nombre,
+                    u.telefono,
                     u.activo,
                     u.fecha_creacion,
                     u.ultimo_login,
@@ -278,6 +284,7 @@ def get_user(user_id):
                     'id': user['id'],
                     'email': user['email'],
                     'nombre': user['nombre'],
+                    'telefono': user['telefono'],
                     'activo': user['activo'],
                     'fecha_creacion': user['fecha_creacion'].isoformat() if user['fecha_creacion'] else None,
                     'ultimo_login': user['ultimo_login'].isoformat() if user['ultimo_login'] else None,
@@ -305,7 +312,8 @@ def update_user(user_id):
     Body JSON:
     {
         "nombre": "Nuevo Nombre",
-        "activo": true/false
+        "activo": true/false,
+        "telefono": "+573001234567"
     }
     """
     try:
@@ -334,6 +342,10 @@ def update_user(user_id):
                 updates.append("nombre = %s")
                 params.append(data['nombre'].strip())
 
+            if 'telefono' in data:
+                updates.append("telefono = %s")
+                params.append(data['telefono'].strip() if data['telefono'] else None)
+
             if 'activo' in data:
                 updates.append("activo = %s")
                 params.append(data['activo'])
@@ -352,7 +364,7 @@ def update_user(user_id):
                 }), 400
 
             params.append(user_id)
-            query = f"UPDATE chat_users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, nombre, activo"
+            query = f"UPDATE chat_users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, nombre, telefono, activo"
 
             db.cursor.execute(query, params)
             user = db.cursor.fetchone()
@@ -366,6 +378,7 @@ def update_user(user_id):
                     'id': user['id'],
                     'email': user['email'],
                     'nombre': user['nombre'],
+                    'telefono': user['telefono'],
                     'activo': user['activo']
                 }
             })

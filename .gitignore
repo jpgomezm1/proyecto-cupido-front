@@ -208,10 +208,7 @@ yarn.lock
 # ========================================
 # UTILITY SCRIPTS (local only)
 # ========================================
+# Scripts de migración individuales (los generales SÍ se versionan)
 run_migration.py
-scripts/run_migrations.py
 scripts/run_migration_*.py
-scripts/check_migrations.py
 scripts/delete_*.py
-scripts/check_tu360_images.py
-scripts/update_tu360_images.py
