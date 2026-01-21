@@ -30,7 +30,7 @@ def get_properties():
 
     Query params:
     - status: string ('all', 'active', 'inactive') - default: 'active'
-    - limit: int (default: 500)
+    - limit: int (default: 10000)
     - offset: int (default: 0)
     - city: string
     - type: string
@@ -44,7 +44,7 @@ def get_properties():
 
         # Parámetros de query
         status = request.args.get('status', 'active')  # all, active, inactive
-        limit = int(request.args.get('limit', 500))
+        limit = int(request.args.get('limit', 10000))  # Límite alto para mostrar todas las propiedades
         offset = int(request.args.get('offset', 0))
         city = request.args.get('city')
         prop_type = request.args.get('type')
