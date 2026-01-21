@@ -43,6 +43,7 @@ from src.api.whatsapp_groups import whatsapp_groups_bp
 from src.api.dashboard import dashboard_bp
 from src.api.dependencies import dependencies_bp
 from src.api.alerts import alerts_bp
+from src.api.share_analytics import share_analytics_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -153,6 +154,7 @@ app.register_blueprint(whatsapp_groups_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(dependencies_bp)
 app.register_blueprint(alerts_bp)
+app.register_blueprint(share_analytics_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
