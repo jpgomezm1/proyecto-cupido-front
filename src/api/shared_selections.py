@@ -171,6 +171,7 @@ def get_selection(share_id: str):
         if selection.get('user_id') and selection.get('agent_phone'):
             agent_phone = selection['agent_phone']
             agent_info = {
+                'id': selection['user_id'],
                 'name': selection['agent_name'] or 'Fynder',
                 'phone': agent_phone,
                 'whatsapp': agent_phone.replace('+', '') if agent_phone else None
