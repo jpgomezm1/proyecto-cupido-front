@@ -331,7 +331,7 @@ def get_public_conversation(conversation_id):
             # Obtener conversación (incluyendo inactivas para links compartidos)
             query_conv = """
                 SELECT id, nombre, criterios_acumulados, total_mensajes,
-                       fecha_creacion, fecha_actualizacion
+                       fecha_creacion, fecha_actualizacion, user_id
                 FROM conversaciones_busqueda
                 WHERE id = %s
             """
@@ -357,7 +357,8 @@ def get_public_conversation(conversation_id):
                     'criterios_acumulados': conv_row[2] or {},
                     'total_mensajes': conv_row[3],
                     'fecha_creacion': conv_row[4].isoformat() if conv_row[4] else None,
-                    'fecha_actualizacion': conv_row[5].isoformat() if conv_row[5] else None
+                    'fecha_actualizacion': conv_row[5].isoformat() if conv_row[5] else None,
+                    'user_id': conv_row[6]
                 }
 
             # Obtener mensajes
