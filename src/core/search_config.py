@@ -806,26 +806,36 @@ def calcular_rango_area(area_min: int = None, area_max: int = None) -> Tuple[Opt
 
 
 # =============================================================================
-# TOLERANCIA DE HABITACIONES - v2.2
+# TOLERANCIA DE HABITACIONES - v2.3
 # =============================================================================
 
 TOLERANCIA_HABITACIONES = 1  # ±1 habitación de tolerancia en filtro SQL
 
 
-def calcular_rango_habitaciones(hab_min: int = None, hab_max: int = None) -> Tuple[Optional[int], Optional[int]]:
+def calcular_rango_habitaciones(
+    hab_min: int = None,
+    hab_max: int = None,
+    flexibilidad: str = 'normal'
+) -> Tuple[Optional[int], Optional[int]]:
     """
-    Calcula el rango de habitaciones con tolerancia ±1 para el filtro SQL.
+    Calcula el rango de habitaciones con tolerancia para el filtro SQL.
 
-    Esto permite que propiedades "cercanas" pasen el filtro y sean evaluadas
-    por el scoring, donde se penalizarán o bonificarán según qué tan cerca
-    estén del valor ideal.
+    v2.3: Soporta flexibilidad 'estricto' para casos donde el usuario
+    dice "hasta X habitaciones" o "máximo X habitaciones".
 
-    v2.2: Si el usuario dice "3 habitaciones", el filtro acepta 2-4,
-    pero el scoring favorecerá las de exactamente 3.
+    Cuando flexibilidad='estricto':
+    - NO aplicar tolerancia hacia arriba en hab_max
+    - Solo mostrar propiedades con ≤X habitaciones
+
+    Cuando flexibilidad='normal':
+    - Permite que propiedades "cercanas" pasen el filtro y sean evaluadas
+      por el scoring, donde se penalizarán o bonificarán según qué tan cerca
+      estén del valor ideal.
 
     Args:
         hab_min: Habitaciones mínimas especificadas
         hab_max: Habitaciones máximas especificadas
+        flexibilidad: 'estricto' o 'normal' (default)
 
     Returns:
         Tupla (hab_min_filtro, hab_max_filtro) para usar en SQL
@@ -834,14 +844,22 @@ def calcular_rango_habitaciones(hab_min: int = None, hab_max: int = None) -> Tup
     hab_max_filtro = None
 
     if hab_min:
-        # -1 del mínimo (pero nunca menos de 1)
-        hab_min_filtro = max(1, hab_min - TOLERANCIA_HABITACIONES)
+        if flexibilidad == 'estricto':
+            # Sin tolerancia hacia abajo
+            hab_min_filtro = hab_min
+        else:
+            # -1 del mínimo (pero nunca menos de 1)
+            hab_min_filtro = max(1, hab_min - TOLERANCIA_HABITACIONES)
 
     if hab_max:
-        # +1 del máximo
-        hab_max_filtro = hab_max + TOLERANCIA_HABITACIONES
-    elif hab_min:
-        # Si solo especificó mínimo, poner un máximo razonable (+2)
+        if flexibilidad == 'estricto':
+            # Sin tolerancia hacia arriba - respeta el máximo exacto
+            hab_max_filtro = hab_max
+        else:
+            # +1 del máximo
+            hab_max_filtro = hab_max + TOLERANCIA_HABITACIONES
+    elif hab_min and flexibilidad != 'estricto':
+        # Si solo especificó mínimo y no es estricto, poner un máximo razonable (+2)
         hab_max_filtro = hab_min + TOLERANCIA_HABITACIONES + 1
 
     return hab_min_filtro, hab_max_filtro
@@ -1001,6 +1019,16 @@ SINONIMOS_COLOMBIANOS = {
     'terraza': 'terraza',
     'estudio': 'estudio',
 }
+
+# =============================================================================
+# UMBRAL DE CALIDAD MÍNIMA - v2.3
+# =============================================================================
+
+# Umbral mínimo de score para mostrar resultados
+# Resultados con score < MIN_SCORE_PARA_MOSTRAR se consideran "no encontrados"
+# porque están muy alejados de los criterios del usuario
+MIN_SCORE_PARA_MOSTRAR = 25
+
 
 # Amenidades de alto valor por categoría
 AMENIDADES_SEGURIDAD = [

@@ -43,7 +43,7 @@ from src.core.search_config import (
     get_tolerancia_precio,
     calcular_rango_precio,
     calcular_rango_area,  # v2.2: Tolerancia de área -5%/+20%
-    calcular_rango_habitaciones,  # v2.2: Tolerancia de habitaciones ±1
+    calcular_rango_habitaciones,  # v2.3: Tolerancia de habitaciones con flexibilidad
     detectar_perfil_comprador,
     get_zonas_expandidas,
     get_ciudad_de_zona,
@@ -54,6 +54,7 @@ from src.core.search_config import (
     AMENIDADES_FAMILIA,
     AMENIDADES_LUJO,
     AMENIDADES_ACCESIBILIDAD,
+    MIN_SCORE_PARA_MOSTRAR,  # v2.3: Umbral de calidad mínima
     # v2.1: Nuevas funciones de normalización
     ZONA_CANONICA,
     LANDMARKS_A_ZONAS,
@@ -201,10 +202,18 @@ Debes extraer y estructurar la siguiente información cuando esté disponible:
 - tipo_propiedad: Tipo (Apartamento, Casa, Penthouse, Duplex, Local, Oficina)
 - precio_min: Precio mínimo en COP (número). Si no se menciona explícitamente, NO incluir.
 - precio_max: Precio máximo en COP (número). Este es el presupuesto del cliente.
-- habitaciones_min: Mínimo de habitaciones
-- habitaciones_max: Máximo de habitaciones (si dice "2 o 3" entonces min=2, max=3)
+- habitaciones_min: Mínimo de habitaciones (solo si el usuario especifica un mínimo)
+- habitaciones_max: Máximo de habitaciones
+  * "2 o 3 habitaciones" → habitaciones_min=2, habitaciones_max=3
+  * "hasta 2 habitaciones" → habitaciones_max=2 (SIN habitaciones_min)
+  * "máximo 3 alcobas" → habitaciones_max=3 (SIN habitaciones_min)
+  * "mínimo 2 habitaciones" → habitaciones_min=2 (SIN habitaciones_max)
 - banos_min: Mínimo de baños
 - banos_max: Máximo de baños (si dice "máximo 2 baños" entonces banos_max=2)
+- tipo_propiedad: Tipo de propiedad. IMPORTANTE: Cuando el usuario menciona múltiples tipos con "o", extraer como LISTA:
+  * "Apartamento en Laureles" → "Apartamento"
+  * "Duplex o apartaestudio" → ["Duplex", "Apartaestudio"]
+  * "Casa o apartamento" → ["Casa", "Apartamento"]
 - area_min: Área mínima en m²
 - area_max: Área máxima en m²
 - piso: Número de piso específico (1 para primer piso)
@@ -322,7 +331,20 @@ Responde SOLO con el JSON de criterios."""
 
             criteria = json.loads(response_text)
 
-            # ===== ENRIQUECIMIENTO POST-EXTRACCIÓN v2.1 =====
+            # ===== ENRIQUECIMIENTO POST-EXTRACCIÓN v2.3 =====
+
+            # 0.0 v2.3: Asegurar que tipo_propiedad maneje patrones "X o Y"
+            if criteria.get('tipo_propiedad'):
+                tipo = criteria['tipo_propiedad']
+                if isinstance(tipo, str):
+                    # Si contiene " o ", dividir en lista
+                    if ' o ' in tipo.lower():
+                        tipos = [t.strip().title() for t in re.split(r'\s+o\s+', tipo, flags=re.IGNORECASE)]
+                        criteria['tipo_propiedad'] = tipos
+                    # Si contiene coma, dividir en lista
+                    elif ',' in tipo:
+                        tipos = [t.strip().title() for t in tipo.split(',')]
+                        criteria['tipo_propiedad'] = tipos
 
             # 0. Detectar flexibilidad de precio PRIMERO (afecta cálculo de rango)
             if not criteria.get('flexibilidad_precio'):
@@ -331,6 +353,19 @@ Responde SOLO con el JSON de criterios."""
                     criteria['flexibilidad_precio'] = 'estricto'
                 else:
                     criteria['flexibilidad_precio'] = 'normal'
+
+            # 0.5 v2.3: Detectar flexibilidad de habitaciones
+            # "hasta 2 habitaciones", "máximo 3 alcobas" → estricto (no mostrar más)
+            if not criteria.get('flexibilidad_habitaciones'):
+                query_lower = query.lower()
+                # Patrones estrictos: "hasta X hab", "maximo X hab", "no más de X"
+                if re.search(r'(?:hasta|máximo|maximo|no\s+más\s+de|no\s+mas\s+de|como\s+máximo|como\s+maximo)\s+\d+\s*(?:habitacion|alcoba|cuarto|hab)', query_lower):
+                    criteria['flexibilidad_habitaciones'] = 'estricto'
+                # Si solo especifica max sin min, es estricto
+                elif criteria.get('habitaciones_max') and not criteria.get('habitaciones_min'):
+                    criteria['flexibilidad_habitaciones'] = 'estricto'
+                else:
+                    criteria['flexibilidad_habitaciones'] = 'normal'
 
             # 1. Calcular rango de precio implícito si solo hay precio_max
             if criteria.get('precio_max') and not criteria.get('precio_min'):
@@ -353,13 +388,15 @@ Responde SOLO con el JSON de criterios."""
                 if area_max_ajustado:
                     criteria['area_max_ajustado'] = area_max_ajustado
 
-            # 1.6 v2.2: Calcular rango de habitaciones con tolerancia ±1
+            # 1.6 v2.3: Calcular rango de habitaciones con tolerancia ±1
             # Permite que propiedades "cercanas" pasen el filtro SQL
             # y sean evaluadas por el scoring
+            # EXCEPCIÓN: Si flexibilidad='estricto', respeta el máximo exacto
             if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
                 hab_min_filtro, hab_max_filtro = calcular_rango_habitaciones(
                     criteria.get('habitaciones_min'),
-                    criteria.get('habitaciones_max')
+                    criteria.get('habitaciones_max'),
+                    flexibilidad=criteria.get('flexibilidad_habitaciones', 'normal')
                 )
                 if hab_min_filtro:
                     criteria['habitaciones_min_filtro'] = hab_min_filtro
@@ -1223,6 +1260,122 @@ Responde SOLO con el JSON de criterios."""
 
         return "\n".join(lines)
 
+    def _generate_quality_suggestions(self, criteria: Dict[str, Any], mejores_resultados: List[Dict]) -> List[str]:
+        """
+        Genera sugerencias cuando los resultados no cumplen el umbral de calidad
+        v2.3: Nuevas sugerencias basadas en comparación con resultados encontrados
+
+        Args:
+            criteria: Criterios de búsqueda aplicados
+            mejores_resultados: Los mejores 3 resultados (aunque con score bajo)
+
+        Returns:
+            Lista de sugerencias para el usuario
+        """
+        sugerencias = []
+
+        if mejores_resultados:
+            mejor = mejores_resultados[0]
+
+            # Comparar habitaciones
+            if criteria.get('habitaciones_max'):
+                hab_resultado = mejor.get('habitaciones', 0)
+                if isinstance(hab_resultado, str):
+                    try:
+                        hab_resultado = int(hab_resultado)
+                    except:
+                        hab_resultado = 0
+                if hab_resultado > criteria['habitaciones_max']:
+                    sugerencias.append(f"Ampliar a {hab_resultado} habitaciones (encontramos opciones)")
+
+            # Comparar ubicación
+            if criteria.get('ubicaciones'):
+                zona_resultado = mejor.get('zona', '')
+                if zona_resultado and not any(ub.lower() in zona_resultado.lower() for ub in criteria['ubicaciones']):
+                    sugerencias.append(f"Considerar zona {zona_resultado}")
+
+            # Comparar precio
+            if criteria.get('precio_max'):
+                precio_resultado = mejor.get('precio', 0)
+                if isinstance(precio_resultado, str):
+                    try:
+                        precio_resultado = float(precio_resultado.replace(',', '').replace('$', ''))
+                    except:
+                        precio_resultado = 0
+                if precio_resultado > criteria['precio_max']:
+                    diferencia = ((precio_resultado / criteria['precio_max']) - 1) * 100
+                    if diferencia <= 20:
+                        sugerencias.append(f"Aumentar presupuesto un {diferencia:.0f}% (${precio_resultado/1_000_000:.0f}M)")
+
+        # Sugerencias genéricas
+        if criteria.get('ubicaciones') and len(criteria['ubicaciones']) == 1:
+            zonas_expandidas = criteria.get('zonas_expandidas', [])
+            otras_zonas = [z for z in zonas_expandidas if z not in criteria['ubicaciones']]
+            if otras_zonas:
+                sugerencias.append(f"Ampliar a zonas similares: {', '.join(otras_zonas[:2])}")
+
+        if criteria.get('precio_max') and len(sugerencias) < 3:
+            precio_sugerido = int(criteria['precio_max'] * 1.15)
+            if not any('presupuesto' in s.lower() for s in sugerencias):
+                sugerencias.append(f"Aumentar presupuesto a ${precio_sugerido/1_000_000:.0f}M")
+
+        if criteria.get('amenidades_requeridas') and len(criteria['amenidades_requeridas']) > 2:
+            sugerencias.append("Reducir amenidades requeridas")
+
+        return sugerencias[:3]
+
+    def _format_quality_no_results_message(self, criteria: Dict[str, Any], mejores_resultados: List[Dict], mejor_score: int) -> str:
+        """
+        Formatea el mensaje cuando hay resultados pero con score muy bajo
+        v2.3: Mensaje específico para baja calidad de coincidencia
+
+        Args:
+            criteria: Criterios aplicados
+            mejores_resultados: Los mejores resultados encontrados
+            mejor_score: Score del mejor resultado
+
+        Returns:
+            Mensaje formateado para WhatsApp
+        """
+        lines = []
+        lines.append("No encontramos propiedades que coincidan bien con tus criterios")
+        lines.append("")
+
+        # Mostrar qué se buscó
+        lines.append("Criterios aplicados:")
+        if criteria.get('ubicaciones'):
+            lines.append(f"  - Zona: {', '.join(criteria['ubicaciones'])}")
+        if criteria.get('tipo_propiedad'):
+            tipo = criteria['tipo_propiedad']
+            if isinstance(tipo, list):
+                tipo = ' o '.join(tipo)
+            lines.append(f"  - Tipo: {tipo}")
+        if criteria.get('precio_max'):
+            precio_min = criteria.get('precio_min_implicito', 0)
+            lines.append(f"  - Precio: ${precio_min/1_000_000:.0f}M - ${criteria['precio_max']/1_000_000:.0f}M")
+        if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
+            hab_min = criteria.get('habitaciones_min', '')
+            hab_max = criteria.get('habitaciones_max', '')
+            if hab_min and hab_max:
+                lines.append(f"  - Habitaciones: {hab_min}-{hab_max}")
+            elif hab_max:
+                lines.append(f"  - Habitaciones: hasta {hab_max}")
+            else:
+                lines.append(f"  - Habitaciones: {hab_min}+")
+
+        # Sugerencias
+        sugerencias = self._generate_quality_suggestions(criteria, mejores_resultados)
+        if sugerencias:
+            lines.append("")
+            lines.append("Sugerencias para encontrar opciones:")
+            for i, sug in enumerate(sugerencias[:3], 1):
+                lines.append(f"  {i}. {sug}")
+
+        lines.append("")
+        lines.append("Responde con nuevos criterios o escribe 'ampliar' para buscar con criterios más flexibles.")
+
+        return "\n".join(lines)
+
     def search(self, query: str, limit: int = 10, sender: str = None,
                previous_criteria: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -1376,6 +1529,35 @@ Responde SOLO con el JSON de criterios."""
             top_scores = [{'id': r.get('id'), 'score': r.get('match_score', 0)} for r in results[:5]]
             search_log.log_ranking(top_scores, rank_elapsed)
 
+            # v2.3: Filtrar por umbral de calidad mínima
+            # Si los mejores resultados tienen score muy bajo, es mejor decir "no encontrado"
+            mejor_score = results[0].get('match_score', 0) if results else 0
+
+            if mejor_score < MIN_SCORE_PARA_MOSTRAR:
+                print(f"⚠️  Mejor score ({mejor_score}) bajo umbral mínimo ({MIN_SCORE_PARA_MOSTRAR})")
+                total_elapsed = (time.time() - total_start) * 1000
+                search_log.log_results(len(results), 0, total_elapsed)
+
+                return {
+                    'success': True,
+                    'results': [],
+                    'total_found': 0,
+                    'search_type': 'sin_resultados_calidad',
+                    'no_results_reason': 'Las propiedades encontradas no coinciden suficientemente con los criterios',
+                    'mejor_score_encontrado': mejor_score,
+                    'criterios_aplicados': {
+                        'ubicaciones': criteria.get('ubicaciones', []),
+                        'tipo': criteria.get('tipo_propiedad', 'No especificado'),
+                        'precio_rango': f"${criteria.get('precio_min_implicito', 0)/1_000_000:.0f}M - ${criteria.get('precio_max', 0)/1_000_000:.0f}M" if criteria.get('precio_max') else 'No especificado',
+                        'habitaciones': f"{criteria.get('habitaciones_min', '?')}-{criteria.get('habitaciones_max', '?')}",
+                    },
+                    'sugerencias': self._generate_quality_suggestions(criteria, results[:3]),
+                    'mensaje_usuario': self._format_quality_no_results_message(criteria, results[:3], mejor_score),
+                    'criteria': criteria,
+                    'search_id': search_id,
+                    'elapsed_ms': total_elapsed
+                }
+
         # Log de resultados finales
         total_elapsed = (time.time() - total_start) * 1000
         search_log.log_results(len(results), min(len(results), limit), total_elapsed)
@@ -1414,7 +1596,7 @@ Responde SOLO con el JSON de criterios."""
         criteria = search_response.get('criteria', {})
 
         # Manejar respuesta de sin resultados
-        if search_response.get('search_type') == 'sin_resultados':
+        if search_response.get('search_type') in ['sin_resultados', 'sin_resultados_calidad']:
             return search_response.get('mensaje_usuario', 'No se encontraron propiedades.')
 
         if not results:
