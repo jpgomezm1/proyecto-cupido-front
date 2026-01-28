@@ -62,6 +62,15 @@ from src.core.search_config import (
     normalizar_zona,
     procesar_ubicacion_relativa,
     inferir_zona_de_direccion,
+    # v2.4: Variaciones de zona para SQL
+    get_variaciones_zona,
+)
+
+# v2.4: Importar funciones de prioridad
+from src.core.search_state import (
+    get_priority_weight,
+    is_hard_filter,
+    PRIORITY_WEIGHTS,
 )
 
 # Importar búsqueda vectorial (opcional)
@@ -794,21 +803,37 @@ Responde SOLO con el JSON de criterios."""
                 params['tipo_propiedad'] = f"%{tipos}%"
 
         # ========== FILTRO DE UBICACIÓN ESCALONADO ==========
+        # v2.4: Ahora usa variaciones de zona para encontrar más propiedades
 
         ubicaciones_originales = criteria.get('ubicaciones', [])
 
         if ubicaciones_originales:
             if ubicacion_level == 0:
-                # NIVEL 0: Solo zonas exactas (búsqueda estricta)
+                # NIVEL 0: Zonas con TODAS sus variaciones
+                # Ejemplo: "El Poblado" busca también "Santa María Poblado", "Provenza", etc.
                 zona_conditions = []
-                for i, ubicacion in enumerate(ubicaciones_originales):
-                    # Solo buscar en zona y ciudad, NO en titulo/direccion
-                    zona_conditions.append(f"""(
-                        zona ILIKE %(ubicacion_{i})s OR
-                        ciudad ILIKE %(ubicacion_{i})s
-                    )""")
-                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-                conditions.append(f"({' OR '.join(zona_conditions)})")
+                param_idx = 0
+
+                for ubicacion in ubicaciones_originales:
+                    # Obtener todas las variaciones de esta zona
+                    variaciones = get_variaciones_zona(ubicacion)
+
+                    # Crear condición OR para todas las variaciones de esta ubicación
+                    variacion_conditions = []
+                    for var in variaciones:
+                        variacion_conditions.append(f"""(
+                            zona ILIKE %(ubicacion_{param_idx})s OR
+                            ciudad ILIKE %(ubicacion_{param_idx})s
+                        )""")
+                        params[f'ubicacion_{param_idx}'] = f'%{var}%'
+                        param_idx += 1
+
+                    # Agrupar todas las variaciones de esta ubicación
+                    if variacion_conditions:
+                        zona_conditions.append(f"({' OR '.join(variacion_conditions)})")
+
+                if zona_conditions:
+                    conditions.append(f"({' OR '.join(zona_conditions)})")
 
             elif ubicacion_level == 1:
                 # NIVEL 1: Buscar por ciudad (ampliando desde zonas específicas)
@@ -905,7 +930,7 @@ Responde SOLO con el JSON de criterios."""
     def _rank_results(self, results: List[Dict], criteria: Dict[str, Any]) -> List[Dict]:
         """
         Rankea los resultados según qué tan bien coinciden con los criterios
-        MEJORADO v2.0: Scoring por perfil de comprador y explicabilidad
+        MEJORADO v2.4: Scoring con pesos de prioridad dinámicos
 
         Args:
             results: Lista de propiedades encontradas
@@ -918,6 +943,17 @@ Responde SOLO con el JSON de criterios."""
         pesos_perfil = get_pesos_perfil(perfil_comprador)
         amenidades_preferidas = get_amenidades_preferidas(perfil_comprador)
 
+        # v2.4: Obtener pesos de prioridad (si el usuario seleccionó una)
+        # Si no hay prioridad seleccionada, usa pesos balanceados
+        peso_zona = get_priority_weight(criteria, 'zona')
+        peso_precio = get_priority_weight(criteria, 'precio')
+        peso_habitaciones = get_priority_weight(criteria, 'habitaciones')
+
+        # Verificar si hay filtros duros (criterios que no se pueden relajar)
+        zona_es_dura = is_hard_filter(criteria, 'zona')
+        precio_es_duro = is_hard_filter(criteria, 'precio')
+        habitaciones_es_duro = is_hard_filter(criteria, 'habitaciones')
+
         for result in results:
             score = 0
             reasons = []
@@ -928,9 +964,9 @@ Responde SOLO con el JSON de criterios."""
                 'amenidades': 'no_evaluado'
             }
 
-            # ===== SCORING POR PERFIL DE COMPRADOR v2.0 =====
+            # ===== SCORING CON PESOS DE PRIORIDAD v2.4 =====
 
-            # 1. PRECIO - Evaluación detallada
+            # 1. PRECIO - Peso dinámico según prioridad
             precio = result.get('precio', 0)
             if isinstance(precio, str):
                 try:
@@ -945,27 +981,27 @@ Responde SOLO con el JSON de criterios."""
                 # Calcular qué tan bien encaja el precio
                 if precio_min <= precio <= precio_max:
                     # Precio en rango ideal
-                    rango = precio_max - precio_min if precio_min else precio_max
-                    # Mejor si está en el 70-90% del presupuesto (ni muy barato ni muy caro)
                     ratio = precio / precio_max
                     if 0.70 <= ratio <= 0.90:
-                        score += 15
+                        score += peso_precio  # Usa peso dinámico
                         match_details['precio'] = 'ideal'
                         reasons.append(f"Precio ideal ({ratio*100:.0f}% del presupuesto)")
                     elif ratio <= 0.70:
-                        score += 10
+                        score += int(peso_precio * 0.67)  # 67% del peso
                         match_details['precio'] = 'bajo'
                         reasons.append("Precio bajo el presupuesto")
                     else:
-                        score += 12
+                        score += int(peso_precio * 0.80)  # 80% del peso
                         match_details['precio'] = 'limite'
                         reasons.append("Precio cerca del límite")
                 elif precio > precio_max:
-                    # Penalizar propiedades fuera del rango (no deberían llegar aquí con filtros duros)
-                    score -= 20
+                    # Penalizar propiedades fuera del rango
+                    # Si precio es filtro duro, penalización severa
+                    penalizacion = -50 if precio_es_duro else -20
+                    score += penalizacion
                     match_details['precio'] = 'excede'
 
-            # 2. UBICACIÓN - Coincidencia exacta vs zona expandida
+            # 2. UBICACIÓN - Coincidencia exacta vs zona expandida (peso dinámico v2.4)
             if criteria.get('ubicaciones'):
                 zona = (result.get('zona') or '').lower()
                 ciudad = (result.get('ciudad') or '').lower()
@@ -976,7 +1012,7 @@ Responde SOLO con el JSON de criterios."""
                 for ubicacion in criteria['ubicaciones']:
                     ub_lower = ubicacion.lower()
                     if ub_lower in zona or ub_lower in titulo:
-                        score += 15
+                        score += peso_zona  # Peso dinámico según prioridad
                         match_details['ubicacion'] = 'exacta'
                         reasons.append(f"Ubicación exacta: {result.get('zona', ubicacion)}")
                         ubicacion_match = True
@@ -986,13 +1022,17 @@ Responde SOLO con el JSON de criterios."""
                 if not ubicacion_match and criteria.get('zonas_expandidas'):
                     for zona_exp in criteria['zonas_expandidas']:
                         if zona_exp.lower() in zona or zona_exp.lower() in titulo:
-                            score += 8
+                            score += int(peso_zona * 0.53)  # ~53% del peso para zona cercana
                             match_details['ubicacion'] = 'cercana'
                             reasons.append(f"Zona cercana: {result.get('zona')}")
                             break
 
-            # 3. HABITACIONES - v2.2: Scoring mejorado con más peso y diferenciación
-            # Este es un criterio IMPORTANTE - hasta 18 puntos posibles
+                # Si zona es filtro duro y no hubo match, penalizar severamente
+                if not ubicacion_match and zona_es_dura:
+                    score -= 40
+                    match_details['ubicacion'] = 'no_coincide'
+
+            # 3. HABITACIONES - v2.4: Scoring con peso dinámico según prioridad
             if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
                 hab = result.get('habitaciones', 0)
                 if not isinstance(hab, (int, float)):
@@ -1019,29 +1059,40 @@ Responde SOLO con el JSON de criterios."""
                 if hab_min_ideal <= hab <= hab_max_ideal:
                     # CASO 1: Dentro del rango exacto solicitado
                     if diferencia == 0 or (hab == hab_min_ideal or hab == hab_max_ideal):
-                        score += 18  # Match perfecto
+                        score += peso_habitaciones  # Match perfecto - peso dinámico
                         match_details['habitaciones'] = 'perfecto'
                         reasons.append(f"✓ {hab} hab (exacto)")
                     else:
-                        score += 14  # Dentro del rango
+                        score += int(peso_habitaciones * 0.78)  # ~78% para dentro del rango
                         match_details['habitaciones'] = 'rango'
                         reasons.append(f"{hab} hab")
                 elif diferencia <= 1:
                     # CASO 2: A ±1 del rango (cercano pero no exacto)
-                    score += 8
-                    match_details['habitaciones'] = 'cercano'
+                    # Si habitaciones es filtro duro, no dar puntos por estar cerca
+                    if habitaciones_es_duro:
+                        score -= 20  # Penalizar si es filtro duro
+                        match_details['habitaciones'] = 'fuera_rango'
+                    else:
+                        score += int(peso_habitaciones * 0.44)  # ~44% para cercano
+                        match_details['habitaciones'] = 'cercano'
                     if hab < hab_min_ideal:
                         reasons.append(f"{hab} hab (1 menos)")
                     else:
                         reasons.append(f"{hab} hab (1 más)")
                 elif hab > hab_max_ideal:
                     # CASO 3: Más habitaciones de las pedidas (+2 o más)
-                    score += 2  # Pequeño bonus, más habitaciones puede ser aceptable
-                    match_details['habitaciones'] = 'excede'
+                    if habitaciones_es_duro:
+                        score -= 30  # Penalización severa si es filtro duro
+                        match_details['habitaciones'] = 'excede_duro'
+                    else:
+                        score += int(peso_habitaciones * 0.11)  # Pequeño bonus
+                        match_details['habitaciones'] = 'excede'
                     reasons.append(f"{hab} hab (+{int(hab - hab_max_ideal)})")
                 else:
                     # CASO 4: Menos habitaciones de las pedidas (-2 o más)
-                    score -= 8  # Penalización significativa
+                    # Penalización más severa si es filtro duro
+                    penalizacion = -40 if habitaciones_es_duro else -15
+                    score += penalizacion
                     match_details['habitaciones'] = 'insuficiente'
                     reasons.append(f"⚠ {hab} hab ({int(hab - hab_min_ideal)})")
 

@@ -1049,3 +1049,184 @@ AMENIDADES_LUJO = [
 AMENIDADES_ACCESIBILIDAD = [
     'ascensor', 'rampa', 'primer piso', 'acceso discapacitados'
 ]
+
+
+# =============================================================================
+# VARIACIONES DE ZONA - v2.4
+# =============================================================================
+# Diccionario inverso: zona canónica → todas sus variaciones
+# Esto permite buscar "El Poblado" y encontrar propiedades guardadas como
+# "Santa María Poblado", "Altos del Poblado", etc.
+
+def build_variaciones_zona() -> Dict[str, List[str]]:
+    """
+    Construye diccionario inverso de ZONA_CANONICA.
+    Para cada zona canónica, lista todas las variaciones que mapean a ella.
+
+    También incluye variaciones manuales adicionales que pueden aparecer
+    en la base de datos pero no están en ZONA_CANONICA.
+
+    Returns:
+        Dict con zona canónica como clave y lista de variaciones como valor
+    """
+    variaciones = {}
+
+    # Paso 1: Invertir ZONA_CANONICA
+    for variacion, canonica in ZONA_CANONICA.items():
+        if canonica not in variaciones:
+            variaciones[canonica] = []
+        if variacion not in variaciones[canonica]:
+            variaciones[canonica].append(variacion)
+
+    # Paso 2: Agregar variaciones manuales adicionales
+    # Estas son variaciones que pueden aparecer en la BD pero no están en el mapeo
+    VARIACIONES_MANUALES = {
+        'El Poblado': [
+            'santa maria', 'santa maría', 'provenza', 'altos del poblado',
+            'la concha', 'los gonzalez', 'los gonzález', 'las lomas',
+            'el diamante', 'el tesoro', 'san lucas', 'los balsos',
+            'santa maria de los angeles', 'santa maría de los ángeles',
+            'poblado i', 'poblado ii', 'el campestre', 'patio bonito',
+            'alejandria', 'alejandría', 'la aguacatala', 'aguacatala',
+            'villa carlota', 'los naranjos poblado'
+        ],
+        'Laureles': [
+            'segundo parque', 'primer parque', 'tercer parque',
+            'comuna 11', 'laureles - estadio', 'san joaquin laureles',
+            'lorena', 'la castellana laureles', 'bolivariana laureles'
+        ],
+        'Estadio': [
+            'estadio - laureles', 'cerca al estadio', 'suramericana estadio'
+        ],
+        'Belén': [
+            'belen', 'loma de los bernal', 'fatima', 'fátima',
+            'san bernardo', 'alameda belen', 'rodeo alto', 'la mota',
+            'rincon de belen', 'rincón de belén', 'los alpes',
+            'altavista belen', 'nueva villa de aburra', 'nueva villa de aburrá'
+        ],
+        'Envigado': [
+            'zuñiga', 'zúñiga', 'la paz', 'el portal', 'otro lado',
+            'señorial', 'alcala', 'alcalá', 'el dorado', 'las antillas',
+            'la cuenca', 'el trianon', 'el trianón', 'uribe angel',
+            'uribe ángel', 'jardines envigado', 'la frontera',
+            'el esmeraldal', 'zona centro envigado', 'las vegas envigado'
+        ],
+        'Loma del Escobero': [
+            'escobero', 'el escobero', 'alto del escobero',
+            'loma escobero', 'vereda el escobero'
+        ],
+        'Las Palmas': [
+            'alto de las palmas', 'variante las palmas',
+            'palmas', 'sector las palmas', 'via las palmas', 'vía las palmas'
+        ],
+        'Ciudad del Río': [
+            'ciudad del rio', 'barrio colombia', 'cd del rio',
+            'parque lineal', 'villa carlota ciudad del rio'
+        ],
+        'Sabaneta': [
+            'aves maria', 'aves maría', 'mayorca', 'la doctora',
+            'calle larga', 'san jose sabaneta', 'san josé sabaneta',
+            'asdesillas', 'las lomitas', 'pan de azucar', 'pan de azúcar',
+            'centro sabaneta', 'sector la doctora'
+        ],
+        'Itagüí': [
+            'itagui', 'ditaires', 'santa maria itagui', 'santa maría itagüí',
+            'pilsen', 'los naranjos itagui', 'los naranjos itagüí',
+            'centro itagui', 'centro itagüí', 'la gloria itagui'
+        ],
+        'Bello': [
+            'niquia', 'niquía', 'cabanas', 'cabañas', 'paris bello',
+            'zamora', 'centro bello', 'la cumbre bello',
+            'guasimalito', 'tierra buena'
+        ],
+        'Rionegro': [
+            'llanogrande', 'llano grande', 'san antonio de pereira',
+            'pontezuela', 'barro blanco', 'el porvenir rionegro',
+            'centro rionegro', 'galicia rionegro'
+        ],
+        'La Estrella': [
+            'pueblo viejo', 'centro la estrella', 'la tablaza',
+            'la raya', 'ancón'
+        ],
+        'Conquistadores': [
+            'conquistadores laureles', 'sector conquistadores'
+        ],
+        'Floresta': [
+            'la floresta', 'floresta laureles', 'sector floresta'
+        ],
+        'Calasanz': [
+            'santa monica', 'santa mónica', 'calasanz parte alta',
+            'calasanz parte baja'
+        ],
+        'Castropol': [
+            'castropol poblado', 'sector castropol'
+        ],
+        'Lalinde': [
+            'lalinde poblado', 'sector lalinde'
+        ],
+        'Manila': [
+            'manila poblado', 'sector manila'
+        ],
+        'Guayabal': [
+            'trinidad', 'guayabal sur', 'campo amor'
+        ],
+        'Suramericana': [
+            'suramérica', 'suramerica', 'portal ditaires'
+        ],
+    }
+
+    for canonica, vars_manuales in VARIACIONES_MANUALES.items():
+        if canonica not in variaciones:
+            variaciones[canonica] = []
+        for v in vars_manuales:
+            v_lower = v.lower()
+            if v_lower not in [x.lower() for x in variaciones[canonica]]:
+                variaciones[canonica].append(v)
+
+    return variaciones
+
+
+# Construir el diccionario al cargar el módulo
+VARIACIONES_ZONA = build_variaciones_zona()
+
+
+def get_variaciones_zona(zona: str) -> List[str]:
+    """
+    Obtiene todas las variaciones de una zona para búsqueda SQL.
+
+    Incluye:
+    - La zona original
+    - La zona normalizada (canónica)
+    - Todas las variaciones conocidas
+
+    Args:
+        zona: Nombre de zona (puede ser canónica o variación)
+
+    Returns:
+        Lista de todas las variaciones para buscar en SQL
+    """
+    if not zona:
+        return []
+
+    # Primero normalizar la zona
+    zona_canonica = normalizar_zona(zona)
+
+    # Obtener variaciones del diccionario
+    variaciones = set()
+
+    # Agregar variaciones de la zona canónica
+    if zona_canonica in VARIACIONES_ZONA:
+        variaciones.update(VARIACIONES_ZONA[zona_canonica])
+
+    # También buscar si la zona original es clave en VARIACIONES_ZONA
+    zona_title = zona.title()
+    if zona_title in VARIACIONES_ZONA:
+        variaciones.update(VARIACIONES_ZONA[zona_title])
+
+    # Siempre incluir la zona original y la canónica
+    variaciones.add(zona)
+    variaciones.add(zona.lower())
+    variaciones.add(zona_canonica)
+    variaciones.add(zona_canonica.lower())
+
+    return list(variaciones)
