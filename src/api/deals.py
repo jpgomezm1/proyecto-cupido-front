@@ -78,6 +78,7 @@ def get_deals():
                 d.tipo_comision, d.porcentaje_comision, d.valor_comision,
                 d.precio_negociado, d.origen,
                 d.fecha_creacion, d.fecha_actualizacion,
+                d.agente_vendedor_telefono,
                 -- Propiedad
                 p.titulo as propiedad_titulo,
                 p.precio as propiedad_precio,
@@ -91,12 +92,15 @@ def get_deals():
                 c.nombre as contacto_nombre,
                 c.telefono as contacto_telefono,
                 c.email as contacto_email,
+                -- Agente Vendedor (de la propiedad)
+                av.nombre as agente_vendedor_nombre,
                 -- Días
                 EXTRACT(DAY FROM NOW() - d.fecha_actualizacion)::INTEGER as dias_en_estado,
                 EXTRACT(DAY FROM NOW() - d.fecha_creacion)::INTEGER as dias_totales
             FROM deals d
             JOIN propiedades p ON p.id = d.propiedad_id
             JOIN contactos c ON c.id = d.contacto_id
+            LEFT JOIN agentes av ON av.telefono = d.agente_vendedor_telefono
             WHERE 1=1
         """
         params = []
@@ -156,18 +160,24 @@ def get_pipeline():
             db.cursor.execute("""
                 SELECT
                     d.id, d.codigo, d.estado, d.prioridad,
+                    d.propiedad_id,
                     d.valor_comision, d.precio_negociado,
                     d.fecha_creacion, d.fecha_actualizacion,
+                    d.agente_vendedor_telefono,
                     p.titulo as propiedad_titulo,
                     p.precio as propiedad_precio,
                     p.imagen_principal as propiedad_imagen,
                     p.zona as propiedad_zona,
+                    p.ciudad as propiedad_ciudad,
+                    p.tipo_propiedad,
                     c.nombre as contacto_nombre,
                     c.telefono as contacto_telefono,
+                    av.nombre as agente_vendedor_nombre,
                     EXTRACT(DAY FROM NOW() - d.fecha_actualizacion)::INTEGER as dias_en_estado
                 FROM deals d
                 JOIN propiedades p ON p.id = d.propiedad_id
                 JOIN contactos c ON c.id = d.contacto_id
+                LEFT JOIN agentes av ON av.telefono = d.agente_vendedor_telefono
                 WHERE d.estado = %s
                 ORDER BY d.prioridad DESC, d.fecha_actualizacion DESC
             """, (estado,))
