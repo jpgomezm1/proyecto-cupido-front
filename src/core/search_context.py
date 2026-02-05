@@ -107,6 +107,86 @@ AMENITY_KEYWORDS = {
     'salón social': 'salón social'
 }
 
+# =============================================================================
+# v2.7: TIPOS DE REFINAMIENTO
+# =============================================================================
+# 1. FILTER (restringir): Reduce el scope de búsqueda
+# 2. EXPAND (ampliar): Agrega criterios sin eliminar los anteriores
+# 3. RESET (reiniciar): Empieza una búsqueda nueva
+
+REFINEMENT_TYPE_PATTERNS = {
+    'filter': [
+        # Exactitud
+        r'\bexactamente\b', r'\bexacto\b', r'\bprecisamente\b',
+        # Restricción
+        r'\bsolamente\b', r'\bsolo\s+(?:en|de|con)\b', r'\búnicamente\b',
+        r'\bnada\s+más\b', r'\bque\s+valgan?\b', r'\bque\s+cuesten?\b',
+        r'\bque\s+sean?\s+de\b', r'\bnecesito\s+(?:que\s+)?sea\b',
+        # Filtros específicos
+        r'\bfiltrar\b', r'\brestringir\b',
+    ],
+    'expand': [
+        # Adición
+        r'\btambién\b', r'\btambien\b', r'\bademás\b', r'\bademas\b',
+        r'\bagregar\b', r'\bincluir\b', r'\bañadir\b',
+        # Mostrar más opciones
+        r'\bmuéstrame\s+también\b', r'\bmuestrame\s+tambien\b',
+        r'\by\s+también\b', r'\bo\s+también\b',
+        r'\bque\s+(?:también|tambien)\s+(?:tenga|tengan|sea|sean)\b',
+        # Ampliar
+        r'\bampliar\b', r'\bexpandir\b',
+    ],
+    'reset': [
+        # Negación + nueva dirección
+        r'^no[,.]?\s+', r'\bno,\s+', r'\bmejor\b', r'\bmás\s+bien\b', r'\bmas\s+bien\b',
+        r'\ben\s+cambio\b', r'\ben\s+vez\s+de\b',
+        # Cancelación
+        r'\bolvida(?:lo)?\b', r'\bignora\b', r'\bdescarta\b',
+        r'\botra\s+cosa\b', r'\bempezar\s+de\s+nuevo\b', r'\bnueva\s+búsqueda\b',
+        # Cambio completo
+        r'\bcambiemos\b', r'\bcambia\s+(?:la|el|los|las)\b',
+        r'\bquiero\s+(?:otra|otro|cambiar)\b',
+    ]
+}
+
+
+def detect_refinement_type(message: str, previous_criteria: Dict = None) -> str:
+    """
+    Detecta el tipo de refinamiento basado en el mensaje.
+
+    Args:
+        message: Mensaje del usuario
+        previous_criteria: Criterios anteriores (para contexto)
+
+    Returns:
+        'filter' - Restringir búsqueda actual
+        'expand' - Ampliar criterios
+        'reset' - Reiniciar búsqueda
+        'modify' - Modificación normal (default)
+    """
+    message_lower = message.lower().strip()
+
+    # Verificar patrones de RESET primero (tienen prioridad)
+    for pattern in REFINEMENT_TYPE_PATTERNS['reset']:
+        if re.search(pattern, message_lower):
+            print(f"[DEBUG] v2.7: Detectado RESET por patrón: {pattern}")
+            return 'reset'
+
+    # Verificar patrones de EXPAND
+    for pattern in REFINEMENT_TYPE_PATTERNS['expand']:
+        if re.search(pattern, message_lower):
+            print(f"[DEBUG] v2.7: Detectado EXPAND por patrón: {pattern}")
+            return 'expand'
+
+    # Verificar patrones de FILTER
+    for pattern in REFINEMENT_TYPE_PATTERNS['filter']:
+        if re.search(pattern, message_lower):
+            print(f"[DEBUG] v2.7: Detectado FILTER por patrón: {pattern}")
+            return 'filter'
+
+    # Default: modificación normal
+    return 'modify'
+
 
 def detect_refinement_intent(message: str) -> Dict[str, Any]:
     """
@@ -405,6 +485,9 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
     2. Criterios de Claude (new) sobrescriben si están presentes
     3. Palabras clave de refinamiento ajustan valores relativamente
     4. Criterios anteriores se mantienen si no se mencionan
+    5. v2.5: Campos de configuración del sistema (hard_filters, priority_weights,
+       selected_priority, search_state) SIEMPRE se preservan del previous
+    6. v2.7: Detección mejorada de mensajes de refinamiento cortos
 
     Args:
         previous: Criterios acumulados anteriores
@@ -414,11 +497,73 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
     Returns:
         Dict con criterios fusionados
     """
+    # v2.7: Detectar si es un mensaje de refinamiento corto
+    # Si el mensaje es muy corto y/o tiene pocos criterios nuevos,
+    # probablemente es un refinamiento parcial
+    word_count = len(message.split())
+    new_criteria_count = sum(1 for k, v in new.items()
+                              if v is not None and v != '' and v != []
+                              and k not in ['original_query', 'notas', 'perfil_comprador'])
+
+    is_short_refinement = (
+        previous and  # Hay criterios anteriores
+        word_count < 12 and  # Mensaje corto (ej: "más baratas", "3 habitaciones", "con piscina")
+        new_criteria_count < 4  # Pocos criterios nuevos extraídos
+    )
+
+    if is_short_refinement:
+        print(f"[DEBUG] v2.7: Detectado refinamiento corto (palabras={word_count}, criterios_nuevos={new_criteria_count})")
+
     # Empezar con copia de criterios anteriores
     merged = {**previous} if previous else {}
 
+    # v2.5: PRESERVAR campos de configuración del sistema de búsqueda
+    # Estos campos NO deben sobrescribirse con los nuevos criterios
+    SYSTEM_CONFIG_FIELDS = [
+        'hard_filters',
+        'priority_weights',
+        'selected_priority',
+        'search_state',
+        'flexibilidad_habitaciones',
+        'flexibilidad_precio',
+        # v2.6: Campos calculados de filtros SQL (CRÍTICOS)
+        'precio_min_implicito',
+        'precio_max_ajustado',
+        'habitaciones_min_filtro',
+        'habitaciones_max_filtro',
+        'segmento_precio',
+        'tolerancia_aplicada'
+    ]
+
+    preserved_config = {}
+    if previous:
+        for field in SYSTEM_CONFIG_FIELDS:
+            # v2.6: Usar 'is not None' para preservar valores como 0
+            if field in previous and previous[field] is not None:
+                preserved_config[field] = previous[field]
+
     # Detectar intenciones de refinamiento
     intents = detect_refinement_intent(message)
+
+    # v2.7: Detectar TIPO de refinamiento (filter, expand, reset, modify)
+    refinement_type = detect_refinement_type(message, previous)
+    print(f"[DEBUG] v2.7: Tipo de refinamiento detectado: {refinement_type}")
+
+    # ==========================================================================
+    # MANEJO DE RESET: Reiniciar búsqueda completamente
+    # ==========================================================================
+    if refinement_type == 'reset':
+        print(f"[DEBUG] v2.7: RESET - Reiniciando búsqueda, descartando criterios anteriores")
+        # Solo preservar la configuración del sistema, descartar criterios de búsqueda
+        merged = {}
+        # Aplicar los nuevos criterios directamente
+        for key, value in new.items():
+            if value is not None and value != '' and value != []:
+                merged[key] = value
+        # Restaurar configuración del sistema
+        for field, value in preserved_config.items():
+            merged[field] = value
+        return merged
 
     # Extraer TODOS los criterios explícitos del mensaje
     explicit = extract_all_explicit_criteria(message)
@@ -512,19 +657,122 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
         merged['amenidades_requeridas'] = list(current_amenities)
 
     # ============================================================
-    # 7. APLICAR CRITERIOS DE CLAUDE (sobrescriben si están explícitos)
+    # 7. APLICAR CRITERIOS DE CLAUDE
+    # v2.7: Manejo diferenciado según tipo de refinamiento:
+    #       - FILTER: Restringe (reemplaza con valores más estrictos)
+    #       - EXPAND: Amplía (agrega sin eliminar lo anterior)
+    #       - MODIFY: Normal (comportamiento por defecto)
     # ============================================================
+
+    # Campos clave que deben preservarse en refinamientos cortos
+    CAMPOS_CLAVE_REFINAMIENTO = [
+        'ubicaciones', 'tipo_propiedad', 'precio_max', 'precio_min',
+        'habitaciones_min', 'habitaciones_max', 'banos_min', 'banos_max',
+        'area_min', 'area_max'
+    ]
+
     for key, value in new.items():
         if value is not None:
-            if key == 'ubicaciones' and value:
-                merged[key] = value
-            elif key == 'precio_max' and value:
-                if not merged.get('precio_max') or value < merged['precio_max']:
+            # ==========================================================
+            # EXPAND: Agregar criterios sin eliminar los anteriores
+            # ==========================================================
+            if refinement_type == 'expand':
+                if key == 'ubicaciones' and value:
+                    # Agregar nuevas ubicaciones a las existentes
+                    existing = merged.get('ubicaciones', [])
+                    if isinstance(existing, list):
+                        for loc in value:
+                            if loc not in existing:
+                                existing.append(loc)
+                        merged['ubicaciones'] = existing
+                    else:
+                        merged['ubicaciones'] = value
+                elif key == 'habitaciones_max' and value:
+                    # Expandir rango de habitaciones hacia arriba
+                    if merged.get('habitaciones_max'):
+                        merged['habitaciones_max'] = max(merged['habitaciones_max'], value)
+                    else:
+                        merged['habitaciones_max'] = value
+                elif key == 'habitaciones_min' and value:
+                    # Expandir rango de habitaciones hacia abajo
+                    if merged.get('habitaciones_min'):
+                        merged['habitaciones_min'] = min(merged['habitaciones_min'], value)
+                    else:
+                        merged['habitaciones_min'] = value
+                elif key == 'precio_max' and value:
+                    # Expandir presupuesto hacia arriba
+                    if merged.get('precio_max'):
+                        merged['precio_max'] = max(merged['precio_max'], value)
+                    else:
+                        merged['precio_max'] = value
+                elif key == 'tipo_propiedad' and value:
+                    # Agregar tipos de propiedad
+                    existing = merged.get('tipo_propiedad', [])
+                    if isinstance(existing, str):
+                        existing = [existing]
+                    if isinstance(value, str):
+                        value = [value]
+                    for t in value:
+                        if t not in existing:
+                            existing.append(t)
+                    merged['tipo_propiedad'] = existing if len(existing) > 1 else existing[0]
+                elif value:
                     merged[key] = value
-                elif intents.get('more_expensive'):
-                    merged[key] = value
-            elif value:
+
+            # ==========================================================
+            # FILTER: Restringir (el nuevo valor reemplaza, es más estricto)
+            # ==========================================================
+            elif refinement_type == 'filter':
+                if isinstance(value, list) and len(value) == 0:
+                    continue
+                if isinstance(value, str) and value.strip() == '':
+                    continue
+                # En modo filtro, los nuevos valores siempre reemplazan
                 merged[key] = value
+
+            # ==========================================================
+            # MODIFY (normal) o refinamiento corto
+            # ==========================================================
+            elif is_short_refinement:
+                # Para refinamientos cortos, solo aplicar si:
+                # 1. El campo NO es un campo clave O
+                # 2. El valor es significativo (no vacío, no lista vacía)
+                if key in CAMPOS_CLAVE_REFINAMIENTO:
+                    # Solo sobrescribir campos clave si tienen valor real
+                    if isinstance(value, list) and len(value) == 0:
+                        continue  # No sobrescribir con lista vacía
+                    if isinstance(value, str) and value.strip() == '':
+                        continue  # No sobrescribir con string vacío
+                    # Para ubicaciones, solo aplicar si no hay intención "different_location"
+                    # y el nuevo valor es diferente del anterior
+                    if key == 'ubicaciones':
+                        if not intents.get('different_location') and merged.get('ubicaciones'):
+                            # Solo actualizar si hay nuevas zonas mencionadas explícitamente
+                            if value == merged.get('ubicaciones'):
+                                continue
+                        merged[key] = value
+                    elif key == 'precio_max' and value:
+                        if not merged.get('precio_max') or value < merged['precio_max']:
+                            merged[key] = value
+                        elif intents.get('more_expensive'):
+                            merged[key] = value
+                    elif value:
+                        merged[key] = value
+                else:
+                    # Campos no clave: aplicar normalmente
+                    if value:
+                        merged[key] = value
+            else:
+                # Flujo normal (no refinamiento corto)
+                if key == 'ubicaciones' and value:
+                    merged[key] = value
+                elif key == 'precio_max' and value:
+                    if not merged.get('precio_max') or value < merged['precio_max']:
+                        merged[key] = value
+                    elif intents.get('more_expensive'):
+                        merged[key] = value
+                elif value:
+                    merged[key] = value
 
     # ============================================================
     # 8. FALLBACK - Aplicar criterios explícitos del mensaje
@@ -556,6 +804,13 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
         if explicit.get('banos_max') and not new.get('banos_max'):
             merged['banos_max'] = explicit['banos_max']
 
+    # ============================================================
+    # 9. v2.5: RESTAURAR campos de configuración del sistema
+    # Estos campos NUNCA deben perderse durante el merge
+    # ============================================================
+    for field, value in preserved_config.items():
+        merged[field] = value
+
     return merged
 
 
@@ -577,21 +832,31 @@ def generate_conversation_name(criteria: Dict) -> Optional[str]:
     parts = []
 
     # Tipo de propiedad (abreviado)
+    # v2.6: Manejar cuando tipo_propiedad es lista (ej: ["Casa", "Apartamento"])
     tipo = criteria.get('tipo_propiedad', '')
     if tipo:
-        tipo_lower = tipo.lower()
-        if 'apartamento' in tipo_lower:
+        # Si es lista, unir con "/" o usar el primero
+        if isinstance(tipo, list):
+            tipo_str = ' '.join(tipo).lower()
+        else:
+            tipo_str = tipo.lower()
+
+        if 'apartamento' in tipo_str:
             parts.append('Apto')
-        elif 'casa' in tipo_lower:
+        elif 'casa' in tipo_str:
             parts.append('Casa')
-        elif 'penthouse' in tipo_lower:
+        elif 'penthouse' in tipo_str:
             parts.append('PH')
-        elif 'local' in tipo_lower:
+        elif 'local' in tipo_str:
             parts.append('Local')
-        elif 'oficina' in tipo_lower:
+        elif 'oficina' in tipo_str:
             parts.append('Oficina')
         else:
-            parts.append(tipo.capitalize()[:6])
+            # Si es lista, usar el primer elemento
+            if isinstance(tipo, list):
+                parts.append(tipo[0][:6] if tipo else 'Prop')
+            else:
+                parts.append(tipo.capitalize()[:6])
 
     # Ubicación (primera)
     ubicaciones = criteria.get('ubicaciones', [])

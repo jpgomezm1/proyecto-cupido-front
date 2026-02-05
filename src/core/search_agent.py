@@ -189,17 +189,27 @@ CONTEXTO DE BÚSQUEDA ANTERIOR (IMPORTANTE):
 El usuario ya realizó una búsqueda con estos criterios:
 {chr(10).join(context_parts)}
 
-REGLAS DE REFINAMIENTO:
+REGLAS DE REFINAMIENTO (MUY IMPORTANTE - SIGUE ESTAS REGLAS EXACTAMENTE):
 1. Si el usuario menciona un criterio EXPLÍCITAMENTE en su nuevo mensaje, USA ESE VALOR (sobrescribe el anterior)
-2. Si el usuario NO menciona un criterio, MANTÉN EL VALOR ANTERIOR
+2. Si el usuario NO menciona un criterio, DEBES MANTENER EL VALOR ANTERIOR en tu respuesta JSON
 3. Expresiones de refinamiento:
-   - "más barato", "menos precio" → reduce precio_max en 15-20%
+   - "más barato", "menos precio", "más baratas" → reduce precio_max en 15-20%
    - "más caro", "mayor presupuesto" → aumenta precio_max en 15-20%
    - "más grande" → aumenta area_min o habitaciones_min
    - "más pequeño" → reduce area_max o habitaciones_max
    - "otra zona", "diferente sector" → REEMPLAZA ubicaciones
    - "también en X" → AGREGA X a ubicaciones existentes
-4. Si el mensaje es muy corto (ej: "con piscina", "3 habitaciones"), es un REFINAMIENTO - mantén los demás criterios
+4. Si el mensaje es muy corto (ej: "con piscina", "3 habitaciones", "más baratas"), es un REFINAMIENTO parcial
+
+*** CRÍTICO - PRESERVACIÓN DE CRITERIOS ***
+Cuando el mensaje es un REFINAMIENTO (mensaje corto que solo modifica UN aspecto):
+- DEBES incluir TODOS los criterios del contexto anterior en tu respuesta JSON
+- Ejemplo: Si el contexto tiene ubicaciones=["Laureles"], tipo="Apartamento", precio_max=500000000, habitaciones_min=2,
+  y el usuario dice "más baratas":
+  TU RESPUESTA DEBE SER: {{"ubicaciones": ["Laureles"], "tipo_propiedad": "Apartamento", "precio_max": 400000000, "habitaciones_min": 2, "habitaciones_max": 2}}
+- Ejemplo: Si el usuario dice "3 habitaciones":
+  TU RESPUESTA DEBE SER: {{"ubicaciones": ["Laureles"], "tipo_propiedad": "Apartamento", "precio_max": 500000000, "habitaciones_min": 3, "habitaciones_max": 3}}
+- NUNCA retornes SOLO el criterio modificado - SIEMPRE incluye TODOS los criterios del contexto anterior
 
 IMPORTANTE: Incluye TODOS los criterios (anteriores + nuevos/modificados) en tu respuesta JSON."""
 
@@ -211,12 +221,16 @@ Debes extraer y estructurar la siguiente información cuando esté disponible:
 - tipo_propiedad: Tipo (Apartamento, Casa, Penthouse, Duplex, Local, Oficina)
 - precio_min: Precio mínimo en COP (número). Si no se menciona explícitamente, NO incluir.
 - precio_max: Precio máximo en COP (número). Este es el presupuesto del cliente.
-- habitaciones_min: Mínimo de habitaciones (solo si el usuario especifica un mínimo)
+- habitaciones_min: Mínimo de habitaciones
 - habitaciones_max: Máximo de habitaciones
-  * "2 o 3 habitaciones" → habitaciones_min=2, habitaciones_max=3
-  * "hasta 2 habitaciones" → habitaciones_max=2 (SIN habitaciones_min)
-  * "máximo 3 alcobas" → habitaciones_max=3 (SIN habitaciones_min)
-  * "mínimo 2 habitaciones" → habitaciones_min=2 (SIN habitaciones_max)
+  REGLAS DE EXTRACCIÓN (MUY IMPORTANTE):
+  * "2 habitaciones", "de 2 alcobas", "con 2 cuartos" → habitaciones_min=2, habitaciones_max=2 (NÚMERO EXACTO)
+  * "2 o 3 habitaciones" → habitaciones_min=2, habitaciones_max=3 (RANGO)
+  * "hasta 2 habitaciones" → habitaciones_max=2 (SIN habitaciones_min - puede ser menos)
+  * "máximo 3 alcobas" → habitaciones_max=3 (SIN habitaciones_min - puede ser menos)
+  * "mínimo 2 habitaciones", "al menos 2" → habitaciones_min=2 (SIN habitaciones_max - puede ser más)
+  * IMPORTANTE: Cuando el usuario dice un número SIN palabras como "hasta", "máximo", "al menos", "mínimo",
+    significa que quiere EXACTAMENTE ese número, entonces usa habitaciones_min=X, habitaciones_max=X
 - banos_min: Mínimo de baños
 - banos_max: Máximo de baños (si dice "máximo 2 baños" entonces banos_max=2)
 - tipo_propiedad: Tipo de propiedad. IMPORTANTE: Cuando el usuario menciona múltiples tipos con "o", extraer como LISTA:
@@ -226,8 +240,12 @@ Debes extraer y estructurar la siguiente información cuando esté disponible:
 - area_min: Área mínima en m²
 - area_max: Área máxima en m²
 - piso: Número de piso específico (1 para primer piso)
-- amenidades_requeridas: Lista de amenidades importantes (ej: ["portería", "piscina", "balcón"])
-- caracteristicas_especiales: Características mencionadas (ej: "baño en cada habitación", "estudio")
+- antiguedad_max: Años máximos de antigüedad (ej: "no mayor a 20 años" → 20, "máximo 15 años" → 15)
+- administracion_max: Valor máximo de administración en COP (ej: "admon no mayor a 550000" → 550000)
+- parqueaderos_min: Mínimo de parqueaderos/garajes requeridos
+- cuarto_util: true si se requiere cuarto útil/depósito
+- amenidades_requeridas: Lista de amenidades importantes (ej: ["portería", "piscina", "balcón", "vigilancia 24h", "unidad cerrada"])
+- caracteristicas_especiales: Características mencionadas (ej: "baño en cada habitación", "buen estado", "remodelado")
 - perfil_comprador: Detectar el perfil del comprador basado en el mensaje:
   * "familia" - Si menciona familia, niños, hijos, colegios
   * "inversionista" - Si menciona inversión, rentabilidad, arriendo
@@ -259,12 +277,19 @@ MEDELLÍN:
 - Loma de los Bernal (NO usar: "Belén Loma de los Bernal")
 - Guayabal, Suramericana (NO usar: "Suramerica")
 
-ENVIGADO:
-- Loma del Escobero (NO usar: "El Escobero", "Escobero")
-- Zúñiga, La Paz, El Dorado, El Esmeraldal
+ENVIGADO (MUY IMPORTANTE - estos son barrios de Envigado, NO de Medellín):
+- La Abadía, El Esmeraldal, Cumbres, Otra Parte (zona baja de Envigado)
+- Loma del Escobero, Las Palmas (zona alta de Envigado)
+- Zúñiga, La Paz, El Dorado, La Frontera
 - Las Antillas, Alcalá, La Cuenca, El Trianón
-- Las Orquídeas, Camino Verde, Cumbres
-- Las Palmas (incluye Alto de las Palmas, Variante)
+- Las Orquídeas, Camino Verde, Loma del Chocho
+- Jardines, La Sebastiana, San José, Centro Envigado
+
+NOTA IMPORTANTE SOBRE UBICACIONES MÚLTIPLES:
+Si el usuario menciona barrios de DIFERENTES ciudades en la misma búsqueda, incluir TODOS:
+- "Castropol hasta Abadía y Esmeraldal" → ["Castropol", "La Abadía", "El Esmeraldal"]
+  (Castropol es El Poblado/Medellín, La Abadía y El Esmeraldal son Envigado)
+- "Poblado o Envigado parte baja" → ["El Poblado", "La Abadía", "El Esmeraldal", "Cumbres"]
 
 SABANETA: Aves María, Mayorca, La Doctora, Calle Larga, San José, Asdesillas
 ITAGÜÍ: Ditaires, Santa María, Pilsen
@@ -290,11 +315,17 @@ DETECCIÓN DE PERFIL:
 
 TÉRMINOS COLOMBIANOS:
 - "Alcoba" = habitación
-- "Parqueadero" = garaje
-- "Cuarto útil" = depósito
-- "Baño en cada habitación" = característica importante
-- "Portería", "vigilancia" = amenidades de seguridad
-- "Unidad completa" = conjunto residencial con todas las amenidades
+- "Parqueadero", "garaje" = parking (parqueaderos_min)
+- "Cuarto útil", "útil", "depósito" = depósito (cuarto_util: true)
+- "Baño en cada habitación" = característica especial
+- "Portería", "vigilancia", "vigilancia 24 horas", "24 horas" = amenidades de seguridad
+- "Unidad cerrada", "conjunto cerrado" = conjunto residencial con seguridad
+- "Unidad completa" = conjunto con todas las amenidades
+- "Buen estado", "en buen estado" = característica especial
+- "Negociables", "negociable" = flexibilidad_precio: "flexible"
+- "Recursos propios" = nota sobre forma de pago
+- "Admon", "administración" = administracion_max si menciona valor máximo
+- "No mayor a X años", "máximo X años de construido" = antiguedad_max
 {previous_context}
 Responde SOLO con un JSON válido, sin texto adicional ni markdown."""
 
@@ -365,16 +396,29 @@ Responde SOLO con el JSON de criterios."""
 
             # 0.5 v2.3: Detectar flexibilidad de habitaciones
             # "hasta 2 habitaciones", "máximo 3 alcobas" → estricto (no mostrar más)
+            query_lower = query.lower()
+
+            # Detectar si el usuario usó "hasta", "máximo" para habitaciones
+            usa_tope_habitaciones = bool(re.search(
+                r'(?:hasta|máximo|maximo|no\s+más\s+de|no\s+mas\s+de|como\s+máximo|como\s+maximo)\s+\d+\s*(?:habitacion|alcoba|cuarto|hab)',
+                query_lower
+            ))
+
             if not criteria.get('flexibilidad_habitaciones'):
-                query_lower = query.lower()
                 # Patrones estrictos: "hasta X hab", "maximo X hab", "no más de X"
-                if re.search(r'(?:hasta|máximo|maximo|no\s+más\s+de|no\s+mas\s+de|como\s+máximo|como\s+maximo)\s+\d+\s*(?:habitacion|alcoba|cuarto|hab)', query_lower):
-                    criteria['flexibilidad_habitaciones'] = 'estricto'
-                # Si solo especifica max sin min, es estricto
-                elif criteria.get('habitaciones_max') and not criteria.get('habitaciones_min'):
+                if usa_tope_habitaciones:
                     criteria['flexibilidad_habitaciones'] = 'estricto'
                 else:
                     criteria['flexibilidad_habitaciones'] = 'normal'
+
+            # v2.5 CRÍTICO: Inferir habitaciones_min cuando el usuario especifica un número exacto
+            # Si Claude solo extrajo habitaciones_max pero el usuario NO usó "hasta/máximo",
+            # significa que quiere al menos ese número de habitaciones
+            if criteria.get('habitaciones_max') and not criteria.get('habitaciones_min'):
+                if not usa_tope_habitaciones:
+                    # "2 habitaciones" sin "hasta" → quiere al menos 2
+                    criteria['habitaciones_min'] = criteria['habitaciones_max']
+                    print(f"[DEBUG] v2.5: Inferido habitaciones_min={criteria['habitaciones_min']} porque usuario dijo número exacto sin 'hasta/máximo'")
 
             # 1. Calcular rango de precio implícito si solo hay precio_max
             if criteria.get('precio_max') and not criteria.get('precio_min'):
@@ -598,8 +642,13 @@ Responde SOLO con el JSON de criterios."""
                 print(f"     - Ciudades inferidas: {ciudades}")
         if criteria.get('precio_max'):
             print(f"     - Precio max: ${criteria['precio_max']:,}")
+            print(f"     - precio_min_implicito: {criteria.get('precio_min_implicito')}")
+            print(f"     - precio_max_ajustado: {criteria.get('precio_max_ajustado')}")
         if criteria.get('tipo_propiedad'):
             print(f"     - Tipo: {criteria['tipo_propiedad']}")
+        if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
+            print(f"     - Habitaciones: min={criteria.get('habitaciones_min')}, max={criteria.get('habitaciones_max')}")
+            print(f"     - hab_min_filtro: {criteria.get('habitaciones_min_filtro')}, hab_max_filtro: {criteria.get('habitaciones_max_filtro')}")
 
         # ========== FASE 1: RELAJACIÓN DE UBICACIÓN ==========
         # Intentar primero con diferentes niveles de ubicación ANTES de relajar otros criterios
@@ -777,8 +826,19 @@ Responde SOLO con el JSON de criterios."""
         # Si el usuario dice "$500M", solo mostrar propiedades entre $450M y $550M
 
         if criteria.get('precio_max'):
-            # Usar precio_max_ajustado si existe (incluye tolerancia del +10%)
-            precio_max_duro = criteria.get('precio_max_ajustado') or criteria['precio_max']
+            precio_max = criteria['precio_max']
+
+            # v2.6: Recalcular rangos de precio si faltan
+            # Esto garantiza que siempre se aplique el filtro de precio correcto
+            if not criteria.get('precio_min_implicito') or not criteria.get('precio_max_ajustado'):
+                flexibilidad = criteria.get('flexibilidad_precio', 'normal')
+                precio_min_calc, precio_max_calc = calcular_rango_precio(precio_max, flexibilidad=flexibilidad)
+                criteria['precio_min_implicito'] = precio_min_calc
+                criteria['precio_max_ajustado'] = precio_max_calc
+                print(f"[DEBUG] v2.6: Recalculado rango precio: ${precio_min_calc/1_000_000:.0f}M - ${precio_max_calc/1_000_000:.0f}M")
+
+            # Usar precio_max_ajustado (incluye tolerancia del +10%)
+            precio_max_duro = criteria.get('precio_max_ajustado') or precio_max
             conditions.append("precio <= %(precio_max_duro)s")
             params['precio_max_duro'] = precio_max_duro
 
@@ -788,6 +848,7 @@ Responde SOLO con el JSON de criterios."""
             if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
                 params['precio_min_duro'] = precio_min_duro
+                print(f"[DEBUG] v2.6: Aplicando filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M")
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -912,6 +973,17 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("parqueaderos >= %(parqueaderos_min)s")
             params['parqueaderos_min'] = criteria['parqueaderos_min']
 
+        # v2.6: Filtro por antigüedad máxima
+        if criteria.get('antiguedad_max'):
+            ano_minimo = 2026 - criteria['antiguedad_max']  # Año actual - años máximos
+            conditions.append("(ano_construccion >= %(ano_minimo)s OR ano_construccion IS NULL)")
+            params['ano_minimo'] = ano_minimo
+
+        # v2.6: Filtro por administración máxima
+        if criteria.get('administracion_max'):
+            conditions.append("(administracion <= %(admin_max)s OR administracion IS NULL)")
+            params['admin_max'] = criteria['administracion_max']
+
         # NOTA: Las amenidades NO se filtran en SQL - solo afectan el ranking
         # Esto permite mostrar más resultados y rankear los mejores primero
 
@@ -919,8 +991,9 @@ Responde SOLO con el JSON de criterios."""
         if conditions:
             base_query += " AND " + " AND ".join(conditions)
 
-        # Ordenar por relevancia (más amenidades primero, luego por precio)
-        base_query += " ORDER BY total_amenidades DESC, precio ASC"
+        # v2.5: Ordenar por precio primero (propiedades dentro del presupuesto primero)
+        # Amenidades como desempate secundario
+        base_query += " ORDER BY precio ASC, total_amenidades DESC"
 
         # Limitar resultados (más para ranking posterior)
         base_query += " LIMIT 50"
@@ -1067,18 +1140,22 @@ Responde SOLO con el JSON de criterios."""
                         match_details['habitaciones'] = 'rango'
                         reasons.append(f"{hab} hab")
                 elif diferencia <= 1:
-                    # CASO 2: A ±1 del rango (cercano pero no exacto)
-                    # Si habitaciones es filtro duro, no dar puntos por estar cerca
-                    if habitaciones_es_duro:
-                        score -= 20  # Penalizar si es filtro duro
-                        match_details['habitaciones'] = 'fuera_rango'
-                    else:
-                        score += int(peso_habitaciones * 0.44)  # ~44% para cercano
-                        match_details['habitaciones'] = 'cercano'
+                    # CASO 2: A ±1 del rango
+                    # v2.5: Distinguir entre MENOS y MÁS habitaciones
                     if hab < hab_min_ideal:
-                        reasons.append(f"{hab} hab (1 menos)")
+                        # MENOS habitaciones: SIEMPRE penalizar (duro o no)
+                        # Esto NO debería pasar con el filtro SQL corregido, pero por seguridad:
+                        score -= 30
+                        match_details['habitaciones'] = 'insuficiente'
+                        reasons.append(f"⚠ {hab} hab (necesitas {hab_min_ideal})")
                     else:
-                        reasons.append(f"{hab} hab (1 más)")
+                        # MÁS habitaciones: bonus reducido (propiedad más grande OK)
+                        if habitaciones_es_duro:
+                            score += int(peso_habitaciones * 0.5)  # 50% si es duro
+                        else:
+                            score += int(peso_habitaciones * 0.7)  # 70% si no es duro
+                        match_details['habitaciones'] = 'extra'
+                        reasons.append(f"{hab} hab (+1 extra)")
                 elif hab > hab_max_ideal:
                     # CASO 3: Más habitaciones de las pedidas (+2 o más)
                     if habitaciones_es_duro:
@@ -1466,6 +1543,34 @@ Responde SOLO con el JSON de criterios."""
         # Paso 1: Extraer criterios con Claude (con contexto previo si existe)
         print("🧠 Analizando criterios con Claude...")
         criteria = self._extract_search_criteria(query, previous_criteria)
+
+        # v2.5: PRESERVAR campos de configuración del sistema de búsqueda
+        # Estos campos vienen de apply_priority_weights() cuando el usuario
+        # selecciona una prioridad (incluyendo "Confío en Findy")
+        if previous_criteria:
+            SYSTEM_CONFIG_FIELDS = [
+                'hard_filters',
+                'priority_weights',
+                'selected_priority',
+                'search_state',
+                # v2.6: Campos calculados de filtros SQL (CRÍTICOS)
+                'precio_min_implicito',
+                'precio_max_ajustado',
+                'habitaciones_min_filtro',
+                'habitaciones_max_filtro',
+                'flexibilidad_precio',
+                'flexibilidad_habitaciones',
+                'segmento_precio',
+                'tolerancia_aplicada',
+            ]
+            for field in SYSTEM_CONFIG_FIELDS:
+                # v2.6: Usar 'is not None' para preservar valores como 0
+                if field in previous_criteria and previous_criteria[field] is not None:
+                    criteria[field] = previous_criteria[field]
+                    if field == 'hard_filters':
+                        print(f"   📌 Hard filters preservados: {previous_criteria[field]}")
+                    elif field == 'precio_min_implicito':
+                        print(f"   💰 Rango precio preservado: ${previous_criteria.get('precio_min_implicito', 0)/1_000_000:.0f}M - ${previous_criteria.get('precio_max_ajustado', 0)/1_000_000:.0f}M")
 
         if not criteria:
             search_log.log_error('No se pudieron extraer criterios de búsqueda', 'criteria_extraction')

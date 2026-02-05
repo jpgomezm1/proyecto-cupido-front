@@ -150,6 +150,7 @@ class VectorSearch:
 
         # Agregar filtros si existen
         if filters:
+            print(f"[VectorSearch] Filtros recibidos: precio_min_implicito={filters.get('precio_min_implicito')}, precio_max_ajustado={filters.get('precio_max_ajustado')}")
             # Filtro de ubicación
             if filters.get('ubicaciones'):
                 ubicaciones = filters['ubicaciones']
@@ -179,18 +180,44 @@ class VectorSearch:
                     params['tipo'] = f'%{tipos}%'
 
             # Filtro de precio
-            if filters.get('precio_min'):
+            # v2.6: Usar precio_min_implicito si existe (filtro calculado del rango ±10%)
+            precio_min = filters.get('precio_min') or filters.get('precio_min_implicito')
+            if precio_min:
                 query += " AND p.precio >= %(precio_min)s"
-                params['precio_min'] = filters['precio_min']
+                params['precio_min'] = precio_min
 
-            if filters.get('precio_max'):
+            # v2.6: Usar precio_max_ajustado si existe (filtro calculado del rango ±10%)
+            precio_max = filters.get('precio_max_ajustado') or filters.get('precio_max')
+            if precio_max:
                 query += " AND p.precio <= %(precio_max)s"
-                params['precio_max'] = filters['precio_max']
+                params['precio_max'] = precio_max
 
             # Filtro de habitaciones
             if filters.get('habitaciones_min'):
                 query += " AND p.habitaciones >= %(hab_min)s"
                 params['hab_min'] = filters['habitaciones_min']
+
+            # v2.6: Filtro por área mínima
+            area_min = filters.get('area_min_ajustado') or filters.get('area_min')
+            if area_min:
+                query += " AND p.area_construida >= %(area_min)s"
+                params['area_min'] = area_min
+
+            # v2.6: Filtro por antigüedad máxima
+            if filters.get('antiguedad_max'):
+                ano_minimo = 2026 - filters['antiguedad_max']
+                query += " AND (p.ano_construccion >= %(ano_minimo)s OR p.ano_construccion IS NULL)"
+                params['ano_minimo'] = ano_minimo
+
+            # v2.6: Filtro por administración máxima
+            if filters.get('administracion_max'):
+                query += " AND (p.administracion <= %(admin_max)s OR p.administracion IS NULL)"
+                params['admin_max'] = filters['administracion_max']
+
+            # v2.6: Filtro por parqueaderos
+            if filters.get('parqueaderos_min'):
+                query += " AND p.parqueaderos >= %(parq_min)s"
+                params['parq_min'] = filters['parqueaderos_min']
 
         # Ordenar por similitud + score combinado
         query += """

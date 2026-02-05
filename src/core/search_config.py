@@ -195,13 +195,23 @@ ZONA_A_CIUDAD: Dict[str, str] = {
     'la america': 'Medellín', 'la américa': 'Medellín',
     'simon bolivar': 'Medellín', 'simón bolívar': 'Medellín',
 
-    # Envigado
+    # Envigado - Zonas completas
     'envigado': 'Envigado', 'zuñiga': 'Envigado', 'zúñiga': 'Envigado',
     'la paz': 'Envigado', 'el portal': 'Envigado',
-    'la frontera': 'Envigado', 'el esmeraldal': 'Envigado',
+    'la frontera': 'Envigado', 'el esmeraldal': 'Envigado', 'esmeraldal': 'Envigado',
     'loma del escobero': 'Envigado', 'las antillas': 'Envigado',
     'el dorado': 'Envigado', 'alcala': 'Envigado', 'alcalá': 'Envigado',
     'la cuenca': 'Envigado', 'el trianon': 'Envigado', 'el trianón': 'Envigado',
+    # Envigado - Zonas adicionales
+    'la abadia': 'Envigado', 'la abadía': 'Envigado', 'abadia': 'Envigado', 'abadía': 'Envigado',
+    'cumbres': 'Envigado', 'las cumbres': 'Envigado', 'loma del chocho': 'Envigado',
+    'camino verde': 'Envigado', 'las orquideas': 'Envigado', 'las orquídeas': 'Envigado',
+    'otra parte': 'Envigado', 'la mina': 'Envigado', 'el salado': 'Envigado',
+    'las palmas': 'Envigado', 'alto de las palmas': 'Envigado',
+    'el chinguí': 'Envigado', 'el chingui': 'Envigado',
+    'jardines': 'Envigado', 'la sebastiana': 'Envigado',
+    'san jose': 'Envigado', 'san josé': 'Envigado',
+    'zona centro envigado': 'Envigado', 'centro envigado': 'Envigado',
 
     # Sabaneta
     'sabaneta': 'Sabaneta', 'aves maria': 'Sabaneta', 'aves maría': 'Sabaneta',
@@ -253,10 +263,14 @@ ZONAS_SIMILARES: Dict[str, List[str]] = {
     'belen': ['laureles', 'floresta', 'la mota', 'guayabal'],
 
     # Envigado - zonas DENTRO de Envigado (NO incluir otras ciudades)
-    'envigado': ['zuñiga', 'la paz', 'el dorado', 'las antillas', 'alcala', 'la cuenca', 'el trianon', 'loma del escobero'],
-    'loma del escobero': ['envigado', 'las palmas'],
-    'zuñiga': ['envigado', 'la paz'],
+    'envigado': ['zuñiga', 'la paz', 'el dorado', 'las antillas', 'alcala', 'la cuenca', 'el trianon', 'loma del escobero', 'la abadia', 'cumbres', 'el esmeraldal', 'camino verde', 'las orquideas', 'otra parte'],
+    'loma del escobero': ['envigado', 'las palmas', 'cumbres'],
+    'zuñiga': ['envigado', 'la paz', 'la frontera'],
     'las antillas': ['envigado', 'alcala', 'el dorado'],
+    'la abadia': ['envigado', 'el esmeraldal', 'cumbres'],
+    'cumbres': ['envigado', 'la abadia', 'loma del escobero', 'el esmeraldal'],
+    'el esmeraldal': ['envigado', 'la abadia', 'cumbres', 'otra parte'],
+    'camino verde': ['envigado', 'las orquideas', 'otra parte'],
 
     # Sabaneta - zonas DENTRO de Sabaneta (NO incluir otras ciudades)
     'sabaneta': ['aves maria', 'mayorca', 'la doctora', 'calle larga'],
@@ -820,17 +834,17 @@ def calcular_rango_habitaciones(
     """
     Calcula el rango de habitaciones con tolerancia para el filtro SQL.
 
-    v2.3: Soporta flexibilidad 'estricto' para casos donde el usuario
-    dice "hasta X habitaciones" o "máximo X habitaciones".
+    v2.5: CAMBIO CRÍTICO - NUNCA reducir el mínimo de habitaciones.
+    Si el usuario pide 2 habitaciones, el filtro SQL debe ser >= 2, NUNCA >= 1.
+    Solo permitir +1 habitación extra hacia arriba (propiedades más grandes OK).
 
     Cuando flexibilidad='estricto':
     - NO aplicar tolerancia hacia arriba en hab_max
     - Solo mostrar propiedades con ≤X habitaciones
 
     Cuando flexibilidad='normal':
-    - Permite que propiedades "cercanas" pasen el filtro y sean evaluadas
-      por el scoring, donde se penalizarán o bonificarán según qué tan cerca
-      estén del valor ideal.
+    - Permite +1 habitación extra hacia arriba
+    - NUNCA permite menos habitaciones de las pedidas
 
     Args:
         hab_min: Habitaciones mínimas especificadas
@@ -844,19 +858,16 @@ def calcular_rango_habitaciones(
     hab_max_filtro = None
 
     if hab_min:
-        if flexibilidad == 'estricto':
-            # Sin tolerancia hacia abajo
-            hab_min_filtro = hab_min
-        else:
-            # -1 del mínimo (pero nunca menos de 1)
-            hab_min_filtro = max(1, hab_min - TOLERANCIA_HABITACIONES)
+        # v2.5: NUNCA reducir el mínimo - siempre usar el valor exacto
+        # Si el usuario pide 2 habitaciones, filtrar por >= 2
+        hab_min_filtro = hab_min
 
     if hab_max:
         if flexibilidad == 'estricto':
             # Sin tolerancia hacia arriba - respeta el máximo exacto
             hab_max_filtro = hab_max
         else:
-            # +1 del máximo
+            # +1 del máximo (propiedades más grandes están OK)
             hab_max_filtro = hab_max + TOLERANCIA_HABITACIONES
     elif hab_min and flexibilidad != 'estricto':
         # Si solo especificó mínimo y no es estricto, poner un máximo razonable (+2)

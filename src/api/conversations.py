@@ -639,6 +639,31 @@ def send_message(conversation_id):
                 conv_nombre = conv_row[1]
                 total_mensajes = conv_row[3] or 0
 
+            # =================================================================
+            # v2.7: FALLBACK - Recuperar criterios del último mensaje si están vacíos
+            # Esto puede ocurrir si criterios_acumulados es NULL en la BD
+            # =================================================================
+            if (not prev_criteria or prev_criteria == {}) and total_mensajes > 0:
+                print(f"⚠️ v2.7: criterios_acumulados vacío, intentando recuperar del último mensaje")
+                db.cursor.execute(
+                    """SELECT search_response
+                       FROM mensajes_conversacion
+                       WHERE conversacion_id = %s AND role = 'assistant'
+                       AND search_response IS NOT NULL
+                       ORDER BY fecha_creacion DESC LIMIT 1""",
+                    (conversation_id,)
+                )
+                last_msg = db.cursor.fetchone()
+                if last_msg:
+                    last_search_response = last_msg[0] if not isinstance(last_msg, dict) else last_msg.get('search_response')
+                    if last_search_response:
+                        try:
+                            search_resp = last_search_response if isinstance(last_search_response, dict) else json.loads(last_search_response)
+                            prev_criteria = search_resp.get('criteria', {})
+                            print(f"✅ v2.7: Recuperados criterios del último mensaje: {list(prev_criteria.keys())}")
+                        except (json.JSONDecodeError, TypeError) as e:
+                            print(f"⚠️ v2.7: Error al parsear search_response: {e}")
+
             # Guardar mensaje del usuario
             db.cursor.execute(
                 """INSERT INTO mensajes_conversacion
@@ -685,14 +710,21 @@ def send_message(conversation_id):
                     prev_criteria = apply_priority_weights(prev_criteria, selected_priority)
                     print(f"✅ Prioridad aplicada: {selected_priority}")
 
-                    # Verificar validación de área
-                    area_validation = validate_area_vs_type(prev_criteria)
-                    if area_validation:
-                        # Pedir validación de área
-                        return _handle_area_validation_request(
-                            db, conversation_id, user_id, user_message,
-                            prev_criteria, area_validation, conv_nombre, total_mensajes
-                        )
+                    # v2.7: Solo verificar área si el usuario la mencionó en su búsqueda original
+                    import re
+                    original_query = prev_criteria.get('original_query', '')
+                    usuario_menciono_area = bool(re.search(
+                        r'\d+\s*(?:m2|m²|metros?|mts?)\b',
+                        original_query.lower()
+                    ))
+
+                    if usuario_menciono_area:
+                        area_validation = validate_area_vs_type(prev_criteria)
+                        if area_validation:
+                            return _handle_area_validation_request(
+                                db, conversation_id, user_id, user_message,
+                                prev_criteria, area_validation, conv_nombre, total_mensajes
+                            )
 
                     # Ejecutar búsqueda
                     return _execute_search_and_respond(
@@ -762,13 +794,25 @@ def send_message(conversation_id):
                         )
 
                 # No hay suficientes criterios para preguntar prioridad
-                # Verificar validación de área directamente
-                area_validation = validate_area_vs_type(accumulated_criteria)
-                if area_validation:
-                    return _handle_area_validation_request(
-                        db, conversation_id, user_id, user_message,
-                        accumulated_criteria, area_validation, conv_nombre, total_mensajes
-                    )
+                # v2.7: Solo verificar validación de área si el usuario MENCIONÓ área
+                # Patrones que indican que el usuario habló de área
+                import re
+                usuario_menciono_area = bool(re.search(
+                    r'\d+\s*(?:m2|m²|metros?|mts?)\b',
+                    content.lower()
+                ))
+
+                # Debug: ver qué criterios se extrajeron
+                print(f"[DEBUG] Criterios extraídos: area_min={accumulated_criteria.get('area_min')}, area_max={accumulated_criteria.get('area_max')}")
+                print(f"[DEBUG] Usuario mencionó área: {usuario_menciono_area}")
+
+                if usuario_menciono_area:
+                    area_validation = validate_area_vs_type(accumulated_criteria)
+                    if area_validation:
+                        return _handle_area_validation_request(
+                            db, conversation_id, user_id, user_message,
+                            accumulated_criteria, area_validation, conv_nombre, total_mensajes
+                        )
 
                 # Ejecutar búsqueda directamente
                 return _execute_search_and_respond(
@@ -1077,9 +1121,27 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
     results = search_response.get('results', [])
     total_found = search_response.get('total_found', 0)
 
-    # Actualizar criterios con los de la búsqueda
+    # v2.7: NO hacer segundo merge - usar criterios que ya vienen procesados
+    # El merge ya se hizo en send_message() línea 751
+    # search() puede haber enriquecido los criterios pero NO debe sobrescribirlos
     search_criteria = search_response.get('criteria', {})
-    accumulated_criteria = merge_criteria(criteria, search_criteria, original_content)
+
+    # Empezar con los criterios que ya vienen fusionados (criteria)
+    accumulated_criteria = {**criteria}
+
+    # Solo copiar campos CALCULADOS de search_criteria que no existan en criteria
+    # Estos son campos que search() genera internamente (zonas_expandidas, segmento_precio, etc.)
+    CAMPOS_CALCULADOS = [
+        'zonas_expandidas', 'segmento_precio', 'tolerancia_aplicada',
+        'precio_min_implicito', 'precio_max_ajustado',
+        'area_min_ajustado', 'area_max_ajustado',
+        'habitaciones_min_filtro', 'habitaciones_max_filtro',
+        'perfil_comprador', 'ubicaciones_geo'
+    ]
+
+    for field in CAMPOS_CALCULADOS:
+        if field in search_criteria and field not in accumulated_criteria:
+            accumulated_criteria[field] = search_criteria[field]
 
     # Limpiar search_state del resultado final
     if 'search_state' in accumulated_criteria:

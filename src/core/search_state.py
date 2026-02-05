@@ -15,6 +15,12 @@ from enum import Enum
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, asdict
 
+# v2.6: Import funciones de cálculo de rangos
+from src.core.search_config import (
+    calcular_rango_precio,
+    calcular_rango_habitaciones
+)
+
 
 class SearchPhase(Enum):
     """Fases del flujo de búsqueda"""
@@ -227,8 +233,9 @@ def apply_priority_weights(criteria: Dict[str, Any], priority: str) -> Dict[str,
     """
     Aplica los pesos de prioridad a los criterios de búsqueda.
 
-    Si la prioridad no es 'balanced', ese criterio se convierte en filtro duro
-    (no se relaja durante la búsqueda progresiva).
+    v2.5: "balanced" (Confío en Findy) ahora marca TODOS los criterios mencionados
+    como filtros semi-duros. Esto significa que el sistema respetará todos los
+    criterios por igual en lugar de relajarlos.
 
     Args:
         criteria: Criterios de búsqueda actuales
@@ -242,12 +249,54 @@ def apply_priority_weights(criteria: Dict[str, Any], priority: str) -> Dict[str,
     criteria['priority_weights'] = weights
     criteria['selected_priority'] = priority
 
-    # Si hay una prioridad específica (no balanced), ese criterio es filtro duro
-    if priority != 'balanced':
-        hard_filters = criteria.get('hard_filters', [])
+    # v2.5: Marcar criterios como filtros duros
+    hard_filters = criteria.get('hard_filters', [])
+
+    if priority == 'balanced':
+        # "Confío en Findy" = respetar TODOS los criterios mencionados por igual
+        # Esto evita que el sistema relaje criterios importantes como habitaciones
+        if criteria.get('ubicaciones') and 'zona' not in hard_filters:
+            hard_filters.append('zona')
+        if criteria.get('precio_max') and 'precio' not in hard_filters:
+            hard_filters.append('precio')
+        if (criteria.get('habitaciones_min') or criteria.get('habitaciones_max')) and 'habitaciones' not in hard_filters:
+            hard_filters.append('habitaciones')
+    else:
+        # Prioridad específica: solo ese criterio es duro
         if priority not in hard_filters:
             hard_filters.append(priority)
-        criteria['hard_filters'] = hard_filters
+
+    criteria['hard_filters'] = hard_filters
+
+    # v2.6: Calcular rangos de filtros SQL si faltan
+    # Esto garantiza que los filtros de precio y habitaciones estén siempre disponibles
+    print(f"[apply_priority_weights] Criterios recibidos:")
+    print(f"   - precio_max: {criteria.get('precio_max')}")
+    print(f"   - precio_min_implicito: {criteria.get('precio_min_implicito')}")
+    print(f"   - habitaciones_min: {criteria.get('habitaciones_min')}")
+    print(f"   - habitaciones_max: {criteria.get('habitaciones_max')}")
+
+    # Calcular rango de precio
+    if criteria.get('precio_max') and not criteria.get('precio_min_implicito'):
+        precio_max = criteria['precio_max']
+        flexibilidad = criteria.get('flexibilidad_precio', 'normal')
+        precio_min, precio_max_ajustado = calcular_rango_precio(precio_max, flexibilidad=flexibilidad)
+        criteria['precio_min_implicito'] = precio_min
+        criteria['precio_max_ajustado'] = precio_max_ajustado
+        print(f"[apply_priority_weights] Calculado rango precio: ${precio_min/1_000_000:.0f}M - ${precio_max_ajustado/1_000_000:.0f}M")
+
+    # Calcular rango de habitaciones
+    if (criteria.get('habitaciones_min') or criteria.get('habitaciones_max')) and not criteria.get('habitaciones_min_filtro'):
+        hab_min_filtro, hab_max_filtro = calcular_rango_habitaciones(
+            criteria.get('habitaciones_min'),
+            criteria.get('habitaciones_max'),
+            flexibilidad=criteria.get('flexibilidad_habitaciones', 'normal')
+        )
+        if hab_min_filtro:
+            criteria['habitaciones_min_filtro'] = hab_min_filtro
+        if hab_max_filtro:
+            criteria['habitaciones_max_filtro'] = hab_max_filtro
+        print(f"[apply_priority_weights] Calculado rango habitaciones: {hab_min_filtro}-{hab_max_filtro}")
 
     # Limpiar estado de búsqueda - ya no estamos esperando prioridad
     if 'search_state' in criteria:
@@ -296,28 +345,17 @@ def should_ask_priority(criteria: Dict[str, Any]) -> bool:
     """
     Determina si debemos preguntar al usuario por la prioridad.
 
-    Solo preguntamos si hay más de un criterio especificado.
-    Si solo hay un criterio (o ninguno), no tiene sentido preguntar.
+    v2.7: DESHABILITADO - Siempre confiar en Findy (balanced)
+    El sistema va directo a resultados sin preguntar por prioridad.
 
     Args:
         criteria: Criterios extraídos
 
     Returns:
-        True si debemos preguntar por prioridad
+        Siempre False - no preguntar por prioridad
     """
-    criteria_count = 0
-
-    if criteria.get('ubicaciones'):
-        criteria_count += 1
-
-    if criteria.get('precio_max'):
-        criteria_count += 1
-
-    if criteria.get('habitaciones_min') or criteria.get('habitaciones_max'):
-        criteria_count += 1
-
-    # Solo preguntar si hay más de un criterio
-    return criteria_count > 1
+    # v2.7: DESHABILITADO - Ir directo a resultados con criterios balanceados
+    return False
 
 
 def get_priority_weight(criteria: Dict[str, Any], criterion: str) -> int:
