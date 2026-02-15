@@ -270,6 +270,15 @@ def generate_pdf(share_id: str):
         if not property_ids:
             return jsonify({'success': False, 'error': 'No hay propiedades en esta seleccion'}), 400
 
+        # Deduplicate property_ids preserving order
+        seen = set()
+        unique_ids = []
+        for pid in property_ids:
+            if pid not in seen:
+                seen.add(pid)
+                unique_ids.append(pid)
+        property_ids = unique_ids
+
         # Build agent info
         agent_info = None
         if selection.get('user_id'):
@@ -305,6 +314,24 @@ def generate_pdf(share_id: str):
         if not properties:
             return jsonify({'success': False, 'error': 'No se encontraron propiedades'}), 404
 
+        # Build intuitive filename from location
+        locations = set()
+        for p in properties:
+            zona = p.get('zona')
+            if zona:
+                locations.add(zona)
+            elif p.get('ciudad'):
+                locations.add(p['ciudad'])
+        if locations:
+            loc_name = list(locations)[0].replace(' ', '_')
+            allowed = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_áéíóúÁÉÍÓÚñÑ')
+            loc_name = ''.join(ch for ch in loc_name if ch in allowed)
+            if len(loc_name) > 30:
+                loc_name = loc_name[:30]
+            filename = f"Propuesta_{loc_name}_{len(properties)}_propiedades.pdf"
+        else:
+            filename = f"Propuesta_{len(properties)}_propiedades.pdf"
+
         # Generate PDF
         generator = PropertyPDFGenerator(properties, agent_info, share_id)
         pdf_buffer = generator.generate()
@@ -313,7 +340,7 @@ def generate_pdf(share_id: str):
             pdf_buffer,
             mimetype='application/pdf',
             as_attachment=True,
-            download_name=f'propuesta_{share_id}.pdf'
+            download_name=filename
         )
 
     except Exception as e:
