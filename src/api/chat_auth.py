@@ -32,7 +32,7 @@ def get_current_user():
     try:
         with DatabaseManager() as db:
             query = """
-                SELECT u.id, u.email, u.nombre
+                SELECT u.id, u.email, u.nombre, u.telefono
                 FROM chat_users u
                 JOIN chat_user_sessions s ON s.user_id = u.id
                 WHERE s.token = %s
@@ -113,7 +113,7 @@ def login():
         with DatabaseManager() as db:
             # Verificar credenciales
             query = """
-                SELECT id, nombre, email
+                SELECT id, nombre, email, telefono
                 FROM chat_users
                 WHERE email = %s
                   AND password_hash = crypt(%s, password_hash)
@@ -167,7 +167,8 @@ def login():
                     'user': {
                         'id': user['id'],
                         'email': user['email'],
-                        'nombre': user['nombre']
+                        'nombre': user['nombre'],
+                        'telefono': user.get('telefono')
                     },
                     'expires_at': expiration.isoformat()
                 }
@@ -217,7 +218,8 @@ def verify_token():
             'user': {
                 'id': user['id'],
                 'email': user['email'],
-                'nombre': user['nombre']
+                'nombre': user['nombre'],
+                'telefono': user.get('telefono')
             }
         }
     })
