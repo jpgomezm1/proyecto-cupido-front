@@ -5,8 +5,9 @@ API REST para Shared Property Selections
 Permite guardar y recuperar selecciones de propiedades compartidas
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from src.db.database import DatabaseManager
+from src.api.pdf_generator import PropertyPDFGenerator
 import traceback
 import uuid
 from datetime import datetime
@@ -226,6 +227,99 @@ def get_selection(share_id: str):
 
     except Exception as e:
         print(f"❌ Error en get_selection: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
+@shared_selections_bp.route('/<share_id>/pdf', methods=['GET'])
+def generate_pdf(share_id: str):
+    """
+    GET /api/shared-selections/:share_id/pdf
+
+    Generates and returns a PDF proposal for the shared property selection.
+    Returns binary PDF file with Content-Disposition: attachment.
+    """
+    db = None
+    try:
+        db = get_db()
+
+        # Get selection with agent info including email
+        db.cursor.execute("""
+            SELECT
+                s.id,
+                s.share_id,
+                s.property_ids,
+                s.user_id,
+                cu.nombre as agent_name,
+                cu.telefono as agent_phone,
+                cu.email as agent_email
+            FROM shared_property_selections s
+            LEFT JOIN chat_users cu ON s.user_id = cu.id
+            WHERE s.share_id = %s
+            AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
+        """, (share_id,))
+
+        selection = db.cursor.fetchone()
+
+        if not selection:
+            return jsonify({'success': False, 'error': 'Seleccion no encontrada o expirada'}), 404
+
+        property_ids = selection['property_ids']
+        if not property_ids:
+            return jsonify({'success': False, 'error': 'No hay propiedades en esta seleccion'}), 400
+
+        # Build agent info
+        agent_info = None
+        if selection.get('user_id'):
+            agent_info = {
+                'name': selection.get('agent_name') or 'Fynder',
+                'phone': selection.get('agent_phone') or '',
+                'email': selection.get('agent_email') or '',
+            }
+
+        # Get properties with extended fields for PDF
+        db.cursor.execute("""
+            SELECT
+                p.id,
+                p.titulo,
+                p.precio,
+                p.ciudad,
+                p.zona,
+                p.area_construida,
+                p.habitaciones,
+                p.banos,
+                p.parqueaderos,
+                p.imagen_principal,
+                p.tipo_propiedad,
+                p.estrato,
+                p.descripcion,
+                p.administracion
+            FROM propiedades p
+            WHERE p.id = ANY(%s)
+            ORDER BY array_position(%s, p.id)
+        """, (property_ids, property_ids))
+
+        properties = [dict(row) for row in db.cursor.fetchall()]
+
+        if not properties:
+            return jsonify({'success': False, 'error': 'No se encontraron propiedades'}), 404
+
+        # Generate PDF
+        generator = PropertyPDFGenerator(properties, agent_info, share_id)
+        pdf_buffer = generator.generate()
+
+        return send_file(
+            pdf_buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'propuesta_{share_id}.pdf'
+        )
+
+    except Exception as e:
+        print(f"❌ Error en generate_pdf: {e}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
     finally:
