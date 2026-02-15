@@ -1,651 +1,608 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PDF Generator for Property Proposals
-Generates professional PDF comparing shared property selections
+Professional PDF Generator for Property Proposals
+Canvas-based rendering for pixel-perfect control
 """
 
+import re
 import requests
 from io import BytesIO
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import inch, cm
-from reportlab.lib.colors import HexColor, white, black, lightgrey, Color
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table,
-    TableStyle, PageBreak, KeepTogether, Flowable
-)
+from reportlab.lib.colors import HexColor
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_LEFT
+from reportlab.platypus import Paragraph
 
 
-# Brand colors
+# ─── Page dimensions ───
+W, H = letter  # 612 x 792
+MARGIN = 50
+CONTENT_W = W - 2 * MARGIN  # 512
+
+# ─── Color palette ───
 ACCENT = HexColor('#2AE38C')
-DARK_BG = HexColor('#0a0a0a')
-DARK_CARD = HexColor('#1a1a1a')
-TEXT_PRIMARY = HexColor('#222222')
-TEXT_SECONDARY = HexColor('#666666')
+ACCENT_DARK = HexColor('#1FB872')
+DARK = HexColor('#0a0a0a')
+DARK_CARD = HexColor('#141414')
+WHITE = HexColor('#FFFFFF')
+TEXT_DARK = HexColor('#1a1a1a')
+TEXT_BODY = HexColor('#444444')
+TEXT_MUTED = HexColor('#888888')
+TEXT_SUBTLE = HexColor('#aaaaaa')
+COVER_TEXT = HexColor('#cccccc')
 LIGHT_BG = HexColor('#f5f5f5')
-WHITE = white
+BORDER = HexColor('#e5e5e5')
 
 FYNDER_LOGO_URL = "https://storage.googleapis.com/cluvi/FYNDER/logo_blanco_fynder_final.png"
 
-
-class ColoredBlock(Flowable):
-    """A colored rectangle block used as background"""
-    def __init__(self, width, height, color):
-        Flowable.__init__(self)
-        self.width = width
-        self.height = height
-        self.color = color
-
-    def draw(self):
-        self.canv.setFillColor(self.color)
-        self.canv.rect(0, 0, self.width, self.height, fill=1, stroke=0)
+MONTHS_ES = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+    5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+    9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+}
 
 
-def format_cop(price):
-    """Format price as Colombian Pesos"""
+# ─── Utilities ───
+
+def fmt_short(price):
+    """$550 M"""
     if not price:
         return "Consultar"
     try:
-        price = int(price)
-        if price >= 1_000_000_000:
-            return f"${price / 1_000_000_000:,.1f} Mil M"
-        elif price >= 1_000_000:
-            return f"${price / 1_000_000:,.0f} M"
-        else:
-            return f"${price:,.0f}"
+        p = int(price)
+        if p >= 1_000_000_000:
+            return f"${p / 1_000_000_000:,.1f} Mil M"
+        if p >= 1_000_000:
+            return f"${p / 1_000_000:,.0f} M"
+        return f"${p:,.0f}"
     except (ValueError, TypeError):
         return "Consultar"
 
 
-def format_cop_full(price):
-    """Format price with full number"""
+def fmt_full(price):
+    """$550,000,000"""
     if not price:
         return "Consultar"
     try:
-        return f"${int(price):,.0f} COP"
+        return f"${int(price):,.0f}"
     except (ValueError, TypeError):
         return "Consultar"
 
 
-def _fetch_single_image(url, max_width=420, max_height=260):
-    """Fetch a single image from URL and return ReportLab Image or None"""
+def clean_description(desc):
+    """Strip scraped metadata, return clean text or empty string"""
+    if not desc:
+        return ''
+    for marker in [
+        'Detalle del Inmueble', 'Detalle del inmueble',
+        'Características internas', 'Características externas',
+        'Estado: Usado', 'Estado: Nuevo', 'País: Colombia'
+    ]:
+        idx = desc.find(marker)
+        if idx > 0:
+            desc = desc[:idx]
+            break
+    desc = re.sub(r'Galer[ií]a\s+Disponible\s*', '', desc)
+    desc = re.sub(r'Precio\s+venta\s+\$[\d.,]+\s*(COP)?\s*', '', desc)
+    desc = re.sub(r'^(VENTA|ARRIENDO)\s+DE\s+', '', desc, flags=re.IGNORECASE)
+    desc = re.sub(r'\s+', ' ', desc).strip()
+    if len(desc) < 20:
+        return ''
+    if len(desc) > 220:
+        desc = desc[:220].rsplit(' ', 1)[0] + '...'
+    return desc
+
+
+def _fetch_image(url):
+    """Fetch image from URL, return ImageReader or None"""
     if not url:
         return None
     try:
-        resp = requests.get(url, timeout=5, stream=True)
+        resp = requests.get(url, timeout=6)
         resp.raise_for_status()
-        img_data = BytesIO(resp.content)
-        img = RLImage(img_data)
-        iw = img.imageWidth
-        ih = img.imageHeight
-        if iw <= 0 or ih <= 0:
-            return None
-        aspect = iw / ih
-        w = min(iw, max_width)
-        h = w / aspect
-        if h > max_height:
-            h = max_height
-            w = h * aspect
-        img.drawWidth = w
-        img.drawHeight = h
-        return img
+        return ImageReader(BytesIO(resp.content))
     except Exception:
         return None
 
 
+# ─── Main Generator ───
+
 class PropertyPDFGenerator:
-    """Generates professional PDF proposals for shared property selections"""
 
     def __init__(self, properties, agent_info, share_id):
-        """
-        Args:
-            properties: list of property dicts from DB
-            agent_info: dict with name, phone, email (can be None)
-            share_id: string identifier
-        """
         self.properties = properties
         self.agent = agent_info or {}
         self.share_id = share_id
-        self.page_width, self.page_height = letter
-        self.styles = self._create_styles()
-        self._image_cache = {}
+        self._images = {}
 
-    def _create_styles(self):
-        """Create custom paragraph styles"""
-        styles = getSampleStyleSheet()
-
-        styles.add(ParagraphStyle(
-            'CoverTitle',
-            parent=styles['Title'],
-            fontSize=28,
-            textColor=TEXT_PRIMARY,
-            spaceAfter=6,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold',
-        ))
-
-        styles.add(ParagraphStyle(
-            'CoverSubtitle',
-            parent=styles['Normal'],
-            fontSize=14,
-            textColor=TEXT_SECONDARY,
-            spaceAfter=4,
-            alignment=TA_CENTER,
-        ))
-
-        styles.add(ParagraphStyle(
-            'PropTitle',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor=TEXT_PRIMARY,
-            spaceAfter=4,
-            fontName='Helvetica-Bold',
-        ))
-
-        styles.add(ParagraphStyle(
-            'PropPrice',
-            parent=styles['Normal'],
-            fontSize=22,
-            textColor=ACCENT,
-            spaceAfter=8,
-            fontName='Helvetica-Bold',
-        ))
-
-        styles.add(ParagraphStyle(
-            'PropLocation',
-            parent=styles['Normal'],
-            fontSize=12,
-            textColor=TEXT_SECONDARY,
-            spaceAfter=8,
-        ))
-
-        styles.add(ParagraphStyle(
-            'PropDescription',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=TEXT_SECONDARY,
-            spaceAfter=6,
-            leading=14,
-        ))
-
-        styles.add(ParagraphStyle(
-            'AgentName',
-            parent=styles['Normal'],
-            fontSize=16,
-            textColor=TEXT_PRIMARY,
-            fontName='Helvetica-Bold',
-            spaceAfter=4,
-        ))
-
-        styles.add(ParagraphStyle(
-            'AgentDetail',
-            parent=styles['Normal'],
-            fontSize=11,
-            textColor=TEXT_SECONDARY,
-            spaceAfter=2,
-        ))
-
-        styles.add(ParagraphStyle(
-            'SectionTitle',
-            parent=styles['Heading2'],
-            fontSize=16,
-            textColor=TEXT_PRIMARY,
-            fontName='Helvetica-Bold',
-            spaceAfter=12,
-            spaceBefore=4,
-        ))
-
-        styles.add(ParagraphStyle(
-            'FooterText',
-            parent=styles['Normal'],
-            fontSize=8,
-            textColor=TEXT_SECONDARY,
-            alignment=TA_CENTER,
-        ))
-
-        styles.add(ParagraphStyle(
-            'SpecLabel',
-            parent=styles['Normal'],
-            fontSize=9,
-            textColor=TEXT_SECONDARY,
-            alignment=TA_CENTER,
-        ))
-
-        styles.add(ParagraphStyle(
-            'SpecValue',
-            parent=styles['Normal'],
-            fontSize=16,
-            textColor=TEXT_PRIMARY,
-            fontName='Helvetica-Bold',
-            alignment=TA_CENTER,
-        ))
-
-        return styles
+    # ── Image prefetch ──
 
     def _prefetch_images(self):
-        """Prefetch all property images concurrently"""
-        urls = []
+        urls = {}
         for prop in self.properties:
             url = prop.get('imagen_principal')
             if url:
-                urls.append(url)
+                urls[prop['id']] = url
+        urls['_logo'] = FYNDER_LOGO_URL
 
-        # Also fetch logo
-        urls.append(FYNDER_LOGO_URL)
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {}
-            for url in urls:
-                futures[url] = executor.submit(_fetch_single_image, url)
-
-            for url, future in futures.items():
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {k: pool.submit(_fetch_image, u) for k, u in urls.items()}
+            for k, f in futures.items():
                 try:
-                    self._image_cache[url] = future.result()
+                    self._images[k] = f.result()
                 except Exception:
-                    self._image_cache[url] = None
+                    self._images[k] = None
 
-    def _get_image(self, url, max_width=420, max_height=260):
-        """Get image from cache or fetch"""
-        if url in self._image_cache:
-            return self._image_cache[url]
-        return _fetch_single_image(url, max_width, max_height)
+    # ── Main entry ──
 
     def generate(self):
-        """Generate PDF and return BytesIO buffer"""
         self._prefetch_images()
+        buf = BytesIO()
+        c = canvas.Canvas(buf, pagesize=letter)
 
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=letter,
-            topMargin=0.6 * inch,
-            bottomMargin=0.6 * inch,
-            leftMargin=0.75 * inch,
-            rightMargin=0.75 * inch,
-        )
+        self._draw_cover(c)
+        c.showPage()
 
-        story = []
-
-        # Cover page
-        story.extend(self._build_cover_page())
-
-        # Property pages
         for i, prop in enumerate(self.properties):
-            story.append(PageBreak())
-            story.extend(self._build_property_page(prop, i + 1))
+            self._draw_property(c, prop, i + 1)
+            c.showPage()
 
-        # Comparison table (only if >1 property)
         if len(self.properties) > 1:
-            story.append(PageBreak())
-            story.extend(self._build_comparison_table())
+            self._draw_comparison(c)
+            c.showPage()
 
-        doc.build(story)
-        buffer.seek(0)
-        return buffer
+        c.save()
+        buf.seek(0)
+        return buf
 
-    def _build_cover_page(self):
-        """Build the cover page with logo, title, and agent contact"""
-        elements = []
-        usable_width = self.page_width - 1.5 * inch
+    # ════════════════════════════════════════════════════════
+    #  COVER PAGE
+    # ════════════════════════════════════════════════════════
 
-        # Dark header bar with Fynder logo
-        logo_img = self._get_image(FYNDER_LOGO_URL, max_width=140, max_height=40)
-        if logo_img:
-            logo_img.drawWidth = 120
-            logo_img.drawHeight = 35
-            header_content = logo_img
+    def _draw_cover(self, c):
+        # Full dark background
+        c.setFillColor(DARK)
+        c.rect(0, 0, W, H, fill=1, stroke=0)
+
+        # ── Logo ──
+        logo = self._images.get('_logo')
+        if logo:
+            c.drawImage(logo, (W - 110) / 2, 694, 110, 32, mask='auto')
         else:
-            header_content = Paragraph(
-                '<font color="white"><b>FYNDER</b></font>',
-                ParagraphStyle('LogoFallback', fontSize=20, textColor=white,
-                               alignment=TA_CENTER, fontName='Helvetica-Bold')
-            )
+            c.setFont('Helvetica-Bold', 24)
+            c.setFillColor(WHITE)
+            c.drawCentredString(W / 2, 700, 'FYNDER')
 
-        header_table = Table(
-            [[header_content]],
-            colWidths=[usable_width],
-            rowHeights=[60]
-        )
-        header_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), DARK_BG),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-            ('LEFTPADDING', (0, 0), (-1, -1), 20),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 20),
-            ('ROUNDEDCORNERS', [8, 8, 8, 8]),
-        ]))
-        elements.append(header_table)
-        elements.append(Spacer(1, 50))
+        # ── Accent line ──
+        c.setStrokeColor(ACCENT)
+        c.setLineWidth(2)
+        c.line(W / 2 - 45, 678, W / 2 + 45, 678)
 
-        # Title
-        elements.append(Paragraph("Propuesta de Propiedades", self.styles['CoverTitle']))
-        elements.append(Spacer(1, 8))
+        # ── Title ──
+        c.setFont('Helvetica-Bold', 38)
+        c.setFillColor(WHITE)
+        c.drawCentredString(W / 2, 618, 'PROPUESTA')
+        c.setFillColor(ACCENT)
+        c.drawCentredString(W / 2, 575, 'INMOBILIARIA')
 
-        # Subtitle
-        count = len(self.properties)
-        elements.append(Paragraph(
-            f"{count} propiedad{'es' if count != 1 else ''} seleccionada{'s' if count != 1 else ''} para ti",
-            self.styles['CoverSubtitle']
-        ))
-        elements.append(Spacer(1, 6))
+        # ── Subtitle ──
+        n = len(self.properties)
+        sub = f"{n} propiedad{'es' if n != 1 else ''} seleccionada{'s' if n != 1 else ''} para ti"
+        c.setFont('Helvetica', 13)
+        c.setFillColor(COVER_TEXT)
+        c.drawCentredString(W / 2, 542, sub)
 
         # Date
-        date_str = datetime.now().strftime('%d de %B de %Y').replace(
-            'January', 'enero').replace('February', 'febrero').replace(
-            'March', 'marzo').replace('April', 'abril').replace(
-            'May', 'mayo').replace('June', 'junio').replace(
-            'July', 'julio').replace('August', 'agosto').replace(
-            'September', 'septiembre').replace('October', 'octubre').replace(
-            'November', 'noviembre').replace('December', 'diciembre')
-        elements.append(Paragraph(date_str, self.styles['CoverSubtitle']))
-        elements.append(Spacer(1, 50))
+        now = datetime.now()
+        date_str = f"{now.day} de {MONTHS_ES.get(now.month, '')} de {now.year}"
+        c.setFont('Helvetica', 11)
+        c.setFillColor(TEXT_MUTED)
+        c.drawCentredString(W / 2, 522, date_str)
 
-        # Agent contact card
+        # ── Agent card ──
         agent_name = self.agent.get('name', 'Fynder')
         agent_phone = self.agent.get('phone', '')
-        agent_email = self.agent.get('email', '')
 
-        contact_rows = []
-        contact_rows.append([Paragraph(
-            '<font color="#2AE38C"><b>Tu Agente Inmobiliario</b></font>',
-            ParagraphStyle('CardHeader', fontSize=10, textColor=ACCENT,
-                           fontName='Helvetica-Bold', spaceAfter=4)
-        )])
-        contact_rows.append([Paragraph(agent_name, self.styles['AgentName'])])
+        card_w = 310
+        card_h = 100
+        card_x = (W - card_w) / 2
+        card_y = 380
+
+        # Card bg
+        c.setFillColor(DARK_CARD)
+        c.roundRect(card_x, card_y, card_w, card_h, 10, fill=1, stroke=0)
+
+        # Left accent bar
+        c.setFillColor(ACCENT)
+        c.roundRect(card_x, card_y, 5, card_h, 2, fill=1, stroke=0)
+
+        # Card content
+        ix = card_x + 28
+
+        c.setFont('Helvetica-Bold', 8)
+        c.setFillColor(ACCENT)
+        # Letter spacing effect via individual chars
+        label = 'TU AGENTE INMOBILIARIO'
+        c.drawString(ix, card_y + card_h - 24, label)
+
+        c.setFont('Helvetica-Bold', 19)
+        c.setFillColor(WHITE)
+        c.drawString(ix, card_y + card_h - 50, agent_name)
 
         if agent_phone:
-            phone_display = agent_phone
-            whatsapp_num = agent_phone.replace('+', '')
-            contact_rows.append([Paragraph(
-                f'Tel: {phone_display}',
-                self.styles['AgentDetail']
-            )])
-            contact_rows.append([Paragraph(
-                f'WhatsApp: wa.me/{whatsapp_num}',
-                self.styles['AgentDetail']
-            )])
+            whatsapp = agent_phone.replace('+', '')
+            c.setFont('Helvetica', 11)
+            c.setFillColor(TEXT_SUBTLE)
+            c.drawString(ix, card_y + card_h - 70, agent_phone)
+            c.setFont('Helvetica', 10)
+            c.setFillColor(TEXT_MUTED)
+            c.drawString(ix, card_y + card_h - 86, f"wa.me/{whatsapp}")
 
-        if agent_email:
-            contact_rows.append([Paragraph(
-                f'Email: {agent_email}',
-                self.styles['AgentDetail']
-            )])
+        # ── Property list ──
+        y = 340
+        c.setFont('Helvetica-Bold', 9)
+        c.setFillColor(ACCENT)
+        c.drawString(MARGIN + 50, y, 'PROPIEDADES INCLUIDAS')
 
-        card_width = 320
-        contact_table = Table(contact_rows, colWidths=[card_width - 40])
-        contact_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BG),
-            ('TOPPADDING', (0, 0), (-1, 0), 16),
-            ('BOTTOMPADDING', (0, -1), (-1, -1), 16),
-            ('LEFTPADDING', (0, 0), (-1, -1), 20),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 20),
-            ('TOPPADDING', (0, 1), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -2), 2),
-            ('ROUNDEDCORNERS', [6, 6, 6, 6]),
-        ]))
+        # Thin line
+        y -= 8
+        c.setStrokeColor(HexColor('#333333'))
+        c.setLineWidth(0.5)
+        c.line(MARGIN + 50, y, W - MARGIN - 50, y)
 
-        # Center the card
-        wrapper = Table([[contact_table]], colWidths=[usable_width])
-        wrapper.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        elements.append(wrapper)
+        y -= 22
+        for i, prop in enumerate(self.properties):
+            if y < 80:
+                break
+            titulo = prop.get('titulo', 'Sin título')
+            if len(titulo) > 42:
+                titulo = titulo[:40] + '..'
+            precio = fmt_short(prop.get('precio'))
 
-        elements.append(Spacer(1, 80))
+            # Number
+            c.setFont('Helvetica-Bold', 11)
+            c.setFillColor(ACCENT)
+            c.drawRightString(MARGIN + 68, y, f"{i + 1}.")
 
-        # Property summary list
-        if self.properties:
-            elements.append(Paragraph("Propiedades incluidas:", self.styles['SectionTitle']))
-            for i, prop in enumerate(self.properties):
-                titulo = prop.get('titulo', 'Sin titulo')[:60]
-                precio = format_cop(prop.get('precio'))
-                ciudad = prop.get('ciudad', '')
-                zona = prop.get('zona', '')
-                location = f"{zona}, {ciudad}" if zona else ciudad
-                elements.append(Paragraph(
-                    f'<b>{i + 1}.</b>  {titulo}  —  <font color="#2AE38C"><b>{precio}</b></font>  ({location})',
-                    ParagraphStyle('SummaryItem', fontSize=10, textColor=TEXT_PRIMARY,
-                                   spaceAfter=4, leading=14)
-                ))
+            # Title
+            c.setFont('Helvetica', 10)
+            c.setFillColor(COVER_TEXT)
+            c.drawString(MARGIN + 76, y, titulo)
 
-        # Footer
-        elements.append(Spacer(1, 40))
-        elements.append(Paragraph("Propuesta generada por Fynder", self.styles['FooterText']))
+            # Price
+            c.setFont('Helvetica-Bold', 10)
+            c.setFillColor(ACCENT)
+            c.drawRightString(W - MARGIN - 50, y, precio)
 
-        return elements
+            y -= 20
 
-    def _build_property_page(self, prop, rank):
-        """Build a single property detail page"""
-        elements = []
-        usable_width = self.page_width - 1.5 * inch
+        # ── Footer ──
+        c.setFont('Helvetica', 8)
+        c.setFillColor(HexColor('#444444'))
+        c.drawCentredString(W / 2, 38, 'Propuesta generada con Fynder')
 
-        # Rank badge + page info
+    # ════════════════════════════════════════════════════════
+    #  PROPERTY PAGE
+    # ════════════════════════════════════════════════════════
+
+    def _draw_property(self, c, prop, rank):
         total = len(self.properties)
-        header_text = f'<font color="#2AE38C"><b>#{rank}</b></font> <font color="#999999">de {total}</font>'
-        elements.append(Paragraph(header_text, ParagraphStyle(
-            'RankHeader', fontSize=12, textColor=TEXT_PRIMARY, spaceAfter=12
-        )))
 
-        # Property image
-        img_url = prop.get('imagen_principal')
-        if img_url:
-            img = self._get_image(img_url, max_width=usable_width, max_height=280)
-            if img:
-                # Center image
-                img_table = Table([[img]], colWidths=[usable_width])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ('TOPPADDING', (0, 0), (-1, -1), 0),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-                ]))
-                elements.append(img_table)
-                elements.append(Spacer(1, 16))
+        # ── Page indicator (top right) ──
+        c.setFont('Helvetica', 9)
+        c.setFillColor(TEXT_MUTED)
+        c.drawRightString(W - MARGIN, H - 35, f"{rank} / {total}")
+
+        # ── Image area ──
+        img_x = MARGIN
+        img_y = 478
+        img_w = CONTENT_W
+        img_h = 275
+
+        reader = self._images.get(prop['id'])
+        if reader:
+            # Cover-fit with clipping
+            c.saveState()
+            p = c.beginPath()
+            p.rect(img_x, img_y, img_w, img_h)
+            c.clipPath(p, stroke=0)
+
+            src_w, src_h = reader.getSize()
+            src_a = src_w / max(src_h, 1)
+            tgt_a = img_w / img_h
+
+            if src_a > tgt_a:
+                dh = img_h
+                dw = dh * src_a
+                dx = img_x - (dw - img_w) / 2
+                dy = img_y
             else:
-                elements.append(self._image_placeholder(usable_width))
-                elements.append(Spacer(1, 16))
+                dw = img_w
+                dh = dw / max(src_a, 0.1)
+                dx = img_x
+                dy = img_y - (dh - img_h) / 2
+
+            c.drawImage(reader, dx, dy, dw, dh, mask='auto')
+            c.restoreState()
+
+            # Thin border around image
+            c.setStrokeColor(BORDER)
+            c.setLineWidth(0.5)
+            c.rect(img_x, img_y, img_w, img_h, fill=0, stroke=1)
         else:
-            elements.append(self._image_placeholder(usable_width))
-            elements.append(Spacer(1, 16))
+            # Placeholder
+            c.setFillColor(LIGHT_BG)
+            c.roundRect(img_x, img_y, img_w, img_h, 8, fill=1, stroke=0)
+            c.setFont('Helvetica', 12)
+            c.setFillColor(TEXT_MUTED)
+            c.drawCentredString(img_x + img_w / 2, img_y + img_h / 2 - 4, 'Sin imagen disponible')
 
-        # Title
-        titulo = prop.get('titulo', 'Sin titulo')
-        elements.append(Paragraph(titulo, self.styles['PropTitle']))
+        # ── Rank badge (on image) ──
+        bx = img_x + 16
+        by = img_y + img_h - 46
+        c.setFillColor(ACCENT)
+        c.circle(bx + 15, by + 15, 17, fill=1, stroke=0)
+        c.setFont('Helvetica-Bold', 15)
+        c.setFillColor(DARK)
+        c.drawCentredString(bx + 15, by + 10, str(rank))
 
-        # Location
+        # ── Title ──
+        y = 450
+        titulo = prop.get('titulo', 'Sin título')
+        # Use paragraph for wrapping if long
+        if len(titulo) > 55:
+            style = ParagraphStyle('t', fontName='Helvetica-Bold', fontSize=16,
+                                   textColor=TEXT_DARK, leading=20)
+            para = Paragraph(titulo, style)
+            pw, ph = para.wrapOn(c, CONTENT_W, 60)
+            para.drawOn(c, MARGIN, y - ph + 16)
+            y -= ph + 4
+        else:
+            c.setFont('Helvetica-Bold', 16)
+            c.setFillColor(TEXT_DARK)
+            c.drawString(MARGIN, y, titulo)
+            y -= 4
+
+        # ── Location ──
+        y -= 18
         ciudad = prop.get('ciudad', '')
         zona = prop.get('zona', '')
-        location = f"{zona}, {ciudad}" if zona else ciudad
-        if location:
-            elements.append(Paragraph(f"📍 {location}", self.styles['PropLocation']))
+        loc = f"{zona}, {ciudad}" if zona else ciudad
+        if loc:
+            c.setFont('Helvetica', 11)
+            c.setFillColor(TEXT_MUTED)
+            c.drawString(MARGIN, y, loc)
+            y -= 8
 
-        # Price
-        precio_full = format_cop_full(prop.get('precio'))
-        elements.append(Paragraph(precio_full, self.styles['PropPrice']))
+        # ── Price ──
+        y -= 22
+        c.setFont('Helvetica-Bold', 26)
+        c.setFillColor(ACCENT)
+        c.drawString(MARGIN, y, fmt_full(prop.get('precio')))
 
-        # Specs grid
-        area = prop.get('area_construida', '-')
-        hab = prop.get('habitaciones', '-')
-        banos = prop.get('banos', '-')
-        parq = prop.get('parqueaderos', 0) or 0
+        # ── Accent divider ──
+        y -= 16
+        c.setStrokeColor(ACCENT)
+        c.setLineWidth(3)
+        c.line(MARGIN, y, MARGIN + 55, y)
 
-        spec_data = [
-            [
-                Paragraph(f'<b>{area}</b>', self.styles['SpecValue']),
-                Paragraph(f'<b>{hab}</b>', self.styles['SpecValue']),
-                Paragraph(f'<b>{banos}</b>', self.styles['SpecValue']),
-                Paragraph(f'<b>{parq}</b>', self.styles['SpecValue']),
-            ],
-            [
-                Paragraph('m\u00b2', self.styles['SpecLabel']),
-                Paragraph('Hab.', self.styles['SpecLabel']),
-                Paragraph('Ba\u00f1os', self.styles['SpecLabel']),
-                Paragraph('Parq.', self.styles['SpecLabel']),
-            ]
+        # ── Specs bar ──
+        y -= 14
+        bar_h = 52
+        bar_y = y - bar_h
+
+        # Background
+        c.setFillColor(LIGHT_BG)
+        c.roundRect(MARGIN, bar_y, CONTENT_W, bar_h, 8, fill=1, stroke=0)
+
+        specs = [
+            (str(prop.get('area_construida', '-')), 'm\u00b2'),
+            (str(prop.get('habitaciones', '-')), 'Hab.'),
+            (str(prop.get('banos', '-')), 'Ba\u00f1os'),
+            (str(prop.get('parqueaderos', 0) or 0), 'Parq.'),
         ]
+        col = CONTENT_W / 4
+        for i, (val, label) in enumerate(specs):
+            cx = MARGIN + col * i + col / 2
+            c.setFont('Helvetica-Bold', 19)
+            c.setFillColor(TEXT_DARK)
+            c.drawCentredString(cx, bar_y + 28, val)
+            c.setFont('Helvetica', 9)
+            c.setFillColor(TEXT_MUTED)
+            c.drawCentredString(cx, bar_y + 10, label)
+            # Separator
+            if i < 3:
+                sx = MARGIN + col * (i + 1)
+                c.setStrokeColor(BORDER)
+                c.setLineWidth(0.5)
+                c.line(sx, bar_y + 8, sx, bar_y + bar_h - 8)
 
-        col_w = usable_width / 4
-        spec_table = Table(spec_data, colWidths=[col_w] * 4, rowHeights=[30, 18])
-        spec_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BG),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e0e0e0')),
-            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
-        ]))
-        elements.append(spec_table)
-        elements.append(Spacer(1, 12))
+        y = bar_y - 14
 
-        # Property type, stratum, admin fee
-        details = []
+        # ── Details (type, stratum, admin) ──
+        parts = []
         tipo = prop.get('tipo_propiedad')
         if tipo:
-            details.append(f"<b>Tipo:</b> {tipo}")
+            parts.append(tipo)
         estrato = prop.get('estrato')
         if estrato:
-            details.append(f"<b>Estrato:</b> {estrato}")
+            parts.append(f"Estrato {estrato}")
         admin = prop.get('administracion')
         if admin:
-            details.append(f"<b>Admin:</b> {format_cop_full(admin)}")
+            parts.append(f"Admin {fmt_full(admin)}")
+        if parts:
+            c.setFont('Helvetica', 10)
+            c.setFillColor(TEXT_BODY)
+            c.drawString(MARGIN, y, '   \u00b7   '.join(parts))
+            y -= 22
 
-        if details:
-            elements.append(Paragraph(
-                "  |  ".join(details),
-                ParagraphStyle('PropDetails', fontSize=10, textColor=TEXT_SECONDARY,
-                               spaceAfter=12)
-            ))
-
-        # Description
-        desc = prop.get('descripcion', '')
+        # ── Description ──
+        desc = clean_description(prop.get('descripcion', ''))
         if desc:
-            # Truncate to 500 chars
-            if len(desc) > 500:
-                desc = desc[:500].rsplit(' ', 1)[0] + '...'
-            # Clean up for PDF
-            desc = desc.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            elements.append(Paragraph("Descripcion", self.styles['SectionTitle']))
-            elements.append(Paragraph(desc, self.styles['PropDescription']))
+            y -= 6
+            c.setFont('Helvetica-Bold', 11)
+            c.setFillColor(TEXT_DARK)
+            c.drawString(MARGIN, y, 'Descripción')
+            y -= 16
 
-        # Agent contact footer
-        elements.append(Spacer(1, 20))
-        agent_name = self.agent.get('name', 'Fynder')
-        agent_phone = self.agent.get('phone', '')
-        if agent_phone:
-            elements.append(Paragraph(
-                f'<font color="#999999">Contacto:</font> <b>{agent_name}</b> — {agent_phone}',
-                ParagraphStyle('PropFooter', fontSize=9, textColor=TEXT_SECONDARY,
-                               alignment=TA_RIGHT)
-            ))
+            desc_safe = desc.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            style = ParagraphStyle('d', fontSize=9, leading=13, textColor=TEXT_BODY)
+            para = Paragraph(desc_safe, style)
+            pw, ph = para.wrapOn(c, CONTENT_W, 100)
+            para.drawOn(c, MARGIN, y - ph)
 
-        return elements
+        # ── Footer ──
+        self._draw_page_footer(c)
 
-    def _build_comparison_table(self):
-        """Build comparison table page"""
-        elements = []
-        usable_width = self.page_width - 1.5 * inch
+    # ════════════════════════════════════════════════════════
+    #  COMPARISON PAGE
+    # ════════════════════════════════════════════════════════
 
-        elements.append(Paragraph("Comparacion de Propiedades", self.styles['CoverTitle']))
-        elements.append(Spacer(1, 20))
+    def _draw_comparison(self, c):
+        # ── Title ──
+        c.setFont('Helvetica-Bold', 22)
+        c.setFillColor(TEXT_DARK)
+        c.drawCentredString(W / 2, H - 65, 'Comparación de Propiedades')
 
-        # Table header
-        header = ['#', 'Propiedad', 'Precio', 'm\u00b2', 'Hab', 'Ba\u00f1os', 'Ubicacion']
+        # Accent line
+        c.setStrokeColor(ACCENT)
+        c.setLineWidth(2.5)
+        c.line(W / 2 - 55, H - 76, W / 2 + 55, H - 76)
 
-        rows = [header]
-        for i, prop in enumerate(self.properties):
-            titulo = prop.get('titulo', 'Sin titulo')
-            if len(titulo) > 30:
-                titulo = titulo[:28] + '..'
-            rows.append([
-                str(i + 1),
+        # ── Table layout ──
+        y_start = H - 110
+        row_h = 38
+
+        # Column config: (header, width, align)
+        # Total must = CONTENT_W (512)
+        cols = [
+            ('#',         28,  'center'),
+            ('Propiedad', 175, 'left'),
+            ('Precio',    80,  'left'),
+            ('m\u00b2',   45,  'center'),
+            ('Hab.',      40,  'center'),
+            ('Baños',     40,  'center'),
+            ('Ubicación', 104, 'left'),
+        ]
+
+        # ── Header row ──
+        y = y_start
+        c.setFillColor(DARK)
+        c.roundRect(MARGIN, y - row_h, CONTENT_W, row_h, 6, fill=1, stroke=0)
+
+        x = MARGIN
+        for header, w, align in cols:
+            c.setFont('Helvetica-Bold', 9)
+            c.setFillColor(WHITE)
+            if align == 'center':
+                c.drawCentredString(x + w / 2, y - row_h + 14, header)
+            else:
+                c.drawString(x + 10, y - row_h + 14, header)
+            x += w
+
+        y -= row_h
+
+        # ── Data rows ──
+        for idx, prop in enumerate(self.properties):
+            # Alternating bg
+            bg = LIGHT_BG if idx % 2 == 0 else WHITE
+            c.setFillColor(bg)
+            c.rect(MARGIN, y - row_h, CONTENT_W, row_h, fill=1, stroke=0)
+
+            # Bottom border
+            c.setStrokeColor(BORDER)
+            c.setLineWidth(0.5)
+            c.line(MARGIN, y - row_h, MARGIN + CONTENT_W, y - row_h)
+
+            titulo = prop.get('titulo', '')
+            if len(titulo) > 32:
+                titulo = titulo[:30] + '..'
+            zona = prop.get('zona', '')
+            ciudad = prop.get('ciudad', '')
+            loc = f"{zona}, {ciudad}" if zona else ciudad
+            if len(loc) > 18:
+                loc = loc[:16] + '..'
+
+            values = [
+                str(idx + 1),
                 titulo,
-                format_cop(prop.get('precio')),
+                fmt_short(prop.get('precio')),
                 str(prop.get('area_construida', '-')),
                 str(prop.get('habitaciones', '-')),
                 str(prop.get('banos', '-')),
-                f"{prop.get('zona', '')}, {prop.get('ciudad', '')}".strip(', ')[:25],
-            ])
+                loc,
+            ]
 
-        # Column widths
-        col_widths = [25, 130, 70, 35, 30, 38, usable_width - 328]
+            x = MARGIN
+            for i, ((_, w, align), val) in enumerate(zip(cols, values)):
+                if i == 0:  # Row number
+                    c.setFont('Helvetica-Bold', 9)
+                    c.setFillColor(TEXT_DARK)
+                elif i == 2:  # Price
+                    c.setFont('Helvetica-Bold', 9)
+                    c.setFillColor(ACCENT_DARK)
+                else:
+                    c.setFont('Helvetica', 9)
+                    c.setFillColor(TEXT_BODY)
 
-        table = Table(rows, colWidths=col_widths, repeatRows=1)
-        table.setStyle(TableStyle([
-            # Header
-            ('BACKGROUND', (0, 0), (-1, 0), DARK_BG),
-            ('TEXTCOLOR', (0, 0), (-1, 0), white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('TOPPADDING', (0, 0), (-1, 0), 10),
-            # Body
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('TEXTCOLOR', (0, 1), (-1, -1), TEXT_PRIMARY),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
-            ('TOPPADDING', (0, 1), (-1, -1), 8),
-            # Alternating row colors
-            *[('BACKGROUND', (0, i), (-1, i), LIGHT_BG)
-              for i in range(2, len(rows), 2)],
-            # Grid
-            ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e0e0e0')),
-            # Alignment
-            ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-            ('ALIGN', (3, 0), (5, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            # Price column in green
-            ('TEXTCOLOR', (2, 1), (2, -1), ACCENT),
-            ('FONTNAME', (2, 1), (2, -1), 'Helvetica-Bold'),
-        ]))
+                if align == 'center':
+                    c.drawCentredString(x + w / 2, y - row_h + 14, val)
+                else:
+                    c.drawString(x + 10, y - row_h + 14, val)
+                x += w
 
-        elements.append(table)
-        elements.append(Spacer(1, 30))
+            y -= row_h
 
-        # Agent contact at bottom
+        # ── Agent contact ──
+        y -= 30
         agent_name = self.agent.get('name', 'Fynder')
         agent_phone = self.agent.get('phone', '')
-        agent_email = self.agent.get('email', '')
 
-        contact_parts = [f'<b>{agent_name}</b>']
+        contact = f"Contacto:  {agent_name}"
         if agent_phone:
-            contact_parts.append(agent_phone)
-        if agent_email:
-            contact_parts.append(agent_email)
+            contact += f"   \u00b7   {agent_phone}"
+            wha = agent_phone.replace('+', '')
+            contact += f"   \u00b7   wa.me/{wha}"
 
-        elements.append(Paragraph(
-            f'Contacto: {" | ".join(contact_parts)}',
-            ParagraphStyle('TableFooter', fontSize=10, textColor=TEXT_SECONDARY,
-                           alignment=TA_CENTER, spaceAfter=8)
-        ))
+        c.setFont('Helvetica', 10)
+        c.setFillColor(TEXT_MUTED)
+        c.drawCentredString(W / 2, y, contact)
 
-        elements.append(Spacer(1, 20))
-        elements.append(Paragraph("Propuesta generada por Fynder", self.styles['FooterText']))
+        # Footer
+        c.setFont('Helvetica', 8)
+        c.setFillColor(TEXT_SUBTLE)
+        c.drawCentredString(W / 2, 38, 'Propuesta generada con Fynder')
 
-        return elements
+    # ════════════════════════════════════════════════════════
+    #  SHARED FOOTER
+    # ════════════════════════════════════════════════════════
 
-    def _image_placeholder(self, width, height=180):
-        """Create a gray placeholder for missing images"""
-        placeholder = Table(
-            [[Paragraph(
-                '<font color="#999999">Sin imagen disponible</font>',
-                ParagraphStyle('Placeholder', fontSize=12, textColor=TEXT_SECONDARY,
-                               alignment=TA_CENTER)
-            )]],
-            colWidths=[width],
-            rowHeights=[height]
-        )
-        placeholder.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BG),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ROUNDEDCORNERS', [6, 6, 6, 6]),
-        ]))
-        return placeholder
+    def _draw_page_footer(self, c):
+        """Agent contact footer for property pages"""
+        y = 48
+
+        # Accent line
+        c.setStrokeColor(ACCENT)
+        c.setLineWidth(1.5)
+        c.line(MARGIN, y + 14, W - MARGIN, y + 14)
+
+        agent_name = self.agent.get('name', 'Fynder')
+        agent_phone = self.agent.get('phone', '')
+
+        right_text = agent_name
+        if agent_phone:
+            right_text += f'  \u00b7  {agent_phone}'
+
+        c.setFont('Helvetica', 9)
+        c.setFillColor(TEXT_MUTED)
+        c.drawRightString(W - MARGIN, y, right_text)
+
+        c.setFont('Helvetica', 7)
+        c.setFillColor(TEXT_SUBTLE)
+        c.drawString(MARGIN, y, 'fynder.co')

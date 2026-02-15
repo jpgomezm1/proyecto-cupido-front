@@ -246,7 +246,7 @@ def generate_pdf(share_id: str):
     try:
         db = get_db()
 
-        # Get selection with agent info including email
+        # Get selection with agent info
         db.cursor.execute("""
             SELECT
                 s.id,
@@ -254,8 +254,7 @@ def generate_pdf(share_id: str):
                 s.property_ids,
                 s.user_id,
                 cu.nombre as agent_name,
-                cu.telefono as agent_phone,
-                cu.email as agent_email
+                cu.telefono as agent_phone
             FROM shared_property_selections s
             LEFT JOIN chat_users cu ON s.user_id = cu.id
             WHERE s.share_id = %s
@@ -277,7 +276,6 @@ def generate_pdf(share_id: str):
             agent_info = {
                 'name': selection.get('agent_name') or 'Fynder',
                 'phone': selection.get('agent_phone') or '',
-                'email': selection.get('agent_email') or '',
             }
 
         # Get properties with extended fields for PDF
