@@ -45,6 +45,7 @@ from src.api.dependencies import dependencies_bp
 from src.api.alerts import alerts_bp
 from src.api.share_analytics import share_analytics_bp
 from src.api.feedback import feedback_bp
+from src.api.platform_costs import platform_costs_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -157,6 +158,7 @@ app.register_blueprint(dependencies_bp)
 app.register_blueprint(alerts_bp)
 app.register_blueprint(share_analytics_bp)
 app.register_blueprint(feedback_bp)
+app.register_blueprint(platform_costs_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()

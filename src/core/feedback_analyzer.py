@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Feedback Analyzer - Procesa feedback con AI (Claude)
-Analiza texto e imagenes para generar un resumen detallado
+Analiza texto e imagenes para generar un resumen estructurado con triage AI
 Consume PROJECT_CONTEXT.md desde GitHub para contexto del codebase
 """
 
 import os
+import json
 import time
 import traceback
 import requests
@@ -19,6 +20,9 @@ CATEGORIA_LABELS = {
     'general': 'General',
     'otro': 'Otro',
 }
+
+TIPOS_VALIDOS = {'Bug', 'Mejora', 'Pregunta', 'Queja', 'Elogio'}
+PRIORIDADES_VALIDAS = {'baja', 'media', 'alta', 'urgente'}
 
 # GitHub raw URL for PROJECT_CONTEXT.md
 GITHUB_CONTEXT_URL = "https://raw.githubusercontent.com/jpgomezm1/proyecto-cupido-front/dev-patus/PROJECT_CONTEXT.md"
@@ -58,10 +62,48 @@ def _fetch_project_context() -> Optional[str]:
         return _context_cache['content']
 
 
-def analyze_feedback(contenido: str, categoria: str, imagenes: List[Dict] = None) -> Optional[str]:
+def _parse_json_response(text: str) -> Optional[dict]:
+    """Parse JSON from Claude response, handling markdown fences."""
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try stripping markdown fences
+    if '```' in text:
+        try:
+            json_str = text.split('```')[1]
+            if json_str.startswith('json'):
+                json_str = json_str[4:]
+            return json.loads(json_str.strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    return None
+
+
+def _build_legacy_resumen(result: dict) -> str:
+    """Build legacy text format from structured result for ai_resumen backwards compat."""
+    parts = []
+    if result.get('resumen'):
+        parts.append(f"**Resumen:** {result['resumen']}")
+    if result.get('tipo'):
+        parts.append(f"**Tipo:** {result['tipo']}")
+    if result.get('detalle'):
+        parts.append(f"**Detalle:** {result['detalle']}")
+    if result.get('archivos_relacionados'):
+        parts.append(f"**Archivos relacionados:** {result['archivos_relacionados']}")
+    if result.get('prioridad_sugerida'):
+        parts.append(f"**Prioridad sugerida:** {result['prioridad_sugerida']}")
+    if result.get('accion_recomendada'):
+        parts.append(f"**Accion recomendada:** {result['accion_recomendada']}")
+    return '\n'.join(parts)
+
+
+def analyze_feedback(contenido: str, categoria: str, imagenes: List[Dict] = None) -> Optional[dict]:
     """
-    Analiza feedback con Claude AI para generar un resumen detallado.
-    Incluye contexto del proyecto desde GitHub para mejor interpretación.
+    Analiza feedback con Claude AI para generar un triage estructurado.
 
     Args:
         contenido: Texto del feedback del usuario
@@ -69,7 +111,18 @@ def analyze_feedback(contenido: str, categoria: str, imagenes: List[Dict] = None
         imagenes: Lista de imagenes [{data: "base64...", nombre: "file.jpg", tipo: "image/jpeg"}]
 
     Returns:
-        Resumen AI generado o None si falla
+        Dict con campos estructurados o None si falla:
+        {
+            "titulo": str,
+            "tipo": str,
+            "prioridad_sugerida": str,
+            "confianza": int,
+            "resumen": str,
+            "detalle": str,
+            "archivos_relacionados": str,
+            "accion_recomendada": str,
+            "resumen_legacy": str  # backwards-compat text format
+        }
     """
     try:
         from anthropic import Anthropic
@@ -88,24 +141,37 @@ def analyze_feedback(contenido: str, categoria: str, imagenes: List[Dict] = None
         project_context = _fetch_project_context()
 
         system_prompt = """Eres un analista de feedback para Fynder, una plataforma inmobiliaria colombiana.
-Tu tarea es analizar el feedback de un usuario y generar un resumen estructurado y detallado.
+Tu tarea es analizar el feedback de un usuario y generar un triage estructurado en formato JSON.
 
 Reglas:
 - Escribe en español
 - Se conciso pero completo
 - Si hay imagenes adjuntas, describe lo que ves relevante al feedback (errores en pantalla, problemas de UI, etc.)
 - Identifica el problema o sugerencia principal
-- Sugiere una prioridad: baja, media, alta o urgente
-- El resumen debe ser util para que un desarrollador o product manager entienda rapidamente el feedback
-- Si tienes contexto del proyecto, referencia los archivos, módulos o endpoints específicos que podrían estar relacionados con el feedback
+- Si tienes contexto del proyecto, referencia los archivos, módulos o endpoints específicos que podrían estar relacionados
 
-Formato de respuesta (usa exactamente estos encabezados):
-**Resumen:** [1-2 frases resumiendo el feedback]
-**Tipo:** [Bug / Sugerencia / Queja / Elogio / Pregunta]
-**Detalle:** [Descripcion mas completa del problema o sugerencia]
-**Archivos relacionados:** [Lista de archivos/módulos del codebase que podrían estar involucrados, basándote en el contexto del proyecto]
-**Prioridad sugerida:** [baja / media / alta / urgente]
-**Accion recomendada:** [Que deberia hacer el equipo al respecto]"""
+RESPONDE UNICAMENTE con un JSON valido (sin markdown fences, sin texto adicional) con esta estructura exacta:
+
+{
+  "titulo": "Titulo corto descriptivo del feedback (max 100 caracteres)",
+  "tipo": "Bug | Mejora | Pregunta | Queja | Elogio",
+  "prioridad_sugerida": "baja | media | alta | urgente",
+  "confianza": 85,
+  "resumen": "1-2 frases resumiendo el feedback",
+  "detalle": "Descripcion completa del problema o sugerencia",
+  "archivos_relacionados": "Lista de archivos/módulos del codebase que podrían estar involucrados",
+  "accion_recomendada": "Que deberia hacer el equipo al respecto"
+}
+
+Reglas para cada campo:
+- titulo: Maximo 100 caracteres, debe ser descriptivo y accionable (ej: "Filtro de precio no aplica al buscar propiedades")
+- tipo: EXACTAMENTE uno de: Bug, Mejora, Pregunta, Queja, Elogio
+- prioridad_sugerida: EXACTAMENTE uno de: baja, media, alta, urgente
+- confianza: Numero entero de 1 a 100 indicando tu confianza en la clasificación
+- resumen: 1-2 frases concisas
+- detalle: Descripcion mas completa
+- archivos_relacionados: Archivos del codebase relevantes, o "No determinado" si no tienes contexto
+- accion_recomendada: Accion concreta para el equipo"""
 
         # Append project context to system prompt if available
         if project_context:
@@ -161,7 +227,7 @@ Formato de respuesta (usa exactamente estos encabezados):
             ]
         )
 
-        ai_resumen = response.content[0].text.strip()
+        raw_text = response.content[0].text.strip()
 
         # Track AI usage
         try:
@@ -182,8 +248,44 @@ Formato de respuesta (usa exactamente estos encabezados):
         except Exception as track_err:
             print(f"[FeedbackAnalyzer] Error tracking usage: {track_err}")
 
-        print(f"[FeedbackAnalyzer] Resumen generado ({len(ai_resumen)} chars)")
-        return ai_resumen
+        # Parse JSON response
+        result = _parse_json_response(raw_text)
+        if not result:
+            print(f"[FeedbackAnalyzer] Failed to parse JSON, falling back to text")
+            # Return a minimal structured result with the raw text as legacy
+            return {
+                'titulo': None,
+                'tipo': None,
+                'prioridad_sugerida': None,
+                'confianza': None,
+                'resumen_legacy': raw_text,
+            }
+
+        # Validate and sanitize fields
+        if result.get('tipo') not in TIPOS_VALIDOS:
+            result['tipo'] = None
+
+        if result.get('prioridad_sugerida') not in PRIORIDADES_VALIDAS:
+            result['prioridad_sugerida'] = None
+
+        # Clamp confianza to 1-100
+        confianza = result.get('confianza')
+        if isinstance(confianza, (int, float)):
+            result['confianza'] = max(1, min(100, int(confianza)))
+        else:
+            result['confianza'] = None
+
+        # Truncate titulo to 120 chars
+        if result.get('titulo'):
+            result['titulo'] = result['titulo'][:120]
+
+        # Generate legacy text format for ai_resumen backwards compat
+        result['resumen_legacy'] = _build_legacy_resumen(result)
+
+        print(f"[FeedbackAnalyzer] Triage: tipo={result.get('tipo')}, "
+              f"prioridad={result.get('prioridad_sugerida')}, "
+              f"confianza={result.get('confianza')}")
+        return result
 
     except Exception as e:
         print(f"[FeedbackAnalyzer] Error: {e}")
