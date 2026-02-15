@@ -5,6 +5,7 @@ WhatsApp Groups API - Gestión de grupos de WhatsApp para captación
 """
 
 from flask import Blueprint, request, jsonify
+from flask_cors import CORS
 from src.db.database import DatabaseManager
 from datetime import datetime
 import os
@@ -12,17 +13,18 @@ import requests
 
 whatsapp_groups_bp = Blueprint('whatsapp_groups', __name__, url_prefix='/api')
 
-# Configuración de UltraMSG
-ULTRAMSG_INSTANCE_ID = os.getenv('ULTRAMSG_INSTANCE_ID')
-ULTRAMSG_TOKEN = os.getenv('ULTRAMSG_TOKEN')
+CORS(whatsapp_groups_bp, supports_credentials=True)
 
 
 def get_ultramsg_groups():
     """Obtiene todos los grupos de WhatsApp desde UltraMSG API."""
-    if not ULTRAMSG_INSTANCE_ID or not ULTRAMSG_TOKEN:
+    instance_id = os.getenv('ULTRAMSG_INSTANCE_ID')
+    token = os.getenv('ULTRAMSG_TOKEN')
+
+    if not instance_id or not token:
         return None, "Credenciales de UltraMSG no configuradas"
 
-    url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE_ID}/groups?token={ULTRAMSG_TOKEN}"
+    url = f"https://api.ultramsg.com/{instance_id}/groups?token={token}"
 
     try:
         response = requests.get(url, timeout=30)

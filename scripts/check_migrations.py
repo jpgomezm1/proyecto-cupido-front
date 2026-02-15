@@ -219,7 +219,8 @@ def verify_tables(conn):
         'chat_users',
         'ai_usage_log',
         'deals',
-        'schema_migrations'
+        'schema_migrations',
+        'feedback'
     ]
 
     with conn.cursor() as cur:
@@ -311,6 +312,11 @@ def mark_existing_migrations(conn):
         '010_ai_usage_tracking.sql': ['ai_usage_log'],
         'add_descripcion_ai.sql': [],  # Solo agrega columnas
         'add_validation_fields.sql': [],  # Solo agrega columnas
+        '011_alert_thresholds.sql': ['alert_thresholds'],
+        '012_agent_phone_numbers.sql': [],  # Solo modifica columnas
+        '013_share_analytics.sql': ['share_events'],
+        '014_feedback.sql': ['feedback'],
+        '015_feedback_ai_resumen.sql': [],  # Solo agrega columna
     }
 
     marked_count = 0
