@@ -13,6 +13,7 @@ import json
 from src.db.database import DatabaseManager
 from src.core.search_agent import PropertySearchAgent
 from src.core.search_context import merge_criteria, generate_conversation_name
+from src.core.search_config import normalizar_texto_busqueda
 from src.api.chat_auth import require_chat_auth, get_current_user
 
 # v2.4: Nuevos módulos para sistema de fases
@@ -767,13 +768,16 @@ def send_message(conversation_id):
             # FASE: Mensaje inicial o listo para buscar
             # -----------------------------------------------------------------
             else:
+                # v2.8: Normalizar texto (corregir typos) antes de extraer criterios
+                content_normalizado = normalizar_texto_busqueda(content)
+
                 # Extraer criterios del mensaje actual
                 agent = get_search_agent()
                 start_time = datetime.now()
 
                 # Extraer criterios SIN ejecutar búsqueda completa
                 new_criteria = agent._extract_search_criteria(
-                    content,
+                    content_normalizado,
                     prev_criteria if total_mensajes > 0 else None
                 )
 

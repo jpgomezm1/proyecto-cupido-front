@@ -64,6 +64,8 @@ from src.core.search_config import (
     inferir_zona_de_direccion,
     # v2.4: Variaciones de zona para SQL
     get_variaciones_zona,
+    # v2.8: Normalización de texto
+    normalizar_texto_busqueda,
 )
 
 # v2.4: Importar funciones de prioridad
@@ -150,6 +152,9 @@ class PropertySearchAgent:
         Returns:
             Diccionario con criterios estructurados
         """
+
+        # v2.8: Normalizar texto (corregir typos comunes) antes de enviar a Claude
+        query = normalizar_texto_busqueda(query)
 
         # Construir contexto de búsqueda previa si existe
         previous_context = ""
@@ -264,6 +269,12 @@ IMPORTANTE - CONVERSIÓN DE PRECIOS COLOMBIANOS:
 - "Presupuesto 1000 millones" significa precio_max = 1,000,000,000
 - "Entre 500 y 800" significa precio_min = 500,000,000, precio_max = 800,000,000
 
+DESAMBIGUACIÓN PRECIO vs ÁREA (MUY IMPORTANTE):
+- "X millones" SIEMPRE es precio, NUNCA área. Ejemplo: "360 millones" → precio_max = 360,000,000
+- "X m2", "X m²", "X metros cuadrados" SIEMPRE es área. Ejemplo: "80 m2" → area_min = 80
+- Un número solo seguido de "millones" o "mill" es precio
+- Un número solo sin unidad en contexto de precio ("hasta 500", "presupuesto 360") es precio en millones
+
 UBICACIONES CANÓNICAS EN ÁREA METROPOLITANA DE MEDELLÍN:
 IMPORTANTE: Siempre usa estos nombres exactos (canónicos) para las ubicaciones:
 
@@ -298,6 +309,18 @@ Cuando el usuario usa guión (-) para separar ubicaciones, son DOS ubicaciones d
 - "Laureles-Estadio" → ["Laureles", "Estadio"] (dos barrios separados)
 - "Envigado-Sabaneta" → ["Envigado", "Sabaneta"] (dos ciudades separadas)
 NUNCA interpretes el guión como parte del nombre de una zona. SIEMPRE sepáralas en ubicaciones individuales.
+
+SUB-BARRIOS DE EL POBLADO (IMPORTANTE - mantener como ubicación independiente):
+Estos son sub-barrios dentro de El Poblado. Cuando el usuario los mencione, úsalos TAL CUAL como ubicación,
+NO los conviertas a "El Poblado":
+- Patio Bonito, Las Vegas, Las Lomas, La Concha, Provenza
+- Los González, El Campestre, Alejandría, La Aguacatala, Villa Carlota
+- Santa María de los Ángeles
+Ejemplo: "apartamento en Las Vegas" → ubicaciones: ["Las Vegas"] (NO ["El Poblado"])
+Ejemplo: "Patio Bonito" → ubicaciones: ["Patio Bonito"]
+
+SUB-BARRIOS DE LAURELES (mantener como ubicación independiente):
+- Lorena
 
 SABANETA: Aves María, Mayorca, La Doctora, Calle Larga, San José, Asdesillas
 ITAGÜÍ: Ditaires, Santa María, Pilsen
