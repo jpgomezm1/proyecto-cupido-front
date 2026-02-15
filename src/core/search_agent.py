@@ -291,6 +291,14 @@ Si el usuario menciona barrios de DIFERENTES ciudades en la misma búsqueda, inc
   (Castropol es El Poblado/Medellín, La Abadía y El Esmeraldal son Envigado)
 - "Poblado o Envigado parte baja" → ["El Poblado", "La Abadía", "El Esmeraldal", "Cumbres"]
 
+UBICACIONES SEPARADAS POR GUIÓN (MUY IMPORTANTE):
+Cuando el usuario usa guión (-) para separar ubicaciones, son DOS ubicaciones diferentes:
+- "Envigado-El Poblado" → ["Envigado", "El Poblado"] (dos zonas separadas)
+- "Medellín-Sabaneta" → ["Medellín", "Sabaneta"] (dos ciudades separadas)
+- "Laureles-Estadio" → ["Laureles", "Estadio"] (dos barrios separados)
+- "Envigado-Sabaneta" → ["Envigado", "Sabaneta"] (dos ciudades separadas)
+NUNCA interpretes el guión como parte del nombre de una zona. SIEMPRE sepáralas en ubicaciones individuales.
+
 SABANETA: Aves María, Mayorca, La Doctora, Calle Larga, San José, Asdesillas
 ITAGÜÍ: Ditaires, Santa María, Pilsen
 BELLO: Niquía, Cabañas, París
@@ -467,6 +475,21 @@ Responde SOLO con el JSON de criterios."""
 
             # 3. Normalizar y expandir ubicaciones v2.1
             if criteria.get('ubicaciones'):
+                # v2.8: Pre-procesar ubicaciones separadas por guión
+                # "Envigado-El Poblado" → ["Envigado", "El Poblado"]
+                ubicaciones_expandidas = []
+                for ub in criteria['ubicaciones']:
+                    if isinstance(ub, str) and '-' in ub:
+                        partes = [p.strip() for p in ub.split('-') if p.strip()]
+                        if len(partes) >= 2:
+                            ubicaciones_expandidas.extend(partes)
+                            print(f"[DEBUG] v2.8: Ubicación con guión dividida: '{ub}' → {partes}")
+                        else:
+                            ubicaciones_expandidas.append(ub)
+                    else:
+                        ubicaciones_expandidas.append(ub)
+                criteria['ubicaciones'] = ubicaciones_expandidas
+
                 ubicaciones_normalizadas = []
                 ubicaciones_geo = []  # Para búsquedas geoespaciales
 
