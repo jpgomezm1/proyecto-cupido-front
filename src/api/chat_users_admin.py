@@ -396,8 +396,9 @@ def update_user(user_id):
 @token_required
 def delete_user(user_id):
     """
-    Desactiva un usuario (soft delete)
-    También cierra todas sus sesiones activas
+    Elimina permanentemente un usuario y todos sus datos asociados.
+    Las FK con CASCADE eliminan sesiones, logs y favoritos automáticamente.
+    conversaciones_busqueda.user_id se pone NULL (ON DELETE SET NULL).
     """
     try:
         with DatabaseManager() as db:
@@ -411,29 +412,19 @@ def delete_user(user_id):
                     'error': 'Usuario no encontrado'
                 }), 404
 
-            # Desactivar usuario
-            db.cursor.execute(
-                "UPDATE chat_users SET activo = FALSE WHERE id = %s",
-                (user_id,)
-            )
-
-            # Cerrar todas las sesiones
-            db.cursor.execute(
-                "UPDATE chat_user_sessions SET activa = FALSE WHERE user_id = %s",
-                (user_id,)
-            )
-
+            # Eliminar permanentemente (cascades handle related records)
+            db.cursor.execute("DELETE FROM chat_users WHERE id = %s", (user_id,))
             db.conn.commit()
 
-            print(f"✅ Usuario desactivado: {user['email']}")
+            print(f"🗑️ Usuario eliminado permanentemente: {user['email']}")
 
             return jsonify({
                 'success': True,
-                'message': 'Usuario desactivado correctamente'
+                'message': 'Usuario eliminado permanentemente'
             })
 
     except Exception as e:
-        print(f"Error desactivando usuario: {e}")
+        print(f"Error eliminando usuario: {e}")
         traceback.print_exc()
         return jsonify({
             'success': False,
