@@ -21,7 +21,7 @@ CATEGORIA_LABELS = {
 }
 
 # GitHub raw URL for PROJECT_CONTEXT.md
-GITHUB_CONTEXT_URL = "https://raw.githubusercontent.com/jpgomezm1/proyecto-cupido-front/main/PROJECT_CONTEXT.md"
+GITHUB_CONTEXT_URL = "https://raw.githubusercontent.com/jpgomezm1/proyecto-cupido-front/dev-patus/PROJECT_CONTEXT.md"
 
 # Cache del contexto para no descargarlo en cada request
 _context_cache = {
