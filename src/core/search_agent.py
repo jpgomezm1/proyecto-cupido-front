@@ -711,6 +711,19 @@ Responde SOLO con el JSON de criterios."""
                 search_progression['resultados_por_nivel'][f'ub_{ub_level}'] = len(results)
                 print(f"   Ubicación nivel {ub_level} ({ubicacion_names[ub_level]}): {len(results)} resultados")
 
+                # v2.9: Log de distribución geográfica de resultados
+                if results and ub_level == 0:
+                    ciudades_esperadas = set(c for c in get_ciudades_de_zonas(ubicaciones_originales) if c)
+                    ciudades_en_resultados = {}
+                    for r in results:
+                        c = r.get('ciudad', 'Sin ciudad')
+                        ciudades_en_resultados[c] = ciudades_en_resultados.get(c, 0) + 1
+                    fuera_de_zona = {c: n for c, n in ciudades_en_resultados.items()
+                                     if c not in ciudades_esperadas and c != 'Sin ciudad'}
+                    search_log.info(f"[GEO] Distribución: {ciudades_en_resultados}")
+                    if fuera_de_zona:
+                        search_log.warning(f"[GEO] Propiedades fuera de zona detectadas: {fuera_de_zona} (serán penalizadas en ranking)")
+
                 # Si tenemos suficientes resultados, parar
                 if len(results) >= min_results:
                     search_progression['nivel_final'] = 0
@@ -893,31 +906,46 @@ Responde SOLO con el JSON de criterios."""
 
         if ubicaciones_originales:
             if ubicacion_level == 0:
-                # NIVEL 0: Zonas con TODAS sus variaciones
-                # Ejemplo: "El Poblado" busca también "Santa María Poblado", "Provenza", etc.
+                # NIVEL 0: Zonas con variaciones, RESTRINGIDAS por ciudad
+                # v2.9: Previene cross-city matching (ej: "San José" existe en Envigado Y Sabaneta)
                 zona_conditions = []
                 param_idx = 0
 
                 for ubicacion in ubicaciones_originales:
-                    # Obtener todas las variaciones de esta zona
                     variaciones = get_variaciones_zona(ubicacion)
+                    ciudad_de_zona = get_ciudad_de_zona(ubicacion)
 
-                    # Crear condición OR para todas las variaciones de esta ubicación
-                    variacion_conditions = []
-                    for var in variaciones:
-                        variacion_conditions.append(f"""(
-                            zona ILIKE %(ubicacion_{param_idx})s OR
-                            ciudad ILIKE %(ubicacion_{param_idx})s
-                        )""")
-                        params[f'ubicacion_{param_idx}'] = f'%{var}%'
-                        param_idx += 1
+                    # Match directo por nombre de ubicación (zona o ciudad)
+                    direct_conditions = []
+                    direct_conditions.append(f"zona ILIKE %(ub_direct_{param_idx})s")
+                    direct_conditions.append(f"ciudad ILIKE %(ub_direct_{param_idx})s")
+                    params[f'ub_direct_{param_idx}'] = f'%{ubicacion}%'
+                    param_idx += 1
 
-                    # Agrupar todas las variaciones de esta ubicación
-                    if variacion_conditions:
-                        zona_conditions.append(f"({' OR '.join(variacion_conditions)})")
+                    # Sub-zona variaciones CON restricción de ciudad
+                    if ciudad_de_zona and len(variaciones) > 1:
+                        sub_zone_conditions = []
+                        for var in variaciones:
+                            # Saltar la ubicación principal (ya cubierta arriba)
+                            if var.lower() == ubicacion.lower():
+                                continue
+                            sub_zone_conditions.append(f"zona ILIKE %(ub_var_{param_idx})s")
+                            params[f'ub_var_{param_idx}'] = f'%{var}%'
+                            param_idx += 1
+
+                        if sub_zone_conditions:
+                            # Variaciones solo matchean si la ciudad es correcta
+                            params[f'ub_city_{param_idx}'] = f'%{ciudad_de_zona}%'
+                            direct_conditions.append(
+                                f"(({' OR '.join(sub_zone_conditions)}) AND ciudad ILIKE %(ub_city_{param_idx})s)"
+                            )
+                            param_idx += 1
+
+                    zona_conditions.append(f"({' OR '.join(direct_conditions)})")
 
                 if zona_conditions:
                     conditions.append(f"({' OR '.join(zona_conditions)})")
+                    search_log.info(f"[GEO] Level 0 filtro: {len(ubicaciones_originales)} ubicaciones, ciudades esperadas: {[get_ciudad_de_zona(u) for u in ubicaciones_originales]}")
 
             elif ubicacion_level == 1:
                 # NIVEL 1: Buscar por ciudad (ampliando desde zonas específicas)
@@ -937,16 +965,29 @@ Responde SOLO con el JSON de criterios."""
                     conditions.append(f"({' OR '.join(zona_conditions)})")
 
             elif ubicacion_level >= 2:
-                # NIVEL 2+: Zonas expandidas (zonas similares dentro de la misma ciudad)
+                # NIVEL 2+: Zonas expandidas (zonas similares) CON restricción de ciudad
+                # v2.9: Restringir zonas expandidas a ciudades esperadas
                 zonas_expandidas = criteria.get('zonas_expandidas', ubicaciones_originales)
+                ciudades_esperadas = get_ciudades_de_zonas(ubicaciones_originales)
                 zona_conditions = []
-                for i, ubicacion in enumerate(zonas_expandidas):
-                    zona_conditions.append(f"""(
-                        zona ILIKE %(ubicacion_{i})s OR
-                        ciudad ILIKE %(ubicacion_{i})s
-                    )""")
-                    params[f'ubicacion_{i}'] = f'%{ubicacion}%'
-                conditions.append(f"({' OR '.join(zona_conditions)})")
+                param_idx = 0
+                for ubicacion in zonas_expandidas:
+                    zona_conditions.append(f"zona ILIKE %(ub_exp_{param_idx})s")
+                    params[f'ub_exp_{param_idx}'] = f'%{ubicacion}%'
+                    param_idx += 1
+                # Agregar ciudades originales como match directo
+                for ubicacion in ubicaciones_originales:
+                    zona_conditions.append(f"ciudad ILIKE %(ub_exp_{param_idx})s")
+                    params[f'ub_exp_{param_idx}'] = f'%{ubicacion}%'
+                    param_idx += 1
+                if ciudades_esperadas:
+                    ciudad_constraint = []
+                    for i, c in enumerate(ciudades_esperadas):
+                        ciudad_constraint.append(f"ciudad ILIKE %(ub_exp_city_{i})s")
+                        params[f'ub_exp_city_{i}'] = f'%{c}%'
+                    conditions.append(f"(({' OR '.join(zona_conditions)}) AND ({' OR '.join(ciudad_constraint)}))")
+                else:
+                    conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Filtro por habitaciones (v2.2: con tolerancia ±1 para permitir near-matches)
         # Usa valores de filtro tolerantes, el scoring diferenciará exactos vs cercanos
@@ -1098,17 +1139,22 @@ Responde SOLO con el JSON de criterios."""
                     match_details['precio'] = 'excede'
 
             # 2. UBICACIÓN - Coincidencia exacta vs zona expandida (peso dinámico v2.4)
+            # v2.9: Validación geográfica por ciudad para evitar cross-city matches
             if criteria.get('ubicaciones'):
                 zona = (result.get('zona') or '').lower()
                 ciudad = (result.get('ciudad') or '').lower()
                 direccion = (result.get('direccion_completa') or '').lower()
                 titulo = (result.get('titulo') or '').lower()
 
+                # v2.9: Verificar que la propiedad esté en una ciudad esperada
+                ciudades_esperadas = [c.lower() for c in get_ciudades_de_zonas(criteria['ubicaciones']) if c]
+                ciudad_correcta = any(ce in ciudad for ce in ciudades_esperadas) if ciudades_esperadas else True
+
                 ubicacion_match = False
                 for ubicacion in criteria['ubicaciones']:
                     ub_lower = ubicacion.lower()
                     if ub_lower in zona or ub_lower in titulo:
-                        score += peso_zona  # Peso dinámico según prioridad
+                        score += peso_zona
                         match_details['ubicacion'] = 'exacta'
                         reasons.append(f"Ubicación exacta: {result.get('zona', ubicacion)}")
                         ubicacion_match = True
@@ -1118,13 +1164,19 @@ Responde SOLO con el JSON de criterios."""
                 if not ubicacion_match and criteria.get('zonas_expandidas'):
                     for zona_exp in criteria['zonas_expandidas']:
                         if zona_exp.lower() in zona or zona_exp.lower() in titulo:
-                            score += int(peso_zona * 0.53)  # ~53% del peso para zona cercana
+                            score += int(peso_zona * 0.53)
                             match_details['ubicacion'] = 'cercana'
                             reasons.append(f"Zona cercana: {result.get('zona')}")
+                            ubicacion_match = True
                             break
 
+                # v2.9: Penalizar propiedades de ciudad incorrecta (cross-city match)
+                if not ciudad_correcta:
+                    score -= 50
+                    match_details['ubicacion'] = 'ciudad_incorrecta'
+                    reasons.append(f"Ciudad incorrecta: {result.get('ciudad')} (esperadas: {', '.join(ciudades_esperadas)})")
                 # Si zona es filtro duro y no hubo match, penalizar severamente
-                if not ubicacion_match and zona_es_dura:
+                elif not ubicacion_match and zona_es_dura:
                     score -= 40
                     match_details['ubicacion'] = 'no_coincide'
 
