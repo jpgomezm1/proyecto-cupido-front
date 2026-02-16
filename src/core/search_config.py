@@ -290,7 +290,90 @@ ZONAS_SIMILARES: Dict[str, List[str]] = {
     # Calasanz y occidental
     'calasanz': ['floresta', 'santa monica', 'san joaquin', 'robledo'],
     'robledo': ['calasanz', 'castilla', 'bello'],
+
+    # v2.12: Sub-barrios de El Poblado - zonas hermanas
+    'los balsos': ['san lucas', 'el tesoro', 'las lomas', 'el diamante'],
+    'san lucas': ['los balsos', 'el tesoro', 'las lomas', 'la concha'],
+    'provenza': ['la aguacatala', 'castropol', 'lalinde', 'patio bonito'],
+    'la aguacatala': ['provenza', 'castropol', 'patio bonito', 'villa carlota'],
+    'las lomas': ['los balsos', 'san lucas', 'el tesoro', 'la concha'],
+    'la concha': ['las lomas', 'san lucas', 'los balsos', 'el campestre'],
+    'patio bonito': ['provenza', 'la aguacatala', 'alejandria', 'villa carlota'],
 }
+
+
+# =============================================================================
+# SECTORES DE ZONA (parte baja/alta/centro) - v2.12
+# =============================================================================
+
+ZONA_SECTORES: Dict[str, Dict[str, List[str]]] = {
+    'El Poblado': {
+        'parte_baja': ['Provenza', 'La Aguacatala', 'Castropol', 'Lalinde', 'Manila',
+                       'Ciudad del Río', 'Patio Bonito', 'Alejandría', 'Villa Carlota'],
+        'parte_alta': ['Los Balsos', 'San Lucas', 'El Tesoro', 'Las Lomas',
+                       'El Diamante', 'La Concha', 'Los González', 'El Campestre',
+                       'Santa María de los Ángeles', 'Las Palmas'],
+        'centro': ['El Poblado'],
+    },
+    'Envigado': {
+        'parte_baja': ['Zúñiga', 'La Paz', 'La Frontera', 'La Abadía',
+                       'El Esmeraldal', 'Cumbres', 'Otra Parte', 'Camino Verde',
+                       'Las Orquídeas', 'Alcalá', 'Las Antillas', 'El Dorado'],
+        'parte_alta': ['Loma del Escobero', 'Las Palmas', 'Alto de Las Palmas',
+                       'Loma del Chocho'],
+        'centro': ['El Trianón', 'Uribe Ángel', 'La Cuenca'],
+    },
+    'Laureles': {
+        'parte_baja': ['Conquistadores', 'Suramericana', 'Bolivariana'],
+        'parte_alta': ['Lorena', 'La Castellana'],
+        'centro': ['Estadio', 'Floresta'],
+    },
+    'Belén': {
+        'parte_baja': ['Belén', 'Fátima', 'San Bernardo', 'La Mota'],
+        'parte_alta': ['Loma de los Bernal', 'Rodeo Alto', 'Los Alpes',
+                       'Altavista'],
+    },
+    'Sabaneta': {
+        'parte_baja': ['Aves María', 'Mayorca', 'Calle Larga', 'Centro Sabaneta'],
+        'parte_alta': ['Pan de Azúcar', 'Las Lomitas'],
+    },
+}
+
+
+def resolver_sector_zona(ubicacion: str) -> Optional[List[str]]:
+    """
+    Detecta patrones 'parte baja/alta/centro de X' y retorna los sub-barrios correspondientes.
+
+    Returns:
+        Lista de sub-barrios si detectó sector, None si no aplica
+    """
+    import re
+    # Patrones: "parte baja del poblado", "zona alta de envigado", "poblado parte baja"
+    patterns = [
+        r'(?:parte|zona|sector)\s+(baja|alta|centro)\s+(?:de\s+|del?\s+)?(.+)',
+        r'(.+?)\s+(?:parte|zona|sector)\s+(baja|alta|centro)',
+    ]
+
+    ubicacion_lower = ubicacion.lower().strip()
+
+    for pattern in patterns:
+        match = re.search(pattern, ubicacion_lower)
+        if match:
+            groups = match.groups()
+            # Determinar cuál grupo es el sector y cuál la zona
+            if groups[0] in ('baja', 'alta', 'centro'):
+                sector_raw, zona_raw = groups
+            else:
+                zona_raw, sector_raw = groups
+
+            sector_key = f'parte_{sector_raw}'
+            zona_normalizada = normalizar_zona(zona_raw.strip())
+
+            if zona_normalizada in ZONA_SECTORES:
+                if sector_key in ZONA_SECTORES[zona_normalizada]:
+                    return ZONA_SECTORES[zona_normalizada][sector_key]
+
+    return None
 
 
 # =============================================================================
@@ -1265,6 +1348,54 @@ def _build_subbarrio_a_zona_padre() -> Dict[str, str]:
 
 
 SUBBARRIO_A_ZONA_PADRE: Dict[str, str] = _build_subbarrio_a_zona_padre()
+
+
+# =============================================================================
+# ZONAS HERMANAS (mismo padre) - v2.12
+# =============================================================================
+
+def _build_hermanos_zona() -> Dict[str, List[str]]:
+    """
+    Para cada sub-barrio, lista sus zonas hermanas (mismo padre).
+    Ej: 'los balsos' → ['San Lucas', 'Provenza', 'Las Lomas', ...]
+    """
+    hermanos = {}
+    for zona_padre, subbarrios in VARIACIONES_MANUALES.items():
+        # Normalizar nombres y deduplicar
+        sub_canonicos = []
+        seen = set()
+        for sub in subbarrios:
+            sub_lower = sub.lower()
+            canonical = ZONA_CANONICA.get(sub_lower, sub.title())
+            if canonical.lower() not in seen:
+                seen.add(canonical.lower())
+                sub_canonicos.append(canonical)
+
+        # Agregar el padre también como "hermano"
+        if zona_padre.lower() not in seen:
+            sub_canonicos.append(zona_padre)
+
+        # Para cada sub-barrio, sus hermanos son todos los demás
+        for sub in subbarrios:
+            sub_lower = sub.lower()
+            canonical = ZONA_CANONICA.get(sub_lower, sub.title())
+            hermanos_list = [
+                s for s in sub_canonicos if s.lower() != canonical.lower()
+            ]
+            # Registrar bajo la forma canónica y la original
+            hermanos[canonical.lower()] = hermanos_list
+            if sub_lower != canonical.lower() and sub_lower not in hermanos:
+                hermanos[sub_lower] = hermanos_list
+
+    return hermanos
+
+
+HERMANOS_ZONA: Dict[str, List[str]] = _build_hermanos_zona()
+
+
+def get_hermanos_zona(zona: str) -> List[str]:
+    """Retorna zonas hermanas (mismo padre). Lista vacía si no es sub-barrio."""
+    return HERMANOS_ZONA.get(zona.lower().strip(), [])
 
 
 def get_variaciones_zona(zona: str) -> List[str]:

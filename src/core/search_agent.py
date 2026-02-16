@@ -67,6 +67,9 @@ from src.core.search_config import (
     get_variaciones_zona,
     # v2.8: Normalización de texto
     normalizar_texto_busqueda,
+    # v2.12: Zonas hermanas y sectores
+    get_hermanos_zona,
+    resolver_sector_zona,
 )
 
 # v2.4: Importar funciones de prioridad
@@ -296,6 +299,16 @@ ENVIGADO (MUY IMPORTANTE - estos son barrios de Envigado, NO de Medellín):
 - Las Antillas, Alcalá, La Cuenca, El Trianón
 - Las Orquídeas, Camino Verde, Loma del Chocho
 - Jardines, La Sebastiana, San José, Centro Envigado
+
+NOTA SOBRE SECTORES DE ZONAS (parte baja/alta/centro):
+Cuando el usuario mencione "parte baja", "parte alta", "zona baja", etc., expande a los sub-barrios correctos:
+- "Poblado parte baja" → ["Provenza", "La Aguacatala", "Castropol", "Lalinde", "Manila", "Patio Bonito"]
+- "Poblado parte alta" → ["Los Balsos", "San Lucas", "El Tesoro", "Las Lomas", "El Diamante"]
+- "Envigado parte baja" → ["La Abadía", "El Esmeraldal", "Cumbres", "Zúñiga", "La Paz", "La Frontera"]
+- "Envigado parte alta" → ["Loma del Escobero", "Las Palmas"]
+- "Laureles parte baja" → ["Conquistadores", "Suramericana", "Bolivariana"]
+- "Belén parte alta" → ["Loma de los Bernal", "Rodeo Alto", "Los Alpes"]
+- "Sabaneta parte baja" → ["Aves María", "Mayorca", "Calle Larga"]
 
 NOTA IMPORTANTE SOBRE UBICACIONES MÚLTIPLES:
 Si el usuario menciona barrios de DIFERENTES ciudades en la misma búsqueda, incluir TODOS:
@@ -539,6 +552,17 @@ Responde SOLO con el JSON de criterios."""
                 criteria['ubicaciones'] = ubicaciones_normalizadas
                 if ubicaciones_geo:
                     criteria['ubicaciones_geo'] = ubicaciones_geo
+
+                # v2.12: Resolver sectores (parte baja/alta) en ubicaciones
+                ubicaciones_resueltas = []
+                for ub in criteria['ubicaciones']:
+                    sector_barrios = resolver_sector_zona(ub)
+                    if sector_barrios:
+                        ubicaciones_resueltas.extend(sector_barrios)
+                    else:
+                        ubicaciones_resueltas.append(ub)
+                if ubicaciones_resueltas != criteria['ubicaciones']:
+                    criteria['ubicaciones'] = ubicaciones_resueltas
 
                 # Expandir zonas similares
                 zonas_expandidas = []
@@ -942,19 +966,19 @@ Responde SOLO con el JSON de criterios."""
         ubicacion_levels = [0, 1, 2]  # 0=zona exacta, 1=ciudad, 2=zonas expandidas
         ubicacion_names = ['zona exacta', 'ciudad', 'zonas similares']
 
+        # Diagnostic: run filter impact analysis on first search
+        search_log.log_filter_impact(db, criteria)
+
         for ub_level in ubicacion_levels:
             # Construir query con ubicación relajada pero otros criterios exactos
             sql_query, params = self._build_sql_query(criteria, ubicacion_level=ub_level)
 
-            # Log de diagnóstico
-            if ub_level == 0:
-                print(f"   Query SQL (zona exacta): {sql_query[:300]}...")
-                print(f"   Params: {params}")
-
             try:
+                sql_start = time.time()
                 db.cursor.execute(sql_query, params)
                 columns = [desc[0] for desc in db.cursor.description]
                 rows = db.cursor.fetchall()
+                sql_elapsed = (time.time() - sql_start) * 1000
 
                 results = []
                 for row in rows:
@@ -972,7 +996,12 @@ Responde SOLO con el JSON de criterios."""
                     results.append(prop)
 
                 search_progression['resultados_por_nivel'][f'ub_{ub_level}'] = len(results)
-                print(f"   Ubicación nivel {ub_level} ({ubicacion_names[ub_level]}): {len(results)} resultados")
+
+                # Diagnostic SQL logging
+                search_log.log_sql_diagnostic(
+                    f"Fase1 ub_level={ub_level} ({ubicacion_names[ub_level]})",
+                    sql_query, params, len(results), sql_elapsed
+                )
 
                 # v2.9: Log de distribución geográfica de resultados
                 if results and ub_level == 0:
@@ -1001,7 +1030,7 @@ Responde SOLO con el JSON de criterios."""
                     return results, search_progression
 
             except Exception as e:
-                print(f"⚠️  Error en ubicación nivel {ub_level}: {e}")
+                search_log.log_error(f"Error en ubicación nivel {ub_level}: {e}", 'progressive_search')
                 import traceback
                 traceback.print_exc()
                 try:
@@ -1014,7 +1043,7 @@ Responde SOLO con el JSON de criterios."""
         # Si no encontramos suficientes con ubicación relajada, ahora relajamos otros criterios
         # Usamos ubicacion_level=1 (ciudad) como base
 
-        print(f"   Pasando a relajar otros criterios...")
+        search_log.info(f"[{search_log.current_search_id}] [PROGRESSIVE] Fase 1 agotada, pasando a relajar otros criterios...")
 
         for level in range(1, max_level + 1):
             # Construir criterios relajados para este nivel
@@ -1024,9 +1053,11 @@ Responde SOLO con el JSON de criterios."""
             sql_query, params = self._build_sql_query(relaxed_criteria, ubicacion_level=1)
 
             try:
+                sql_start = time.time()
                 db.cursor.execute(sql_query, params)
                 columns = [desc[0] for desc in db.cursor.description]
                 rows = db.cursor.fetchall()
+                sql_elapsed = (time.time() - sql_start) * 1000
 
                 results = []
                 for row in rows:
@@ -1044,8 +1075,13 @@ Responde SOLO con el JSON de criterios."""
 
                 search_progression['resultados_por_nivel'][f'rel_{level}'] = len(results)
 
-                level_name = ['', 'área/parq', 'baños', 'habitaciones', 'precio'][level]
-                print(f"   Nivel {level} ({level_name}): {len(results)} resultados")
+                level_name = ['', 'area/parq', 'banos', 'habitaciones', 'precio'][level]
+
+                # Diagnostic SQL logging for relaxation levels
+                search_log.log_sql_diagnostic(
+                    f"Fase2 relax_level={level} ({level_name})",
+                    sql_query, params, len(results), sql_elapsed
+                )
 
                 if len(results) >= min_results:
                     search_progression['nivel_final'] = level
@@ -1054,11 +1090,11 @@ Responde SOLO con el JSON de criterios."""
                     search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(level)
                     ciudades = get_ciudades_de_zonas(ubicaciones_originales)
                     if ciudades:
-                        search_progression['mensaje_ubicacion'] = f"Búsqueda en {', '.join(ciudades)}"
+                        search_progression['mensaje_ubicacion'] = f"Busqueda en {', '.join(ciudades)}"
                     return results, search_progression
 
             except Exception as e:
-                print(f"⚠️  Error en nivel {level}: {e}")
+                search_log.log_error(f"Error en nivel relajacion {level}: {e}", 'progressive_search')
                 import traceback
                 traceback.print_exc()
                 try:
@@ -1068,6 +1104,10 @@ Responde SOLO con el JSON de criterios."""
                 continue
 
         # Si llegamos aquí, devolver lo que tengamos
+        search_log.info(
+            f"[{search_log.current_search_id}] [PROGRESSIVE] Fase 2 agotada (max_level={max_level}), "
+            f"retornando {len(results)} resultados"
+        )
         search_progression['nivel_final'] = max_level
         search_progression['ubicacion_level'] = 1
         search_progression['relajaciones_aplicadas'] = self._get_relaxation_descriptions(max_level)
@@ -1119,6 +1159,7 @@ Responde SOLO con el JSON de criterios."""
 
         conditions = []
         params = {}
+        _filters_log = []  # Track each filter for diagnostic logging
 
         # ========== FILTROS DE PRECIO ==========
         # v2.2: Filtro estricto ±10% del presupuesto
@@ -1134,20 +1175,26 @@ Responde SOLO con el JSON de criterios."""
                 precio_min_calc, precio_max_calc = calcular_rango_precio(precio_max, flexibilidad=flexibilidad)
                 criteria['precio_min_implicito'] = precio_min_calc
                 criteria['precio_max_ajustado'] = precio_max_calc
-                print(f"[DEBUG] v2.6: Recalculado rango precio: ${precio_min_calc/1_000_000:.0f}M - ${precio_max_calc/1_000_000:.0f}M")
+                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Recalculado rango precio: ${precio_min_calc/1_000_000:.0f}M - ${precio_max_calc/1_000_000:.0f}M")
 
             # Usar precio_max_ajustado (incluye tolerancia del +10%)
             precio_max_duro = criteria.get('precio_max_ajustado') or precio_max
             conditions.append("precio <= %(precio_max_duro)s")
             params['precio_max_duro'] = precio_max_duro
+            _filters_log.append(f"precio <= ${precio_max_duro/1_000_000:.0f}M")
 
-            # v2.2: SIEMPRE aplicar precio mínimo (-10% del presupuesto)
-            # Usar precio_min explícito si existe, sino usar precio_min_implicito
-            precio_min_duro = criteria.get('precio_min') or criteria.get('precio_min_implicito')
+            # v2.12: Solo usar precio_min EXPLÍCITO del usuario como filtro SQL
+            # precio_min_implicito NO se aplica como filtro SQL (solo afecta ranking)
+            precio_min_duro = criteria.get('precio_min')  # Solo el explícito
             if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
                 params['precio_min_duro'] = precio_min_duro
-                print(f"[DEBUG] v2.6: Aplicando filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M")
+                _filters_log.append(f"precio >= ${precio_min_duro/1_000_000:.0f}M (explícito)")
+                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M (banda {((precio_max_duro - precio_min_duro) / precio_min_duro * 100):.0f}%)")
+            else:
+                precio_min_impl = criteria.get('precio_min_implicito')
+                if precio_min_impl:
+                    search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] precio_min_implicito=${precio_min_impl/1_000_000:.0f}M NO aplicado como filtro SQL (solo afecta ranking)")
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -1158,9 +1205,11 @@ Responde SOLO con el JSON de criterios."""
                     tipo_conditions.append(f"tipo_propiedad ILIKE %(tipo_{i})s")
                     params[f'tipo_{i}'] = f'%{tipo}%'
                 conditions.append(f"({' OR '.join(tipo_conditions)})")
+                _filters_log.append(f"tipo IN {tipos}")
             else:
                 conditions.append("tipo_propiedad ILIKE %(tipo_propiedad)s")
                 params['tipo_propiedad'] = f"%{tipos}%"
+                _filters_log.append(f"tipo='{tipos}'")
 
         # ========== FILTRO DE UBICACIÓN ESCALONADO ==========
         # v2.4: Ahora usa variaciones de zona para encontrar más propiedades
@@ -1209,6 +1258,7 @@ Responde SOLO con el JSON de criterios."""
                 if zona_conditions:
                     conditions.append(f"({' OR '.join(zona_conditions)})")
                     search_log.info(f"[GEO] Level 0 filtro: {len(ubicaciones_originales)} ubicaciones, ciudades esperadas: {[get_ciudad_de_zona(u) for u in ubicaciones_originales]}")
+                    _filters_log.append(f"ubicacion_level=0 zonas={ubicaciones_originales}")
 
             elif ubicacion_level == 1:
                 # NIVEL 1: Buscar por ciudad (ampliando desde zonas específicas)
@@ -1219,6 +1269,7 @@ Responde SOLO con el JSON de criterios."""
                         ciudad_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
                         params[f'ciudad_{i}'] = f'%{ciudad}%'
                     conditions.append(f"({' OR '.join(ciudad_conditions)})")
+                    _filters_log.append(f"ubicacion_level=1 ciudades={ciudades}")
                 else:
                     # Si no encontramos ciudades, usar zonas originales
                     zona_conditions = []
@@ -1226,6 +1277,7 @@ Responde SOLO con el JSON de criterios."""
                         zona_conditions.append(f"ciudad ILIKE %(ubicacion_{i})s")
                         params[f'ubicacion_{i}'] = f'%{ubicacion}%'
                     conditions.append(f"({' OR '.join(zona_conditions)})")
+                    _filters_log.append(f"ubicacion_level=1 fallback_zonas={ubicaciones_originales}")
 
             elif ubicacion_level >= 2:
                 # NIVEL 2+: Zonas expandidas (zonas similares) CON restricción de ciudad
@@ -1251,6 +1303,7 @@ Responde SOLO con el JSON de criterios."""
                     conditions.append(f"(({' OR '.join(zona_conditions)}) AND ({' OR '.join(ciudad_constraint)}))")
                 else:
                     conditions.append(f"({' OR '.join(zona_conditions)})")
+                _filters_log.append(f"ubicacion_level=2+ expandidas={zonas_expandidas} ciudades={ciudades_esperadas}")
 
         # Filtro por habitaciones (v2.2: con tolerancia ±1 para permitir near-matches)
         # Usa valores de filtro tolerantes, el scoring diferenciará exactos vs cercanos
@@ -1265,14 +1318,19 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("habitaciones <= %(hab_max_filtro)s")
             params['hab_max_filtro'] = hab_max_filtro
 
+        if hab_min_filtro or hab_max_filtro:
+            _filters_log.append(f"habitaciones {hab_min_filtro or '?'}-{hab_max_filtro or '?'}")
+
         # Filtro por baños (MEJORADO v2.0: ahora incluye banos_max)
         if criteria.get('banos_min'):
             conditions.append("banos >= %(banos_min)s")
             params['banos_min'] = criteria['banos_min']
+            _filters_log.append(f"banos>={criteria['banos_min']}")
 
         if criteria.get('banos_max'):
             conditions.append("banos <= %(banos_max)s")
             params['banos_max'] = criteria['banos_max']
+            _filters_log.append(f"banos<={criteria['banos_max']}")
 
         # Filtro por área (v2.2: con tolerancia -5%/+20%)
         # Usar valores ajustados si existen, sino los originales
@@ -1287,29 +1345,37 @@ Responde SOLO con el JSON de criterios."""
             conditions.append("area_construida <= %(area_max_filtro)s")
             params['area_max_filtro'] = area_max_filtro
 
+        if area_min_filtro or area_max_filtro:
+            _filters_log.append(f"area {area_min_filtro or '?'}-{area_max_filtro or '?'}m2")
+
         # Filtro por piso
         if criteria.get('piso'):
             if criteria['piso'] == 1 or str(criteria['piso']).lower() == 'primer piso':
                 conditions.append("piso = 1")
+                _filters_log.append("piso=1")
             elif isinstance(criteria['piso'], int):
                 conditions.append("piso = %(piso)s")
                 params['piso'] = criteria['piso']
+                _filters_log.append(f"piso={criteria['piso']}")
 
         # Filtro por parqueaderos (NUEVO v2.1)
         if criteria.get('parqueaderos_min'):
             conditions.append("parqueaderos >= %(parqueaderos_min)s")
             params['parqueaderos_min'] = criteria['parqueaderos_min']
+            _filters_log.append(f"parqueaderos>={criteria['parqueaderos_min']}")
 
         # v2.6: Filtro por antigüedad máxima
         if criteria.get('antiguedad_max'):
             ano_minimo = 2026 - criteria['antiguedad_max']  # Año actual - años máximos
             conditions.append("(ano_construccion >= %(ano_minimo)s OR ano_construccion IS NULL)")
             params['ano_minimo'] = ano_minimo
+            _filters_log.append(f"antiguedad<={criteria['antiguedad_max']}anos")
 
         # v2.6: Filtro por administración máxima
         if criteria.get('administracion_max'):
             conditions.append("(administracion <= %(admin_max)s OR administracion IS NULL)")
             params['admin_max'] = criteria['administracion_max']
+            _filters_log.append(f"admin<=${criteria['administracion_max']}")
 
         # NOTA: Las amenidades NO se filtran en SQL - solo afectan el ranking
         # Esto permite mostrar más resultados y rankear los mejores primero
@@ -1317,6 +1383,12 @@ Responde SOLO con el JSON de criterios."""
         # Agregar condiciones a la query
         if conditions:
             base_query += " AND " + " AND ".join(conditions)
+
+        # Log total de filtros aplicados
+        search_log.info(
+            f"[{search_log.current_search_id}] [SQL-BUILD] "
+            f"{len(conditions)} filtros: {' | '.join(_filters_log)}"
+        )
 
         # v2.5: Ordenar por precio primero (propiedades dentro del presupuesto primero)
         # Amenidades como desempate secundario
@@ -1349,6 +1421,13 @@ Responde SOLO con el JSON de criterios."""
         peso_precio = get_priority_weight(criteria, 'precio')
         peso_habitaciones = get_priority_weight(criteria, 'habitaciones')
 
+        search_log.info(
+            f"[{search_log.current_search_id}] [RANKING] Rankeando {len(results)} resultados | "
+            f"pesos: zona={peso_zona}, precio={peso_precio}, hab={peso_habitaciones} | "
+            f"perfil={perfil_comprador} | priority={criteria.get('selected_priority', 'none')} | "
+            f"hard_filters={criteria.get('hard_filters', 'none')}"
+        )
+
         # Verificar si hay filtros duros (criterios que no se pueden relajar)
         zona_es_dura = is_hard_filter(criteria, 'zona')
         precio_es_duro = is_hard_filter(criteria, 'precio')
@@ -1378,22 +1457,18 @@ Responde SOLO con el JSON de criterios."""
                 precio_max = criteria['precio_max']
                 precio_min = criteria.get('precio_min_implicito') or criteria.get('precio_min') or 0
 
-                # Calcular qué tan bien encaja el precio
+                # v2.12: Calcular qué tan bien encaja el precio
+                # Todo dentro del presupuesto (60-100%) es bueno
                 if precio_min <= precio <= precio_max:
-                    # Precio en rango ideal
                     ratio = precio / precio_max
-                    if 0.70 <= ratio <= 0.90:
-                        score += peso_precio  # Usa peso dinámico
+                    if 0.60 <= ratio <= 1.00:
+                        score += peso_precio  # Todo dentro del presupuesto es bueno
                         match_details['precio'] = 'ideal'
-                        reasons.append(f"Precio ideal ({ratio*100:.0f}% del presupuesto)")
-                    elif ratio <= 0.70:
-                        score += int(peso_precio * 0.67)  # 67% del peso
+                        reasons.append(f"Precio dentro del presupuesto ({ratio*100:.0f}%)")
+                    elif ratio < 0.60:
+                        score += int(peso_precio * 0.60)  # Muy por debajo
                         match_details['precio'] = 'bajo'
-                        reasons.append("Precio bajo el presupuesto")
-                    else:
-                        score += int(peso_precio * 0.80)  # 80% del peso
-                        match_details['precio'] = 'limite'
-                        reasons.append("Precio cerca del límite")
+                        reasons.append("Precio muy bajo del presupuesto")
                 elif precio > precio_max:
                     # Penalizar propiedades fuera del rango
                     # Si precio es filtro duro, penalización severa
@@ -1423,7 +1498,19 @@ Responde SOLO con el JSON de criterios."""
                         ubicacion_match = True
                         break
 
-                # Si no hay match exacto, verificar zonas expandidas
+                # v2.12: Check sibling zones (zonas hermanas del mismo padre)
+                if not ubicacion_match:
+                    for ubicacion in criteria['ubicaciones']:
+                        hermanos = get_hermanos_zona(ubicacion)
+                        hermanos_lower = [h.lower() for h in hermanos]
+                        if any(h in zona or h in titulo for h in hermanos_lower):
+                            score += int(peso_zona * 0.70)
+                            match_details['ubicacion'] = 'hermana'
+                            reasons.append(f"Zona hermana de {ubicacion}: {result.get('zona')}")
+                            ubicacion_match = True
+                            break
+
+                # Si no hay match exacto NI hermano, verificar zonas expandidas
                 if not ubicacion_match and criteria.get('zonas_expandidas'):
                     for zona_exp in criteria['zonas_expandidas']:
                         if zona_exp.lower() in zona or zona_exp.lower() in titulo:
@@ -1481,11 +1568,16 @@ Responde SOLO con el JSON de criterios."""
                     # CASO 2: A ±1 del rango
                     # v2.5: Distinguir entre MENOS y MÁS habitaciones
                     if hab < hab_min_ideal:
-                        # MENOS habitaciones: SIEMPRE penalizar (duro o no)
-                        # Esto NO debería pasar con el filtro SQL corregido, pero por seguridad:
-                        score -= 30
-                        match_details['habitaciones'] = 'insuficiente'
-                        reasons.append(f"⚠ {hab} hab (necesitas {hab_min_ideal})")
+                        # v2.12: Si habitaciones fue relajado, no penalizar
+                        if 'habitaciones' in criteria.get('_relaxed_criteria', []):
+                            score += int(peso_habitaciones * 0.3)
+                            match_details['habitaciones'] = 'relajado_menor'
+                            reasons.append(f"{hab} hab (criterio relajado, pediste {hab_min_ideal})")
+                        else:
+                            # MENOS habitaciones: penalizar cuando no fue relajado
+                            score -= 30
+                            match_details['habitaciones'] = 'insuficiente'
+                            reasons.append(f"⚠ {hab} hab (necesitas {hab_min_ideal})")
                     else:
                         # MÁS habitaciones: bonus reducido (propiedad más grande OK)
                         if habitaciones_es_duro:
@@ -2065,7 +2157,10 @@ Responde SOLO con el JSON de criterios."""
                 'results': []
             }
 
-        print("✅ Criterios extraídos:")
+        # Diagnostic: log criteria summary for funnel
+        search_log.log_criteria_summary(criteria)
+
+        print("Criterios extraidos:")
         print(json.dumps(criteria, indent=2, ensure_ascii=False))
         print()
 
@@ -2103,11 +2198,32 @@ Responde SOLO con el JSON de criterios."""
 
         # Paso 3: Búsqueda PROGRESIVA v2.1 (relaja criterios hasta obtener mínimo 5 resultados)
         # Protege PRECIO y UBICACIÓN como los factores más importantes
-        print("🔍 Buscando en base de datos (búsqueda progresiva)...")
         search_progression = {}
+        sql_result_count = 0  # Track for funnel
         try:
             sql_start = time.time()
             with DatabaseManager() as db:
+                # Diagnostic: DB baseline (compatible with dict and tuple cursors)
+                try:
+                    db.cursor.execute("SELECT COUNT(*) as cnt FROM propiedades WHERE activa = TRUE")
+                    row = db.cursor.fetchone()
+                    total_activas = row['cnt'] if isinstance(row, dict) else row[0]
+
+                    db.cursor.execute(
+                        "SELECT COUNT(*) as cnt, MIN(precio) as pmin, MAX(precio) as pmax "
+                        "FROM propiedades WHERE activa = TRUE AND precio IS NOT NULL AND precio > 0"
+                    )
+                    row = db.cursor.fetchone()
+                    if isinstance(row, dict):
+                        total_con_precio = row['cnt']
+                        precio_db_min = row['pmin'] or 0
+                        precio_db_max = row['pmax'] or 0
+                    else:
+                        total_con_precio, precio_db_min, precio_db_max = row[0], row[1] or 0, row[2] or 0
+                    search_log.log_db_baseline(total_activas, total_con_precio, precio_db_min, precio_db_max)
+                except Exception as e:
+                    search_log.log_error(f"Error getting DB baseline: {e}", 'db_baseline')
+
                 results, search_progression = self._progressive_search(
                     criteria,
                     db,
@@ -2116,14 +2232,13 @@ Responde SOLO con el JSON de criterios."""
                 )
 
                 sql_elapsed = (time.time() - sql_start) * 1000
+                sql_result_count = len(results)
                 search_log.log_sql_query("progressive_search", {}, sql_elapsed)
 
-                print(f"📊 Propiedades encontradas: {len(results)}")
                 if search_progression.get('ubicacion_relajada'):
-                    print(f"   Ubicación relajada: {search_progression.get('mensaje_ubicacion')}")
+                    search_log.info(f"[{search_log.current_search_id}] Ubicacion relajada: {search_progression.get('mensaje_ubicacion')}")
                 if search_progression.get('nivel_final', 0) > 0:
-                    print(f"   Nivel de relajación: {search_progression['nivel_final']}")
-                    print(f"   Criterios relajados: {', '.join(search_progression.get('relajaciones_aplicadas', []))}")
+                    search_log.info(f"[{search_log.current_search_id}] Nivel relajacion: {search_progression['nivel_final']} - {', '.join(search_progression.get('relajaciones_aplicadas', []))}")
 
                 # Determinar tipo de búsqueda
                 ubicacion_level = search_progression.get('ubicacion_level', 0)
@@ -2144,9 +2259,12 @@ Responde SOLO con el JSON de criterios."""
                     if results:
                         search_type = 'relajada'
                     else:
-                        search_log.info("[v2.11] Sin resultados incluso con búsqueda extendida")
+                        search_log.info("[v2.11] Sin resultados incluso con busqueda extendida")
                         total_elapsed = (time.time() - total_start) * 1000
                         search_log.log_results(0, 0, total_elapsed)
+                        search_log.log_search_funnel_summary(
+                            criteria, 0, 0, 0, 'sin_resultados', total_elapsed
+                        )
                         no_results_response = self._generate_no_results_response(criteria)
                         no_results_response['search_id'] = search_id
                         no_results_response['elapsed_ms'] = total_elapsed
@@ -2165,11 +2283,24 @@ Responde SOLO con el JSON de criterios."""
                 'results': []
             }
 
-        print()
-
         # Paso 4: Rankear resultados
+        post_rank_count = 0
         if results:
-            print("⭐ Rankeando resultados...")
+            # v2.12: Inyectar contexto de relajación en criteria para que _rank_results lo use
+            # Usar lista (no set) para que sea JSON-serializable
+            nivel_final = search_progression.get('nivel_final', 0)
+            criteria['_relaxation_level'] = nivel_final
+            _relaxed = []
+            if nivel_final >= 1:
+                _relaxed.extend(['area', 'parqueaderos'])
+            if nivel_final >= 2:
+                _relaxed.append('banos')
+            if nivel_final >= 3:
+                _relaxed.append('habitaciones')
+            if nivel_final >= 4:
+                _relaxed.append('precio')
+            criteria['_relaxed_criteria'] = _relaxed
+
             rank_start = time.time()
             results = self._rank_results(results, criteria)
             results = results[:limit]
@@ -2177,6 +2308,10 @@ Responde SOLO con el JSON de criterios."""
             rank_elapsed = (time.time() - rank_start) * 1000
             top_scores = [{'id': r.get('id'), 'score': r.get('match_score', 0)} for r in results[:5]]
             search_log.log_ranking(top_scores, rank_elapsed)
+
+            # Diagnostic: log ranking details for top results
+            search_log.log_ranking_detail(results, top_n=5)
+            post_rank_count = len(results)
 
             # v2.3: Filtrar por umbral de calidad mínima
             # Si los mejores resultados tienen score muy bajo, es mejor decir "no encontrado"
@@ -2186,14 +2321,22 @@ Responde SOLO con el JSON de criterios."""
             alignment_info = None
             if search_type in ('relajada', 'progresiva'):
                 alignment_info = self._calculate_alignment_score(results, criteria)
-                search_log.info(f"[v2.11] Alignment: best={alignment_info['best_score']}, avg={alignment_info['avg_score']}")
+
+                # v2.12: Reducir threshold de 30→15 para dar más margen a búsquedas relajadas
+                ALIGNMENT_THRESHOLD_RELAXED = 15
+                alignment_passed = alignment_info['best_score'] >= ALIGNMENT_THRESHOLD_RELAXED
+                search_log.log_quality_gate(
+                    'alignment_score', alignment_info['best_score'], ALIGNMENT_THRESHOLD_RELAXED, alignment_passed,
+                    f"avg={alignment_info['avg_score']}, scores={alignment_info['per_result_scores'][:5]}"
+                )
 
                 # Si el MEJOR resultado tiene alignment < 30, los resultados son irrelevantes
-                # Usamos best_score (no avg) para no descartar un buen resultado por malos vecinos
-                if alignment_info['best_score'] < 30:
-                    search_log.info(f"[v2.11] Best alignment ({alignment_info['best_score']}) < 30 - descartando resultados irrelevantes")
+                if not alignment_passed:
                     total_elapsed = (time.time() - total_start) * 1000
                     search_log.log_results(len(results), 0, total_elapsed)
+                    search_log.log_search_funnel_summary(
+                        criteria, sql_result_count, post_rank_count, 0, search_type, total_elapsed
+                    )
 
                     return {
                         'success': True,
@@ -2216,13 +2359,26 @@ Responde SOLO con el JSON de criterios."""
                         'elapsed_ms': total_elapsed
                     }
 
-            # v2.11: Umbral estándar de calidad para búsquedas exactas/ubicación
-            effective_min_score = MIN_SCORE_PARA_MOSTRAR
+            # v2.12: No aplicar MIN_SCORE para búsquedas progresivas/relajadas
+            # Ya pasaron el alignment gate, no descartar los resultados encontrados
+            if search_type in ('progresiva', 'relajada'):
+                effective_min_score = 0
+                search_log.info(f"[{search_log.current_search_id}] [QUALITY-GATE] MIN_SCORE deshabilitado para search_type={search_type}")
+            else:
+                effective_min_score = MIN_SCORE_PARA_MOSTRAR
 
-            if mejor_score < effective_min_score:
-                print(f"⚠️  Mejor score ({mejor_score}) bajo umbral mínimo ({effective_min_score})")
+            min_score_passed = mejor_score >= effective_min_score
+            search_log.log_quality_gate(
+                'MIN_SCORE_PARA_MOSTRAR', mejor_score, effective_min_score, min_score_passed,
+                f"top5_scores={[r.get('match_score', 0) for r in results[:5]]}"
+            )
+
+            if not min_score_passed:
                 total_elapsed = (time.time() - total_start) * 1000
                 search_log.log_results(len(results), 0, total_elapsed)
+                search_log.log_search_funnel_summary(
+                    criteria, sql_result_count, post_rank_count, 0, search_type, total_elapsed
+                )
 
                 return {
                     'success': True,
@@ -2244,9 +2400,13 @@ Responde SOLO con el JSON de criterios."""
                     'elapsed_ms': total_elapsed
                 }
 
-        # Log de resultados finales
+        # Log de resultados finales + funnel summary
         total_elapsed = (time.time() - total_start) * 1000
-        search_log.log_results(len(results), min(len(results), limit), total_elapsed)
+        final_count = min(len(results), limit)
+        search_log.log_results(len(results), final_count, total_elapsed)
+        search_log.log_search_funnel_summary(
+            criteria, sql_result_count, post_rank_count, final_count, search_type, total_elapsed
+        )
 
         # v2.11: Build relaxation_applied object for frontend
         relaxation_applied = None
