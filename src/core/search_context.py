@@ -30,6 +30,11 @@ REFINEMENT_PATTERNS = {
     'more_expensive': [
         r'más\s+caro', r'mayor\s+presupuesto', r'más\s+costoso',
         r'subir\s+el\s+precio', r'aumentar\s+presupuesto',
+        # v2.12: Patrones de subir/aumentar presupuesto
+        r's[uú]b[ei]l[ea]?\s+(?:el\s+)?(?:precio|presupuesto)',
+        r'sub[eií]r?\s+(?:el\s+)?(?:precio|presupuesto)',
+        r'sube\s+(?:el\s+)?(?:precio|presupuesto)',
+        r'aumentar?\s+(?:el\s+)?(?:precio|presupuesto)',
         # Patrones con números explícitos (precio mínimo)
         r'desde\s+\d+\s*(?:millones|mm|m(?!\s*2))',
         r'mínimo\s+\d+\s*(?:millones|mm|m(?!\s*2))',
@@ -518,8 +523,14 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
         new_criteria_count < 4  # Pocos criterios nuevos extraídos
     )
 
+    # v2.12: Logging estructurado de refinamiento
+    _is_refinement = bool(previous)
+    if _is_refinement:
+        print(f"🔀 [MERGE] Iniciando merge de criterios (palabras={word_count}, criterios_nuevos={new_criteria_count})")
+        print(f"🔀 [MERGE] is_short_refinement={is_short_refinement}")
+
     if is_short_refinement:
-        print(f"[DEBUG] v2.7: Detectado refinamiento corto (palabras={word_count}, criterios_nuevos={new_criteria_count})")
+        print(f"🔀 [MERGE] ⚡ Detectado refinamiento corto (palabras={word_count}, criterios_nuevos={new_criteria_count})")
 
     # Empezar con copia de criterios anteriores
     merged = {**previous} if previous else {}
@@ -554,7 +565,15 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
 
     # v2.7: Detectar TIPO de refinamiento (filter, expand, reset, modify)
     refinement_type = detect_refinement_type(message, previous)
-    print(f"[DEBUG] v2.7: Tipo de refinamiento detectado: {refinement_type}")
+    if _is_refinement:
+        _active_intents = {k: v for k, v in intents.items() if v}
+        print(f"🔀 [MERGE] Tipo de refinamiento: {refinement_type}")
+        if _active_intents:
+            print(f"🔀 [MERGE] Intenciones detectadas: {_active_intents}")
+        else:
+            print(f"🔀 [MERGE] Sin intenciones de refinamiento relativo (merge normal)")
+    else:
+        print(f"[DEBUG] v2.7: Tipo de refinamiento detectado: {refinement_type}")
 
     # ==========================================================================
     # MANEJO DE RESET: Reiniciar búsqueda completamente
@@ -678,8 +697,13 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
         'area_min', 'area_max'
     ]
 
+    # v2.12: Track changes for logging
+    _merge_changes = []
+
     for key, value in new.items():
         if value is not None:
+            _prev_val = merged.get(key)
+
             # ==========================================================
             # EXPAND: Agregar criterios sin eliminar los anteriores
             # ==========================================================
@@ -759,10 +783,10 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
                                 continue
                         merged[key] = value
                     elif key == 'precio_max' and value:
-                        if not merged.get('precio_max') or value < merged['precio_max']:
-                            merged[key] = value
-                        elif intents.get('more_expensive'):
-                            merged[key] = value
+                        # v2.12: Si Claude extrajo un precio_max diferente, usarlo
+                        if value != merged.get('precio_max'):
+                            print(f"🔀 [MERGE] precio_max actualizado (short): {merged.get('precio_max')} → {value}")
+                        merged[key] = value
                     elif value:
                         merged[key] = value
                 else:
@@ -774,10 +798,11 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
                 if key == 'ubicaciones' and value:
                     merged[key] = value
                 elif key == 'precio_max' and value:
-                    if not merged.get('precio_max') or value < merged['precio_max']:
-                        merged[key] = value
-                    elif intents.get('more_expensive'):
-                        merged[key] = value
+                    # v2.12: Si Claude extrajo un precio_max diferente, usarlo siempre
+                    # Claude ya tiene el contexto previo y eligió cambiarlo
+                    if value != merged.get('precio_max'):
+                        print(f"🔀 [MERGE] precio_max actualizado: {merged.get('precio_max')} → {value}")
+                    merged[key] = value
                 elif value:
                     merged[key] = value
 
@@ -852,6 +877,22 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
     # ============================================================
     for field, value in preserved_config.items():
         merged[field] = value
+
+    # v2.12: Log final del merge
+    if _is_refinement:
+        _CAMPOS_FINALES = ['tipo_propiedad', 'ubicaciones', 'precio_max', 'precio_min',
+                            'habitaciones_min', 'habitaciones_max', 'banos_min', 'banos_max',
+                            'area_min', 'area_max', 'amenidades_requeridas',
+                            'precio_min_implicito', 'precio_max_ajustado',
+                            'habitaciones_min_filtro', 'habitaciones_max_filtro']
+        print(f"🔀 [MERGE] Resultado final:")
+        for k in _CAMPOS_FINALES:
+            prev_val = previous.get(k) if previous else None
+            final_val = merged.get(k)
+            if prev_val != final_val and (prev_val is not None or final_val is not None):
+                print(f"   🔄 {k}: {prev_val} → {final_val}")
+            elif final_val is not None:
+                print(f"   ✅ {k}: {final_val} (preservado)")
 
     return merged
 

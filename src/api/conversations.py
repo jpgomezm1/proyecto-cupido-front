@@ -665,6 +665,32 @@ def send_message(conversation_id):
                         except (json.JSONDecodeError, TypeError) as e:
                             print(f"⚠️ v2.7: Error al parsear search_response: {e}")
 
+            # v2.12: Logging de refinamiento
+            is_refinement = total_mensajes > 0 and bool(prev_criteria)
+            if is_refinement:
+                _prev_summary = {
+                    'tipo': prev_criteria.get('tipo_propiedad'),
+                    'ubicaciones': prev_criteria.get('ubicaciones'),
+                    'precio_max': prev_criteria.get('precio_max'),
+                    'precio_min': prev_criteria.get('precio_min'),
+                    'habitaciones': f"{prev_criteria.get('habitaciones_min', '?')}-{prev_criteria.get('habitaciones_max', '?')}",
+                    'area': f"{prev_criteria.get('area_min', '?')}-{prev_criteria.get('area_max', '?')}",
+                    'amenidades': prev_criteria.get('amenidades_requeridas'),
+                }
+                print(f"\n{'='*80}")
+                print(f"🔁 [REFINEMENT] Mensaje #{total_mensajes + 1} en conversación {conversation_id}")
+                print(f"🔁 [REFINEMENT] Mensaje del usuario: \"{content}\"")
+                print(f"🔁 [REFINEMENT] Criterios previos cargados de DB:")
+                for k, v in _prev_summary.items():
+                    if v and v != '?-?':
+                        print(f"   📌 {k}: {v}")
+                print(f"{'='*80}")
+            else:
+                print(f"\n{'='*80}")
+                print(f"🆕 [NEW-SEARCH] Primera búsqueda en conversación {conversation_id}")
+                print(f"🆕 [NEW-SEARCH] Query: \"{content}\"")
+                print(f"{'='*80}")
+
             # Guardar mensaje del usuario
             db.cursor.execute(
                 """INSERT INTO mensajes_conversacion
@@ -783,9 +809,33 @@ def send_message(conversation_id):
 
                 elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
+                # v2.12: Log de criterios extraídos por Claude
+                if is_refinement:
+                    _CAMPOS_BUSQUEDA = ['tipo_propiedad', 'ubicaciones', 'precio_max', 'precio_min',
+                                        'habitaciones_min', 'habitaciones_max', 'banos_min', 'banos_max',
+                                        'area_min', 'area_max', 'amenidades_requeridas', 'parqueaderos']
+                    _new_extracted = {k: new_criteria.get(k) for k in _CAMPOS_BUSQUEDA if new_criteria.get(k) is not None}
+                    print(f"🔁 [REFINEMENT] Claude extrajo ({elapsed_ms}ms): {_new_extracted}")
+
                 # Merge de criterios
                 accumulated_criteria = merge_criteria(prev_criteria, new_criteria, content)
                 accumulated_criteria['original_query'] = content
+
+                # v2.12: Log de resultado del merge con diff
+                if is_refinement:
+                    _CAMPOS_COMPARAR = ['tipo_propiedad', 'ubicaciones', 'precio_max', 'precio_min',
+                                         'habitaciones_min', 'habitaciones_max', 'banos_min', 'banos_max',
+                                         'area_min', 'area_max', 'amenidades_requeridas',
+                                         'precio_min_implicito', 'precio_max_ajustado']
+                    print(f"🔁 [REFINEMENT] Resultado del merge (prev → merged):")
+                    for k in _CAMPOS_COMPARAR:
+                        prev_val = prev_criteria.get(k)
+                        merged_val = accumulated_criteria.get(k)
+                        if prev_val != merged_val:
+                            print(f"   🔄 {k}: {prev_val} → {merged_val}")
+                        elif merged_val is not None:
+                            print(f"   ✅ {k}: {merged_val} (sin cambio)")
+                    print(f"{'='*80}")
 
                 # Verificar si debemos preguntar por prioridad
                 if should_ask_priority(accumulated_criteria):
@@ -1111,6 +1161,15 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
     # Usar el query original guardado o el contenido actual
     query = criteria.get('original_query', original_content)
 
+    # v2.12: Log de criterios que entran al search engine
+    _CAMPOS_SEARCH = ['tipo_propiedad', 'ubicaciones', 'precio_max', 'precio_min',
+                       'precio_min_implicito', 'precio_max_ajustado',
+                       'habitaciones_min', 'habitaciones_max',
+                       'habitaciones_min_filtro', 'habitaciones_max_filtro',
+                       'area_min', 'area_max', 'amenidades_requeridas']
+    _search_input = {k: criteria.get(k) for k in _CAMPOS_SEARCH if criteria.get(k) is not None}
+    print(f"🔍 [SEARCH-INPUT] Criterios que entran a search(): {_search_input}")
+
     # Ejecutar búsqueda con criterios ya procesados
     search_response = agent.search(
         query,
@@ -1124,6 +1183,16 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
     # Obtener resultados
     results = search_response.get('results', [])
     total_found = search_response.get('total_found', 0)
+
+    # v2.12: Log de resultado de búsqueda
+    search_type = search_response.get('search_type', 'unknown')
+    _relaxation = search_response.get('relaxation_applied')
+    print(f"🔍 [SEARCH-RESULT] {total_found} resultados, search_type={search_type}, elapsed={elapsed_ms}ms")
+    if _relaxation:
+        print(f"🔍 [SEARCH-RESULT] Relajación aplicada: nivel={_relaxation.get('level')}, desc={_relaxation.get('descriptions')}")
+    if results:
+        _top_scores = [(r.get('id'), r.get('match_score', 0)) for r in results[:5]]
+        print(f"🔍 [SEARCH-RESULT] Top 5 scores: {_top_scores}")
 
     # v2.7: NO hacer segundo merge - usar criterios que ya vienen procesados
     # El merge ya se hizo en send_message() línea 751
