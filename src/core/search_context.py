@@ -8,6 +8,13 @@ Maneja el merge de criterios entre mensajes de una conversación
 import re
 from typing import Dict, Any, Optional
 
+from src.core.search_config import (
+    calcular_rango_precio,
+    calcular_rango_habitaciones,
+    get_segmento_precio,
+    get_tolerancia_precio,
+)
+
 # Patrones de refinamiento en español
 REFINEMENT_PATTERNS = {
     # Precio - patrones relativos y explícitos
@@ -805,7 +812,42 @@ def merge_criteria(previous: Dict, new: Dict, message: str) -> Dict:
             merged['banos_max'] = explicit['banos_max']
 
     # ============================================================
-    # 9. v2.5: RESTAURAR campos de configuración del sistema
+    # 9. v2.10: RECALCULAR campos derivados si los valores base cambiaron
+    # Si precio_max o habitaciones cambiaron, los campos calculados
+    # (precio_min_implicito, precio_max_ajustado, etc.) son OBSOLETOS
+    # y deben recalcularse antes de restaurarlos
+    # ============================================================
+    new_precio_max = merged.get('precio_max')
+    old_precio_max = previous.get('precio_max') if previous else None
+
+    if new_precio_max and old_precio_max and new_precio_max != old_precio_max:
+        print(f"[DEBUG] v2.10: precio_max changed {old_precio_max:,} -> {new_precio_max:,}, recalculating derived fields")
+        flexibilidad = preserved_config.get('flexibilidad_precio', merged.get('flexibilidad_precio', 'normal'))
+        new_min, new_max_adj = calcular_rango_precio(new_precio_max, flexibilidad=flexibilidad)
+        preserved_config['precio_min_implicito'] = new_min
+        preserved_config['precio_max_ajustado'] = new_max_adj
+        preserved_config['segmento_precio'] = get_segmento_precio(new_precio_max)
+        preserved_config['tolerancia_aplicada'] = get_tolerancia_precio(new_precio_max)
+        print(f"[DEBUG] v2.10: Recalculated price range: ${new_min/1_000_000:.0f}M - ${new_max_adj/1_000_000:.0f}M")
+
+    new_hab_min = merged.get('habitaciones_min')
+    old_hab_min = previous.get('habitaciones_min') if previous else None
+    new_hab_max = merged.get('habitaciones_max')
+    old_hab_max = previous.get('habitaciones_max') if previous else None
+
+    if (new_hab_min != old_hab_min) or (new_hab_max != old_hab_max):
+        if new_hab_min or new_hab_max:
+            print(f"[DEBUG] v2.10: habitaciones changed, recalculating derived room fields")
+            flexibilidad_hab = preserved_config.get('flexibilidad_habitaciones', merged.get('flexibilidad_habitaciones', 'normal'))
+            hab_min_f, hab_max_f = calcular_rango_habitaciones(new_hab_min, new_hab_max, flexibilidad=flexibilidad_hab)
+            if hab_min_f is not None:
+                preserved_config['habitaciones_min_filtro'] = hab_min_f
+            if hab_max_f is not None:
+                preserved_config['habitaciones_max_filtro'] = hab_max_f
+            print(f"[DEBUG] v2.10: Recalculated room filter: {hab_min_f}-{hab_max_f}")
+
+    # ============================================================
+    # 10. v2.5: RESTAURAR campos de configuración del sistema
     # Estos campos NUNCA deben perderse durante el merge
     # ============================================================
     for field, value in preserved_config.items():

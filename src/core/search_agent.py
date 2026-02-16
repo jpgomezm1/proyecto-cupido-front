@@ -1661,14 +1661,57 @@ Responde SOLO con el JSON de criterios."""
                 'segmento_precio',
                 'tolerancia_aplicada',
             ]
+
+            # v2.10: Detect if base price or rooms changed
+            precio_changed = (
+                criteria.get('precio_max') and
+                previous_criteria.get('precio_max') and
+                criteria['precio_max'] != previous_criteria['precio_max']
+            )
+            hab_changed = (
+                criteria.get('habitaciones_min') != previous_criteria.get('habitaciones_min') or
+                criteria.get('habitaciones_max') != previous_criteria.get('habitaciones_max')
+            )
+            PRICE_DERIVED = {'precio_min_implicito', 'precio_max_ajustado', 'segmento_precio', 'tolerancia_aplicada'}
+            ROOM_DERIVED = {'habitaciones_min_filtro', 'habitaciones_max_filtro'}
+
             for field in SYSTEM_CONFIG_FIELDS:
                 # v2.6: Usar 'is not None' para preservar valores como 0
                 if field in previous_criteria and previous_criteria[field] is not None:
+                    # v2.10: Skip stale derived fields when base values changed
+                    if precio_changed and field in PRICE_DERIVED:
+                        continue
+                    if hab_changed and field in ROOM_DERIVED:
+                        continue
                     criteria[field] = previous_criteria[field]
                     if field == 'hard_filters':
                         print(f"   📌 Hard filters preservados: {previous_criteria[field]}")
                     elif field == 'precio_min_implicito':
                         print(f"   💰 Rango precio preservado: ${previous_criteria.get('precio_min_implicito', 0)/1_000_000:.0f}M - ${previous_criteria.get('precio_max_ajustado', 0)/1_000_000:.0f}M")
+
+            # v2.10: Recalculate derived price fields when precio_max changed
+            if precio_changed:
+                flexibilidad = criteria.get('flexibilidad_precio', previous_criteria.get('flexibilidad_precio', 'normal'))
+                new_min, new_max_adj = calcular_rango_precio(criteria['precio_max'], flexibilidad=flexibilidad)
+                criteria['precio_min_implicito'] = new_min
+                criteria['precio_max_ajustado'] = new_max_adj
+                criteria['segmento_precio'] = get_segmento_precio(criteria['precio_max'])
+                criteria['tolerancia_aplicada'] = get_tolerancia_precio(criteria['precio_max'])
+                print(f"   [v2.10] Recalculated price range: ${new_min/1_000_000:.0f}M - ${new_max_adj/1_000_000:.0f}M (precio_max changed)")
+
+            # v2.10: Recalculate derived room fields when habitaciones changed
+            if hab_changed and (criteria.get('habitaciones_min') or criteria.get('habitaciones_max')):
+                flexibilidad_hab = criteria.get('flexibilidad_habitaciones', previous_criteria.get('flexibilidad_habitaciones', 'normal'))
+                hab_min_f, hab_max_f = calcular_rango_habitaciones(
+                    criteria.get('habitaciones_min'),
+                    criteria.get('habitaciones_max'),
+                    flexibilidad=flexibilidad_hab
+                )
+                if hab_min_f is not None:
+                    criteria['habitaciones_min_filtro'] = hab_min_f
+                if hab_max_f is not None:
+                    criteria['habitaciones_max_filtro'] = hab_max_f
+                print(f"   [v2.10] Recalculated room filter: {hab_min_f}-{hab_max_f} (habitaciones changed)")
 
         if not criteria:
             search_log.log_error('No se pudieron extraer criterios de búsqueda', 'criteria_extraction')
@@ -1749,16 +1792,76 @@ Responde SOLO con el JSON de criterios."""
                 else:
                     search_type = 'progresiva'
                 if len(results) == 0:
-                    print("ℹ️  Sin resultados incluso con criterios relajados")
-                    total_elapsed = (time.time() - total_start) * 1000
-                    search_log.log_results(0, 0, total_elapsed)
-                    no_results_response = self._generate_no_results_response(criteria)
-                    no_results_response['search_id'] = search_id
-                    no_results_response['elapsed_ms'] = total_elapsed
-                    no_results_response['criteria'] = criteria
-                    no_results_response['search_type'] = 'sin_resultados'
-                    no_results_response['search_progression'] = search_progression
-                    return no_results_response
+                    # v2.10: Last-resort search - remove location, widen price, remove rooms
+                    print("   [v2.10] Zero results - attempting last-resort search...")
+                    last_resort_criteria = criteria.copy()
+                    last_resort_criteria.pop('ubicaciones', None)
+                    last_resort_criteria.pop('zonas_expandidas', None)
+
+                    if last_resort_criteria.get('precio_max_ajustado'):
+                        last_resort_criteria['precio_max_ajustado'] = int(last_resort_criteria['precio_max_ajustado'] * 1.30)
+                    if last_resort_criteria.get('precio_min_implicito'):
+                        last_resort_criteria['precio_min_implicito'] = int(last_resort_criteria['precio_min_implicito'] * 0.70)
+
+                    last_resort_criteria.pop('habitaciones_min_filtro', None)
+                    last_resort_criteria.pop('habitaciones_max_filtro', None)
+                    last_resort_criteria.pop('habitaciones_min', None)
+                    last_resort_criteria.pop('habitaciones_max', None)
+                    last_resort_criteria.pop('banos_min', None)
+                    last_resort_criteria.pop('banos_max', None)
+                    last_resort_criteria.pop('area_min', None)
+                    last_resort_criteria.pop('area_max', None)
+                    last_resort_criteria.pop('area_min_ajustado', None)
+                    last_resort_criteria.pop('area_max_ajustado', None)
+
+                    try:
+                        sql_query_lr, params_lr = self._build_sql_query(last_resort_criteria, ubicacion_level=1)
+                        db.cursor.execute(sql_query_lr, params_lr)
+                        columns_lr = [desc[0] for desc in db.cursor.description]
+                        rows_lr = db.cursor.fetchall()
+
+                        results = []
+                        for row in rows_lr:
+                            if isinstance(row, dict):
+                                prop = dict(row)
+                            else:
+                                prop = dict(zip(columns_lr, row))
+                            for key, value in prop.items():
+                                if hasattr(value, 'isoformat'):
+                                    prop[key] = value.isoformat()
+                                elif not isinstance(value, (int, float, str, bool, type(None))):
+                                    prop[key] = str(value)
+                            results.append(prop)
+
+                        print(f"   [v2.10] Last-resort found: {len(results)} results")
+                        search_log.info(f"[v2.10] Last-resort search: {len(results)} results (location/rooms/area removed, price widened ±30%)")
+
+                        if results:
+                            search_progression['nivel_final'] = 5
+                            search_progression['relajaciones_aplicadas'] = search_progression.get('relajaciones_aplicadas', [])
+                            search_progression['relajaciones_aplicadas'].append("last_resort: ubicación/habitaciones/área removidos, precio ±30%")
+                            search_progression['ubicacion_relajada'] = True
+                            search_progression['mensaje_ubicacion'] = "Búsqueda ampliada (criterios relajados para mostrar opciones)"
+                            search_type = 'last_resort'
+
+                    except Exception as e:
+                        print(f"   [v2.10] Last-resort search error: {e}")
+                        try:
+                            db.conn.rollback()
+                        except:
+                            pass
+
+                    if len(results) == 0:
+                        print("ℹ️  Sin resultados incluso con último recurso")
+                        total_elapsed = (time.time() - total_start) * 1000
+                        search_log.log_results(0, 0, total_elapsed)
+                        no_results_response = self._generate_no_results_response(criteria)
+                        no_results_response['search_id'] = search_id
+                        no_results_response['elapsed_ms'] = total_elapsed
+                        no_results_response['criteria'] = criteria
+                        no_results_response['search_type'] = 'sin_resultados'
+                        no_results_response['search_progression'] = search_progression
+                        return no_results_response
 
         except Exception as e:
             search_log.log_error(str(e), 'progressive_search')
@@ -1787,8 +1890,14 @@ Responde SOLO con el JSON de criterios."""
             # Si los mejores resultados tienen score muy bajo, es mejor decir "no encontrado"
             mejor_score = results[0].get('match_score', 0) if results else 0
 
-            if mejor_score < MIN_SCORE_PARA_MOSTRAR:
-                print(f"⚠️  Mejor score ({mejor_score}) bajo umbral mínimo ({MIN_SCORE_PARA_MOSTRAR})")
+            # v2.10: Lower threshold for last-resort results to ensure we show something
+            effective_min_score = MIN_SCORE_PARA_MOSTRAR
+            if search_progression.get('nivel_final', 0) >= 5:
+                effective_min_score = max(10, MIN_SCORE_PARA_MOSTRAR // 2)
+                print(f"   [v2.10] Using lower quality threshold ({effective_min_score}) for last-resort results")
+
+            if mejor_score < effective_min_score:
+                print(f"⚠️  Mejor score ({mejor_score}) bajo umbral mínimo ({effective_min_score})")
                 total_elapsed = (time.time() - total_start) * 1000
                 search_log.log_results(len(results), 0, total_elapsed)
 
