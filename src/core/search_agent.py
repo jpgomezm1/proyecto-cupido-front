@@ -55,6 +55,7 @@ from src.core.search_config import (
     AMENIDADES_LUJO,
     AMENIDADES_ACCESIBILIDAD,
     MIN_SCORE_PARA_MOSTRAR,  # v2.3: Umbral de calidad mínima
+    SIMILAR_TYPES,  # v2.11: Tipos de propiedad similares para relajación
     # v2.1: Nuevas funciones de normalización
     ZONA_CANONICA,
     LANDMARKS_A_ZONAS,
@@ -643,6 +644,245 @@ Responde SOLO con el JSON de criterios."""
                 relaxed['precio_max_ajustado'] = int(criteria['precio_max'] * 1.25)
 
         return relaxed
+
+    # =========================================================================
+    # v2.11: EXTENDED PROGRESSIVE SEARCH - Relajación graduada post-nivel-4
+    # =========================================================================
+
+    def _build_extended_relaxed_criteria(self, criteria: Dict[str, Any], level: int) -> Dict[str, Any]:
+        """
+        Construye criterios relajados para niveles extendidos 5-8.
+        A diferencia de _build_relaxed_criteria, estos niveles trabajan sobre
+        los criterios ORIGINALES y aplican relajaciones más amplias.
+
+        NOTA: _progressive_search ya probó city + criterios originales (Phase 1 ub_level=1)
+        y city + criterios relajados hasta level 4. Los niveles extendidos van MÁS allá.
+
+        Niveles:
+        5 = Ciudad + precio ±15% + baños/área/parqueaderos removidos
+        6 = Ciudad + precio ±20% (mantiene tipo y habitaciones)
+        7 = Ciudad + precio ±20% + habitaciones ±1 (mantiene tipo)
+        8 = Sin ubicación + precio ±30% + habitaciones ±1 + tipo ampliado a similares
+        """
+        relaxed = criteria.copy()
+
+        if level >= 5:
+            # Remover filtros secundarios (todos los niveles extendidos)
+            relaxed.pop('banos_min', None)
+            relaxed.pop('banos_max', None)
+            relaxed.pop('area_min', None)
+            relaxed.pop('area_max', None)
+            relaxed.pop('area_min_ajustado', None)
+            relaxed.pop('area_max_ajustado', None)
+            relaxed.pop('parqueaderos_min', None)
+
+            # Precio ±15%
+            self._apply_extended_price_widening(relaxed, criteria, 0.15)
+
+        if level >= 6:
+            # Precio ±20% (sobreescribe ±15%)
+            self._apply_extended_price_widening(relaxed, criteria, 0.20)
+
+        if level >= 7:
+            # Habitaciones: ±1
+            if criteria.get('habitaciones_min') and criteria['habitaciones_min'] > 1:
+                relaxed['habitaciones_min'] = criteria['habitaciones_min'] - 1
+                relaxed['habitaciones_min_filtro'] = criteria['habitaciones_min'] - 1
+            if criteria.get('habitaciones_max'):
+                relaxed['habitaciones_max'] = criteria['habitaciones_max'] + 1
+                relaxed['habitaciones_max_filtro'] = criteria['habitaciones_max'] + 2
+            elif criteria.get('habitaciones_min'):
+                relaxed['habitaciones_max'] = criteria['habitaciones_min'] + 1
+                relaxed['habitaciones_max_filtro'] = criteria['habitaciones_min'] + 2
+
+        if level >= 8:
+            # Solo en nivel 8: remover ubicación (último recurso)
+            relaxed.pop('ubicaciones', None)
+            relaxed.pop('zonas_expandidas', None)
+
+            # Precio ±30% (sobreescribe ±20%)
+            self._apply_extended_price_widening(relaxed, criteria, 0.30)
+
+            # Tipo de propiedad: ampliar a tipos similares
+            tipo = criteria.get('tipo_propiedad')
+            if tipo and not isinstance(tipo, list):
+                similares = SIMILAR_TYPES.get(tipo.lower(), [])
+                if similares:
+                    relaxed['tipo_propiedad'] = [tipo] + similares
+
+        return relaxed
+
+    def _apply_extended_price_widening(self, relaxed: Dict[str, Any], criteria: Dict[str, Any], pct: float) -> None:
+        """
+        Aplica widening de precio respetando si el usuario dio rango explícito o solo tope.
+
+        - Rango explícito (precio_min + precio_max): new_min = min*(1-pct), new_max = max*(1+pct)
+        - Solo tope (precio_max sin precio_min): new_min = max*(1-pct), new_max = max*(1+pct)
+        """
+        if not criteria.get('precio_max'):
+            return
+
+        precio_max = criteria['precio_max']
+
+        if criteria.get('precio_min'):
+            # Rango explícito: ampliar ambos lados
+            precio_min = criteria['precio_min']
+            relaxed['precio_min'] = int(precio_min * (1 - pct))
+            relaxed['precio_min_implicito'] = relaxed['precio_min']
+            relaxed['precio_max_ajustado'] = int(precio_max * (1 + pct))
+        else:
+            # Solo tope: usar precio_max como referencia superior
+            relaxed['precio_min_implicito'] = int(precio_max * (1 - pct))
+            relaxed['precio_max_ajustado'] = int(precio_max * (1 + pct))
+
+    def _get_extended_relaxation_descriptions(self, level: int, criteria: Dict[str, Any]) -> List[str]:
+        """Retorna descripciones de qué criterios se relajaron en el nivel extendido final"""
+        descriptions = []
+
+        ciudades = get_ciudades_de_zonas(criteria.get('ubicaciones', []))
+        ciudad_label = f"toda {', '.join(ciudades)}" if ciudades else "ciudad ampliada"
+
+        if level == 5:
+            descriptions.append(f"Búsqueda ampliada a {ciudad_label}")
+            descriptions.append("Precio ±15%")
+        elif level == 6:
+            descriptions.append(f"Búsqueda ampliada a {ciudad_label}")
+            descriptions.append("Precio ±20%")
+        elif level == 7:
+            descriptions.append(f"Búsqueda ampliada a {ciudad_label}")
+            descriptions.append("Precio ±20%")
+            descriptions.append("Habitaciones ±1")
+        elif level == 8:
+            descriptions.append("Todas las ciudades")
+            descriptions.append("Precio ±30%")
+            descriptions.append("Habitaciones ±1")
+            tipo = criteria.get('tipo_propiedad', '')
+            similares = SIMILAR_TYPES.get(tipo.lower(), []) if isinstance(tipo, str) else []
+            if similares:
+                descriptions.append(f"Tipo: {tipo} y {', '.join(similares)}")
+
+        return descriptions
+
+    def _extended_progressive_search(
+        self,
+        criteria: Dict[str, Any],
+        db: DatabaseManager,
+        search_progression: Dict[str, Any]
+    ) -> Tuple[List[Dict], Dict[str, Any]]:
+        """
+        v2.11: Búsqueda progresiva extendida que reemplaza el last-resort nuclear.
+        Intenta niveles 5-8 con relajación graduada antes de declarar sin resultados.
+
+        CONTEXTO: _progressive_search ya intentó:
+        - Phase 1: zona exacta → ciudad → zonas expandidas (con criterios originales)
+        - Phase 2: ciudad + relajación niveles 1-4 (área, baños, habitaciones, precio+10%)
+
+        Niveles extendidos (van más allá):
+        5 = Ciudad + precio ±15% + sin baños/área/parqueaderos
+        6 = Ciudad + precio ±20% (mantiene tipo y habitaciones)
+        7 = Ciudad + precio ±20% + habitaciones ±1
+        8 = Sin ubicación + precio ±30% + habitaciones ±1 + tipo ampliado
+
+        Args:
+            criteria: Criterios originales de búsqueda
+            db: Conexión a base de datos
+            search_progression: Dict de progresión acumulado
+
+        Returns:
+            Tuple de (resultados, search_progression actualizado)
+        """
+        # (level, ubicacion_level, description)
+        # Levels 5-7: usa ub_level=1 (ciudad) - mantiene ubicaciones en criteria
+        # Level 8: usa ub_level=0 - ubicaciones removidas, abre a todo el inventario
+        level_configs = [
+            (5, 1, 'ciudad + precio ±15% + sin filtros secundarios'),
+            (6, 1, 'ciudad + precio ±20%'),
+            (7, 1, 'ciudad + precio ±20% + hab ±1'),
+            (8, 0, 'sin ubicación + precio ±30% + hab ±1 + tipo ampliado'),
+        ]
+
+        best_results = []
+        best_level = None
+        best_ub_level = None
+
+        for level, ub_level, desc in level_configs:
+            relaxed_criteria = self._build_extended_relaxed_criteria(criteria, level)
+            effective_ub_level = ub_level
+
+            try:
+                sql_query, params = self._build_sql_query(relaxed_criteria, ubicacion_level=effective_ub_level)
+                db.cursor.execute(sql_query, params)
+                columns = [desc_col[0] for desc_col in db.cursor.description]
+                rows = db.cursor.fetchall()
+
+                results = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        prop = dict(row)
+                    else:
+                        prop = dict(zip(columns, row))
+                    for key, value in prop.items():
+                        if hasattr(value, 'isoformat'):
+                            prop[key] = value.isoformat()
+                        elif not isinstance(value, (int, float, str, bool, type(None))):
+                            prop[key] = str(value)
+                    results.append(prop)
+
+                search_progression['resultados_por_nivel'][f'ext_{level}'] = len(results)
+                search_log.info(f"[v2.11] Extended level {level} ({desc}): {len(results)} results")
+
+                # Track best partial results in case no level reaches >= 3
+                if len(results) > len(best_results):
+                    best_results = results
+                    best_level = level
+                    best_ub_level = effective_ub_level
+
+                if len(results) >= 3:
+                    self._set_extended_progression(search_progression, level, effective_ub_level, criteria)
+                    search_log.info(f"[v2.11] Extended level {level}: {len(results)} results ({desc})")
+                    return results, search_progression
+
+            except Exception as e:
+                search_log.warning(f"[v2.11] Error in extended level {level}: {e}")
+                try:
+                    db.conn.rollback()
+                except:
+                    pass
+                continue
+
+        # Return best partial results (1-2) if any level found something
+        if best_results and best_level is not None:
+            self._set_extended_progression(search_progression, best_level, best_ub_level, criteria)
+            search_log.info(f"[v2.11] Returning {len(best_results)} partial results from extended level {best_level}")
+            return best_results, search_progression
+
+        search_log.info("[v2.11] No results found in extended levels 5-8")
+        return [], search_progression
+
+    def _set_extended_progression(
+        self,
+        search_progression: Dict[str, Any],
+        level: int,
+        ub_level: int,
+        criteria: Dict[str, Any]
+    ) -> None:
+        """Sets search_progression metadata for extended relaxation levels."""
+        search_progression['nivel_final'] = level
+        search_progression['ubicacion_level'] = ub_level
+        search_progression['ubicacion_relajada'] = True
+        search_progression['relajaciones_aplicadas'] = self._get_extended_relaxation_descriptions(level, criteria)
+
+        ubicaciones = criteria.get('ubicaciones', [])
+        if ubicaciones:
+            zona_str = ', '.join(ubicaciones)
+            search_progression['mensaje_ubicacion'] = f"No encontramos en {zona_str}, mostrando opciones cercanas"
+        else:
+            search_progression['mensaje_ubicacion'] = "Mostrando opciones con criterios ampliados"
+
+        search_progression['mensaje_relajacion'] = (
+            "No encontramos propiedades exactas. "
+            "Ajustamos algunos criterios para mostrarte opciones cercanas."
+        )
 
     def _progressive_search(
         self,
@@ -1410,6 +1650,109 @@ Responde SOLO con el JSON de criterios."""
     # NOTA v2.1: _fallback_search() fue reemplazado por _progressive_search()
     # que implementa relajación progresiva por niveles protegiendo precio y ubicación
 
+    def _calculate_alignment_score(self, results: List[Dict], criteria: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        v2.11: Calcula qué tan alineados están los resultados con la intención original.
+
+        Componentes del score (0-100):
+        - Ubicación (0-35): zona exacta=35, misma ciudad=20, otra ciudad=0
+        - Tipo propiedad (0-20): exacto=20, similar=10, diferente=0
+        - Precio (0-25): ±10%=25, ±20%=15, ±30%=8, más=0
+        - Habitaciones (0-20): exacto=20, ±1=12, ±2=5, más=0
+
+        Returns:
+            Dict con avg_score y per_result_scores
+        """
+        if not results:
+            return {'avg_score': 0, 'per_result_scores': []}
+
+        ubicaciones = [u.lower() for u in criteria.get('ubicaciones', [])]
+        ciudades_esperadas = [c.lower() for c in get_ciudades_de_zonas(criteria.get('ubicaciones', [])) if c]
+        tipo_esperado = criteria.get('tipo_propiedad', '')
+        if isinstance(tipo_esperado, list):
+            tipo_esperado = tipo_esperado[0] if tipo_esperado else ''
+        tipo_esperado_lower = tipo_esperado.lower() if tipo_esperado else ''
+        precio_max = criteria.get('precio_max', 0)
+        hab_min = criteria.get('habitaciones_min', 0)
+        hab_max = criteria.get('habitaciones_max', hab_min)
+
+        per_result_scores = []
+
+        for result in results:
+            score = 0
+
+            # 1. Ubicación (0-35)
+            zona = (result.get('zona') or '').lower()
+            ciudad = (result.get('ciudad') or '').lower()
+
+            if ubicaciones and any(u in zona for u in ubicaciones):
+                score += 35  # Zona exacta
+            elif ciudades_esperadas and any(c in ciudad for c in ciudades_esperadas):
+                score += 20  # Misma ciudad
+            elif not ubicaciones:
+                score += 20  # No se especificó ubicación
+
+            # 2. Tipo propiedad (0-20)
+            tipo_resultado = (result.get('tipo_propiedad') or '').lower()
+            if tipo_esperado_lower and tipo_resultado:
+                if tipo_esperado_lower in tipo_resultado or tipo_resultado in tipo_esperado_lower:
+                    score += 20  # Tipo exacto
+                elif tipo_esperado_lower in SIMILAR_TYPES and tipo_resultado in [t.lower() for t in SIMILAR_TYPES.get(tipo_esperado_lower, [])]:
+                    score += 10  # Tipo similar
+            elif not tipo_esperado_lower:
+                score += 15  # No se especificó tipo
+
+            # 3. Precio (0-25)
+            precio = result.get('precio', 0)
+            if isinstance(precio, str):
+                try:
+                    precio = float(precio.replace(',', '').replace('$', '').replace(' ', ''))
+                except:
+                    precio = 0
+
+            if precio_max and precio > 0:
+                ratio = abs(precio - precio_max) / precio_max
+                if ratio <= 0.10:
+                    score += 25
+                elif ratio <= 0.20:
+                    score += 15
+                elif ratio <= 0.30:
+                    score += 8
+            elif not precio_max:
+                score += 15  # No se especificó precio
+
+            # 4. Habitaciones (0-20)
+            hab = result.get('habitaciones', 0)
+            if not isinstance(hab, (int, float)):
+                try:
+                    hab = int(hab)
+                except:
+                    hab = 0
+
+            if hab_min or hab_max:
+                hab_ideal = (hab_min + hab_max) / 2 if hab_max else hab_min
+                diff = abs(hab - hab_ideal)
+                if diff == 0:
+                    score += 20
+                elif diff <= 1:
+                    score += 12
+                elif diff <= 2:
+                    score += 5
+            elif not hab_min:
+                score += 12  # No se especificaron habitaciones
+
+            result['alignment_score'] = score
+            per_result_scores.append(score)
+
+        avg_score = sum(per_result_scores[:5]) / min(len(per_result_scores), 5) if per_result_scores else 0
+        best_score = max(per_result_scores) if per_result_scores else 0
+
+        return {
+            'avg_score': round(avg_score, 1),
+            'best_score': best_score,
+            'per_result_scores': per_result_scores[:10]
+        }
+
     def _generate_no_results_response(self, criteria: Dict[str, Any]) -> Dict[str, Any]:
         """
         Genera una respuesta informativa cuando no hay resultados
@@ -1792,67 +2135,16 @@ Responde SOLO con el JSON de criterios."""
                 else:
                     search_type = 'progresiva'
                 if len(results) == 0:
-                    # v2.10: Last-resort search - remove location, widen price, remove rooms
-                    print("   [v2.10] Zero results - attempting last-resort search...")
-                    last_resort_criteria = criteria.copy()
-                    last_resort_criteria.pop('ubicaciones', None)
-                    last_resort_criteria.pop('zonas_expandidas', None)
+                    # v2.11: Extended progressive search - graduated relaxation instead of nuclear last-resort
+                    search_log.info("[v2.11] Zero results from progressive search - attempting extended levels 5-8")
+                    results, search_progression = self._extended_progressive_search(
+                        criteria, db, search_progression
+                    )
 
-                    if last_resort_criteria.get('precio_max_ajustado'):
-                        last_resort_criteria['precio_max_ajustado'] = int(last_resort_criteria['precio_max_ajustado'] * 1.30)
-                    if last_resort_criteria.get('precio_min_implicito'):
-                        last_resort_criteria['precio_min_implicito'] = int(last_resort_criteria['precio_min_implicito'] * 0.70)
-
-                    last_resort_criteria.pop('habitaciones_min_filtro', None)
-                    last_resort_criteria.pop('habitaciones_max_filtro', None)
-                    last_resort_criteria.pop('habitaciones_min', None)
-                    last_resort_criteria.pop('habitaciones_max', None)
-                    last_resort_criteria.pop('banos_min', None)
-                    last_resort_criteria.pop('banos_max', None)
-                    last_resort_criteria.pop('area_min', None)
-                    last_resort_criteria.pop('area_max', None)
-                    last_resort_criteria.pop('area_min_ajustado', None)
-                    last_resort_criteria.pop('area_max_ajustado', None)
-
-                    try:
-                        sql_query_lr, params_lr = self._build_sql_query(last_resort_criteria, ubicacion_level=1)
-                        db.cursor.execute(sql_query_lr, params_lr)
-                        columns_lr = [desc[0] for desc in db.cursor.description]
-                        rows_lr = db.cursor.fetchall()
-
-                        results = []
-                        for row in rows_lr:
-                            if isinstance(row, dict):
-                                prop = dict(row)
-                            else:
-                                prop = dict(zip(columns_lr, row))
-                            for key, value in prop.items():
-                                if hasattr(value, 'isoformat'):
-                                    prop[key] = value.isoformat()
-                                elif not isinstance(value, (int, float, str, bool, type(None))):
-                                    prop[key] = str(value)
-                            results.append(prop)
-
-                        print(f"   [v2.10] Last-resort found: {len(results)} results")
-                        search_log.info(f"[v2.10] Last-resort search: {len(results)} results (location/rooms/area removed, price widened ±30%)")
-
-                        if results:
-                            search_progression['nivel_final'] = 5
-                            search_progression['relajaciones_aplicadas'] = search_progression.get('relajaciones_aplicadas', [])
-                            search_progression['relajaciones_aplicadas'].append("last_resort: ubicación/habitaciones/área removidos, precio ±30%")
-                            search_progression['ubicacion_relajada'] = True
-                            search_progression['mensaje_ubicacion'] = "Búsqueda ampliada (criterios relajados para mostrar opciones)"
-                            search_type = 'last_resort'
-
-                    except Exception as e:
-                        print(f"   [v2.10] Last-resort search error: {e}")
-                        try:
-                            db.conn.rollback()
-                        except:
-                            pass
-
-                    if len(results) == 0:
-                        print("ℹ️  Sin resultados incluso con último recurso")
+                    if results:
+                        search_type = 'relajada'
+                    else:
+                        search_log.info("[v2.11] Sin resultados incluso con búsqueda extendida")
                         total_elapsed = (time.time() - total_start) * 1000
                         search_log.log_results(0, 0, total_elapsed)
                         no_results_response = self._generate_no_results_response(criteria)
@@ -1890,11 +2182,42 @@ Responde SOLO con el JSON de criterios."""
             # Si los mejores resultados tienen score muy bajo, es mejor decir "no encontrado"
             mejor_score = results[0].get('match_score', 0) if results else 0
 
-            # v2.10: Lower threshold for last-resort results to ensure we show something
+            # v2.11: Calcular alignment_score para búsquedas relajadas
+            alignment_info = None
+            if search_type in ('relajada', 'progresiva'):
+                alignment_info = self._calculate_alignment_score(results, criteria)
+                search_log.info(f"[v2.11] Alignment: best={alignment_info['best_score']}, avg={alignment_info['avg_score']}")
+
+                # Si el MEJOR resultado tiene alignment < 30, los resultados son irrelevantes
+                # Usamos best_score (no avg) para no descartar un buen resultado por malos vecinos
+                if alignment_info['best_score'] < 30:
+                    search_log.info(f"[v2.11] Best alignment ({alignment_info['best_score']}) < 30 - descartando resultados irrelevantes")
+                    total_elapsed = (time.time() - total_start) * 1000
+                    search_log.log_results(len(results), 0, total_elapsed)
+
+                    return {
+                        'success': True,
+                        'results': [],
+                        'total_found': 0,
+                        'search_type': 'sin_resultados_calidad',
+                        'no_results_reason': 'Las propiedades encontradas no coinciden suficientemente con los criterios',
+                        'mejor_score_encontrado': mejor_score,
+                        'alignment_info': alignment_info,
+                        'criterios_aplicados': {
+                            'ubicaciones': criteria.get('ubicaciones', []),
+                            'tipo': criteria.get('tipo_propiedad', 'No especificado'),
+                            'precio_rango': f"${criteria.get('precio_min_implicito', 0)/1_000_000:.0f}M - ${criteria.get('precio_max', 0)/1_000_000:.0f}M" if criteria.get('precio_max') else 'No especificado',
+                            'habitaciones': f"{criteria.get('habitaciones_min', '?')}-{criteria.get('habitaciones_max', '?')}",
+                        },
+                        'sugerencias': self._generate_quality_suggestions(criteria, results[:3]),
+                        'mensaje_usuario': self._format_quality_no_results_message(criteria, results[:3], mejor_score),
+                        'criteria': criteria,
+                        'search_id': search_id,
+                        'elapsed_ms': total_elapsed
+                    }
+
+            # v2.11: Umbral estándar de calidad para búsquedas exactas/ubicación
             effective_min_score = MIN_SCORE_PARA_MOSTRAR
-            if search_progression.get('nivel_final', 0) >= 5:
-                effective_min_score = max(10, MIN_SCORE_PARA_MOSTRAR // 2)
-                print(f"   [v2.10] Using lower quality threshold ({effective_min_score}) for last-resort results")
 
             if mejor_score < effective_min_score:
                 print(f"⚠️  Mejor score ({mejor_score}) bajo umbral mínimo ({effective_min_score})")
@@ -1925,6 +2248,16 @@ Responde SOLO con el JSON de criterios."""
         total_elapsed = (time.time() - total_start) * 1000
         search_log.log_results(len(results), min(len(results), limit), total_elapsed)
 
+        # v2.11: Build relaxation_applied object for frontend
+        relaxation_applied = None
+        nivel_final = search_progression.get('nivel_final', 0)
+        if nivel_final > 0:
+            relaxation_applied = {
+                'level': nivel_final,
+                'descriptions': search_progression.get('relajaciones_aplicadas', []),
+                'message': search_progression.get('mensaje_relajacion')
+            }
+
         # Paso 5: Formatear respuesta con metadata adicional v2.1
         return {
             'success': True,
@@ -1934,7 +2267,9 @@ Responde SOLO con el JSON de criterios."""
             'timestamp': datetime.now().isoformat(),
             'search_id': search_id,
             'search_type': search_type,
-            'search_progression': search_progression,  # v2.1: Info de relajación progresiva
+            'search_progression': search_progression,
+            'relaxation_applied': relaxation_applied,  # v2.11: Info de relajación para frontend
+            'alignment_info': alignment_info,  # v2.11: Scores de alineamiento
             'perfil_comprador': criteria.get('perfil_comprador', 'general'),
             'segmento_precio': criteria.get('segmento_precio'),
             'elapsed_ms': total_elapsed

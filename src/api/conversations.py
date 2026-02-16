@@ -1152,15 +1152,19 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
         accumulated_criteria['search_state']['phase'] = SearchPhase.READY_TO_SEARCH.value
 
     if total_found > 0:
-        priority_msg = ""
-        if criteria.get('selected_priority') and criteria['selected_priority'] != 'balanced':
-            priority_labels = {
-                'zona': 'zona',
-                'precio': 'precio',
-                'habitaciones': 'habitaciones'
-            }
-            priority_msg = f" (priorizando {priority_labels.get(criteria['selected_priority'], '')})"
-        assistant_content = f"Encontré {total_found} propiedades que coinciden con tu búsqueda{priority_msg}."
+        # v2.11: Mensaje diferenciado para búsquedas relajadas
+        if search_response.get('relaxation_applied'):
+            assistant_content = f"No encontré exactamente lo que buscas, pero encontré {total_found} opciones cercanas."
+        else:
+            priority_msg = ""
+            if criteria.get('selected_priority') and criteria['selected_priority'] != 'balanced':
+                priority_labels = {
+                    'zona': 'zona',
+                    'precio': 'precio',
+                    'habitaciones': 'habitaciones'
+                }
+                priority_msg = f" (priorizando {priority_labels.get(criteria['selected_priority'], '')})"
+            assistant_content = f"Encontré {total_found} propiedades que coinciden con tu búsqueda{priority_msg}."
     else:
         assistant_content = "No encontré propiedades que coincidan exactamente. Intenta con criterios más amplios."
 
@@ -1175,11 +1179,15 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
             pass
 
     # Guardar mensaje del asistente
+    # v2.11: Incluir search_type, relaxation_applied, alignment_info
     search_response_json = json.dumps({
         'criteria': accumulated_criteria,
         'results': results,
         'total_found': total_found,
-        'elapsed_ms': elapsed_ms
+        'elapsed_ms': elapsed_ms,
+        'search_type': search_response.get('search_type', 'exacta'),
+        'relaxation_applied': search_response.get('relaxation_applied'),
+        'alignment_info': search_response.get('alignment_info'),
     }, default=str)
 
     propiedades_ids = [r.get('id') for r in results if r.get('id')]
@@ -1235,6 +1243,17 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
 
     db.conn.commit()
 
+    # v2.11: Build search_response with relaxation metadata
+    search_response_for_frontend = {
+        'criteria': accumulated_criteria,
+        'results': results,
+        'total_found': total_found,
+        'elapsed_ms': elapsed_ms,
+        'search_type': search_response.get('search_type', 'exacta'),
+        'relaxation_applied': search_response.get('relaxation_applied'),
+        'alignment_info': search_response.get('alignment_info'),
+    }
+
     if isinstance(asst_msg_row, dict):
         assistant_message = {
             'id': asst_msg_row['id'],
@@ -1244,12 +1263,7 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
             'total_resultados': total_found,
             'tiempo_respuesta_ms': elapsed_ms,
             'fecha_creacion': asst_msg_row['fecha_creacion'].isoformat(),
-            'search_response': {
-                'criteria': accumulated_criteria,
-                'results': results,
-                'total_found': total_found,
-                'elapsed_ms': elapsed_ms
-            }
+            'search_response': search_response_for_frontend
         }
     else:
         assistant_message = {
@@ -1260,12 +1274,7 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
             'total_resultados': total_found,
             'tiempo_respuesta_ms': elapsed_ms,
             'fecha_creacion': asst_msg_row[1].isoformat() if asst_msg_row[1] else None,
-            'search_response': {
-                'criteria': accumulated_criteria,
-                'results': results,
-                'total_found': total_found,
-                'elapsed_ms': elapsed_ms
-            }
+            'search_response': search_response_for_frontend
         }
 
     return jsonify({

@@ -1067,6 +1067,19 @@ SINONIMOS_COLOMBIANOS = {
 # porque están muy alejados de los criterios del usuario
 MIN_SCORE_PARA_MOSTRAR = 25
 
+# v2.11: Tipos de propiedad similares para relajación progresiva
+# Permite relajar tipo_propiedad a tipos relacionados antes de eliminarlo
+SIMILAR_TYPES: Dict[str, List[str]] = {
+    'penthouse': ['apartamento'],
+    'apartamento': ['penthouse', 'apartaestudio'],
+    'casa': ['townhouse', 'casa campestre'],
+    'townhouse': ['casa'],
+    'apartaestudio': ['apartamento'],
+    'lote': ['finca'],
+    'finca': ['lote', 'casa campestre'],
+    'casa campestre': ['finca', 'casa'],
+}
+
 
 # Amenidades de alto valor por categoría
 AMENIDADES_SEGURIDAD = [
