@@ -70,6 +70,8 @@ from src.core.search_config import (
     # v2.12: Zonas hermanas y sectores
     get_hermanos_zona,
     resolver_sector_zona,
+    # v2.13: Matching insensible a acentos
+    quitar_acentos,
 )
 
 # v2.4: Importar funciones de prioridad
@@ -103,6 +105,14 @@ FALLBACK_MODELS = [
     "claude-3-5-sonnet-20241022",   # Claude 3.5 Sonnet v2
     "claude-3-5-haiku-20241022",    # Claude 3.5 Haiku (más económico)
 ]
+
+
+def _ubicacion_variants(ubicacion: str) -> List[str]:
+    """Genera variantes con y sin acentos para matching ILIKE accent-insensitive."""
+    sin_acentos = quitar_acentos(ubicacion)
+    if sin_acentos.lower() != ubicacion.lower():
+        return [ubicacion, sin_acentos]
+    return [ubicacion]
 
 
 class PropertySearchAgent:
@@ -1228,11 +1238,13 @@ Responde SOLO con el JSON de criterios."""
                     ciudad_de_zona = get_ciudad_de_zona(ubicacion)
 
                     # Match directo por nombre de ubicación (zona o ciudad)
+                    # v2.13: Incluir variante sin acentos para matching accent-insensitive
                     direct_conditions = []
-                    direct_conditions.append(f"zona ILIKE %(ub_direct_{param_idx})s")
-                    direct_conditions.append(f"ciudad ILIKE %(ub_direct_{param_idx})s")
-                    params[f'ub_direct_{param_idx}'] = f'%{ubicacion}%'
-                    param_idx += 1
+                    for variant in _ubicacion_variants(ubicacion):
+                        direct_conditions.append(f"zona ILIKE %(ub_direct_{param_idx})s")
+                        direct_conditions.append(f"ciudad ILIKE %(ub_direct_{param_idx})s")
+                        params[f'ub_direct_{param_idx}'] = f'%{variant}%'
+                        param_idx += 1
 
                     # Sub-zona variaciones CON restricción de ciudad
                     if ciudad_de_zona and len(variaciones) > 1:
@@ -1241,17 +1253,24 @@ Responde SOLO con el JSON de criterios."""
                             # Saltar la ubicación principal (ya cubierta arriba)
                             if var.lower() == ubicacion.lower():
                                 continue
-                            sub_zone_conditions.append(f"zona ILIKE %(ub_var_{param_idx})s")
-                            params[f'ub_var_{param_idx}'] = f'%{var}%'
-                            param_idx += 1
+                            # v2.13: Incluir variante sin acentos
+                            for var_variant in _ubicacion_variants(var):
+                                sub_zone_conditions.append(f"zona ILIKE %(ub_var_{param_idx})s")
+                                params[f'ub_var_{param_idx}'] = f'%{var_variant}%'
+                                param_idx += 1
 
                         if sub_zone_conditions:
                             # Variaciones solo matchean si la ciudad es correcta
-                            params[f'ub_city_{param_idx}'] = f'%{ciudad_de_zona}%'
+                            # v2.13: Incluir variante sin acentos para ciudad
+                            city_variants = _ubicacion_variants(ciudad_de_zona)
+                            city_conds = []
+                            for cv in city_variants:
+                                city_conds.append(f"ciudad ILIKE %(ub_city_{param_idx})s")
+                                params[f'ub_city_{param_idx}'] = f'%{cv}%'
+                                param_idx += 1
                             direct_conditions.append(
-                                f"(({' OR '.join(sub_zone_conditions)}) AND ciudad ILIKE %(ub_city_{param_idx})s)"
+                                f"(({' OR '.join(sub_zone_conditions)}) AND ({' OR '.join(city_conds)}))"
                             )
-                            param_idx += 1
 
                     zona_conditions.append(f"({' OR '.join(direct_conditions)})")
 
@@ -1262,44 +1281,57 @@ Responde SOLO con el JSON de criterios."""
 
             elif ubicacion_level == 1:
                 # NIVEL 1: Buscar por ciudad (ampliando desde zonas específicas)
+                # v2.13: Incluir variantes sin acentos
                 ciudades = get_ciudades_de_zonas(ubicaciones_originales)
                 if ciudades:
                     ciudad_conditions = []
-                    for i, ciudad in enumerate(ciudades):
-                        ciudad_conditions.append(f"ciudad ILIKE %(ciudad_{i})s")
-                        params[f'ciudad_{i}'] = f'%{ciudad}%'
+                    param_idx = 0
+                    for ciudad in ciudades:
+                        for variant in _ubicacion_variants(ciudad):
+                            ciudad_conditions.append(f"ciudad ILIKE %(ciudad_{param_idx})s")
+                            params[f'ciudad_{param_idx}'] = f'%{variant}%'
+                            param_idx += 1
                     conditions.append(f"({' OR '.join(ciudad_conditions)})")
                     _filters_log.append(f"ubicacion_level=1 ciudades={ciudades}")
                 else:
                     # Si no encontramos ciudades, usar zonas originales
                     zona_conditions = []
-                    for i, ubicacion in enumerate(ubicaciones_originales):
-                        zona_conditions.append(f"ciudad ILIKE %(ubicacion_{i})s")
-                        params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+                    param_idx = 0
+                    for ubicacion in ubicaciones_originales:
+                        for variant in _ubicacion_variants(ubicacion):
+                            zona_conditions.append(f"ciudad ILIKE %(ubicacion_{param_idx})s")
+                            params[f'ubicacion_{param_idx}'] = f'%{variant}%'
+                            param_idx += 1
                     conditions.append(f"({' OR '.join(zona_conditions)})")
                     _filters_log.append(f"ubicacion_level=1 fallback_zonas={ubicaciones_originales}")
 
             elif ubicacion_level >= 2:
                 # NIVEL 2+: Zonas expandidas (zonas similares) CON restricción de ciudad
                 # v2.9: Restringir zonas expandidas a ciudades esperadas
+                # v2.13: Incluir variantes sin acentos
                 zonas_expandidas = criteria.get('zonas_expandidas', ubicaciones_originales)
                 ciudades_esperadas = get_ciudades_de_zonas(ubicaciones_originales)
                 zona_conditions = []
                 param_idx = 0
                 for ubicacion in zonas_expandidas:
-                    zona_conditions.append(f"zona ILIKE %(ub_exp_{param_idx})s")
-                    params[f'ub_exp_{param_idx}'] = f'%{ubicacion}%'
-                    param_idx += 1
+                    for variant in _ubicacion_variants(ubicacion):
+                        zona_conditions.append(f"zona ILIKE %(ub_exp_{param_idx})s")
+                        params[f'ub_exp_{param_idx}'] = f'%{variant}%'
+                        param_idx += 1
                 # Agregar ciudades originales como match directo
                 for ubicacion in ubicaciones_originales:
-                    zona_conditions.append(f"ciudad ILIKE %(ub_exp_{param_idx})s")
-                    params[f'ub_exp_{param_idx}'] = f'%{ubicacion}%'
-                    param_idx += 1
+                    for variant in _ubicacion_variants(ubicacion):
+                        zona_conditions.append(f"ciudad ILIKE %(ub_exp_{param_idx})s")
+                        params[f'ub_exp_{param_idx}'] = f'%{variant}%'
+                        param_idx += 1
                 if ciudades_esperadas:
                     ciudad_constraint = []
-                    for i, c in enumerate(ciudades_esperadas):
-                        ciudad_constraint.append(f"ciudad ILIKE %(ub_exp_city_{i})s")
-                        params[f'ub_exp_city_{i}'] = f'%{c}%'
+                    city_param_idx = 0
+                    for c in ciudades_esperadas:
+                        for variant in _ubicacion_variants(c):
+                            ciudad_constraint.append(f"ciudad ILIKE %(ub_exp_city_{city_param_idx})s")
+                            params[f'ub_exp_city_{city_param_idx}'] = f'%{variant}%'
+                            city_param_idx += 1
                     conditions.append(f"(({' OR '.join(zona_conditions)}) AND ({' OR '.join(ciudad_constraint)}))")
                 else:
                     conditions.append(f"({' OR '.join(zona_conditions)})")

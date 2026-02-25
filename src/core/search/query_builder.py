@@ -11,6 +11,15 @@ import traceback
 from typing import Dict, List, Any, Tuple
 
 from src.db.database import DatabaseManager
+from src.core.search_config import quitar_acentos
+
+
+def _ubicacion_variants(ubicacion: str) -> List[str]:
+    """Genera variantes con y sin acentos para matching ILIKE accent-insensitive."""
+    sin_acentos = quitar_acentos(ubicacion)
+    if sin_acentos.lower() != ubicacion.lower():
+        return [ubicacion, sin_acentos]
+    return [ubicacion]
 
 
 class QueryBuilder:
@@ -234,17 +243,21 @@ class QueryBuilder:
                 params['tipo_propiedad'] = f"%{tipos}%"
 
         # Ubicaciones
+        # v2.13: Incluir variantes sin acentos para matching accent-insensitive
         ubicaciones_buscar = criteria.get('zonas_expandidas') or criteria.get('ubicaciones')
         if ubicaciones_buscar:
             zona_conditions = []
-            for i, ubicacion in enumerate(ubicaciones_buscar):
-                zona_conditions.append(f"""(
-                    zona ILIKE %(ubicacion_{i})s OR
-                    ciudad ILIKE %(ubicacion_{i})s OR
-                    direccion_completa ILIKE %(ubicacion_{i})s OR
-                    titulo ILIKE %(ubicacion_{i})s
-                )""")
-                params[f'ubicacion_{i}'] = f'%{ubicacion}%'
+            param_idx = 0
+            for ubicacion in ubicaciones_buscar:
+                for variant in _ubicacion_variants(ubicacion):
+                    zona_conditions.append(f"""(
+                        zona ILIKE %(ubicacion_{param_idx})s OR
+                        ciudad ILIKE %(ubicacion_{param_idx})s OR
+                        direccion_completa ILIKE %(ubicacion_{param_idx})s OR
+                        titulo ILIKE %(ubicacion_{param_idx})s
+                    )""")
+                    params[f'ubicacion_{param_idx}'] = f'%{variant}%'
+                    param_idx += 1
             conditions.append(f"({' OR '.join(zona_conditions)})")
 
         # Habitaciones
