@@ -259,12 +259,18 @@ Debes extraer y estructurar la siguiente información cuando esté disponible:
 - area_min: Área mínima en m²
 - area_max: Área máxima en m²
 - piso: Número de piso específico (1 para primer piso)
+- piso_min: Piso mínimo. "piso alto" → 5, "del piso 10 para arriba" → 10
+- piso_max: Piso máximo. "pisos bajos" → 3
+NOTA: Si dice "piso alto" usar piso_min: 5. Si dice "piso bajo" usar piso_max: 3.
 - antiguedad_max: Años máximos de antigüedad (ej: "no mayor a 20 años" → 20, "máximo 15 años" → 15)
 - administracion_max: Valor máximo de administración en COP (ej: "admon no mayor a 550000" → 550000)
 - parqueaderos_min: Mínimo de parqueaderos/garajes requeridos
 - cuarto_util: true si se requiere cuarto útil/depósito
 - amenidades_requeridas: Lista de amenidades importantes (ej: ["portería", "piscina", "balcón", "vigilancia 24h", "unidad cerrada"])
 - caracteristicas_especiales: Características mencionadas (ej: "baño en cada habitación", "buen estado", "remodelado")
+- preferencias_adicionales: Lista de preferencias cualitativas que afectan ranking.
+  Valores posibles: "buena_vista", "luminoso", "tranquilo", "vista_ciudad", "vista_montaña"
+  Ej: "apto con buena vista" → ["buena_vista"]
 - perfil_comprador: Detectar el perfil del comprador basado en el mensaje:
   * "familia" - Si menciona familia, niños, hijos, colegios
   * "inversionista" - Si menciona inversión, rentabilidad, arriendo
@@ -519,6 +525,14 @@ Responde SOLO con el JSON de criterios."""
                 criteria['perfil_comprador'] = perfil_detectado
             elif perfil_claude == 'general':
                 criteria['perfil_comprador'] = perfil_detectado
+
+            # 2.5 v2.15: Detectar "piso alto" / "piso bajo" si Claude no extrajo piso_min/max
+            if not criteria.get('piso_min') and not criteria.get('piso_max') and not criteria.get('piso'):
+                query_lower = query.lower()
+                if re.search(r'pisos?\s+altos?', query_lower) or re.search(r'piso\s+alto', query_lower):
+                    criteria['piso_min'] = 5
+                elif re.search(r'pisos?\s+bajos?', query_lower) or re.search(r'piso\s+bajo', query_lower):
+                    criteria['piso_max'] = 3
 
             # 3. Normalizar y expandir ubicaciones v2.1
             if criteria.get('ubicaciones'):
@@ -1165,6 +1179,7 @@ Responde SOLO con el JSON de criterios."""
             descripcion, fecha_creacion
         FROM propiedades
         WHERE activa = TRUE
+        AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL)
         """
 
         conditions = []
@@ -1193,18 +1208,15 @@ Responde SOLO con el JSON de criterios."""
             params['precio_max_duro'] = precio_max_duro
             _filters_log.append(f"precio <= ${precio_max_duro/1_000_000:.0f}M")
 
-            # v2.12: Solo usar precio_min EXPLÍCITO del usuario como filtro SQL
-            # precio_min_implicito NO se aplica como filtro SQL (solo afecta ranking)
-            precio_min_duro = criteria.get('precio_min')  # Solo el explícito
+            # v2.14: Aplicar precio_min como filtro SQL duro
+            # Usar precio_min explícito si existe, sino precio_min_implicito (±10%)
+            precio_min_duro = criteria.get('precio_min') or criteria.get('precio_min_implicito')
             if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
                 params['precio_min_duro'] = precio_min_duro
-                _filters_log.append(f"precio >= ${precio_min_duro/1_000_000:.0f}M (explícito)")
-                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M (banda {((precio_max_duro - precio_min_duro) / precio_min_duro * 100):.0f}%)")
-            else:
-                precio_min_impl = criteria.get('precio_min_implicito')
-                if precio_min_impl:
-                    search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] precio_min_implicito=${precio_min_impl/1_000_000:.0f}M NO aplicado como filtro SQL (solo afecta ranking)")
+                source = "explícito" if criteria.get('precio_min') else "implícito ±10%"
+                _filters_log.append(f"precio >= ${precio_min_duro/1_000_000:.0f}M ({source})")
+                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M ({source})")
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -1389,6 +1401,17 @@ Responde SOLO con el JSON de criterios."""
                 conditions.append("piso = %(piso)s")
                 params['piso'] = criteria['piso']
                 _filters_log.append(f"piso={criteria['piso']}")
+
+        # v2.15: Filtro por piso mínimo/máximo (piso alto / piso bajo)
+        if criteria.get('piso_min'):
+            conditions.append("piso >= %(piso_min)s")
+            params['piso_min'] = criteria['piso_min']
+            _filters_log.append(f"piso>={criteria['piso_min']}")
+
+        if criteria.get('piso_max'):
+            conditions.append("piso <= %(piso_max)s")
+            params['piso_max'] = criteria['piso_max']
+            _filters_log.append(f"piso<={criteria['piso_max']}")
 
         # Filtro por parqueaderos (NUEVO v2.1)
         if criteria.get('parqueaderos_min'):
@@ -1671,6 +1694,18 @@ Responde SOLO con el JSON de criterios."""
                         score -= 15
                         reasons.append("No es primer piso (requerido)")
 
+            # 5b. v2.15: Piso mínimo/máximo (piso alto / piso bajo)
+            piso_prop = result.get('piso')
+            piso_min_req = criteria.get('piso_min')
+            piso_max_req = criteria.get('piso_max')
+            if piso_prop and (piso_min_req or piso_max_req):
+                if piso_min_req and piso_prop >= piso_min_req:
+                    score += 8
+                    reasons.append(f"Piso {piso_prop} (alto)")
+                elif piso_max_req and piso_prop <= piso_max_req:
+                    score += 8
+                    reasons.append(f"Piso {piso_prop} (bajo)")
+
             # ===== SCORING POR PERFIL ESPECÍFICO =====
 
             # 6. Amenidades según perfil
@@ -1695,6 +1730,30 @@ Responde SOLO con el JSON de criterios."""
                         score += 5
                         if f"Tiene: {amenidad}" not in reasons:
                             reasons.append(f"Tiene: {amenidad}")
+
+            # 7b. v2.15: Preferencias adicionales (buena vista, luminoso, etc.)
+            preferencias = criteria.get('preferencias_adicionales', [])
+            if preferencias:
+                desc = (result.get('descripcion') or '').lower()
+                titulo_pref = (result.get('titulo') or '').lower()
+
+                if 'buena_vista' in preferencias or 'vista_ciudad' in preferencias or 'vista_montaña' in preferencias:
+                    vista_keywords = ['vista', 'panoram', 'view', 'paisaje', 'skyline']
+                    if any(kw in desc or kw in amenidades_prop or kw in titulo_pref for kw in vista_keywords):
+                        score += 7
+                        reasons.append("Buena vista detectada")
+
+                if 'luminoso' in preferencias:
+                    luz_keywords = ['luminoso', 'iluminado', 'luz natural', 'bright']
+                    if any(kw in desc or kw in amenidades_prop for kw in luz_keywords):
+                        score += 5
+                        reasons.append("Luminoso")
+
+                if 'tranquilo' in preferencias:
+                    quiet_keywords = ['tranquil', 'silencio', 'quiet', 'residencial']
+                    if any(kw in desc or kw in amenidades_prop for kw in quiet_keywords):
+                        score += 5
+                        reasons.append("Zona tranquila")
 
             # 8. Seguridad - Importante para familias y seniors
             if perfil_comprador in ['familia', 'senior']:

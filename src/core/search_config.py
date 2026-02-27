@@ -260,7 +260,7 @@ ZONA_A_CIUDAD: Dict[str, str] = {
 # Zonas similares/vecinas para expansión de búsqueda
 ZONAS_SIMILARES: Dict[str, List[str]] = {
     # El Poblado y similares (estrato alto, sur)
-    'poblado': ['ciudad del rio', 'lalinde', 'castropol', 'manila', 'envigado'],
+    'poblado': ['ciudad del rio', 'lalinde', 'castropol', 'manila'],
     'ciudad del rio': ['poblado', 'lalinde', 'guayabal'],
     'castropol': ['poblado', 'lalinde', 'manila'],
     'lalinde': ['poblado', 'castropol', 'ciudad del rio'],
@@ -374,6 +374,29 @@ def resolver_sector_zona(ubicacion: str) -> Optional[List[str]]:
                     return ZONA_SECTORES[zona_normalizada][sector_key]
 
     return None
+
+
+# =============================================================================
+# ZONA_HIJOS - Mapeo padre → sub-barrios (derivado de ZONA_SECTORES)
+# =============================================================================
+
+def _build_zona_hijos() -> Dict[str, List[str]]:
+    """Mapeo padre → todos sus sub-barrios, derivado de ZONA_SECTORES."""
+    hijos = {}
+    for zona_padre, sectores in ZONA_SECTORES.items():
+        all_children = []
+        for barrios in sectores.values():
+            all_children.extend(barrios)
+        hijos[zona_padre] = all_children
+    return hijos
+
+ZONA_HIJOS: Dict[str, List[str]] = _build_zona_hijos()
+
+
+def get_zona_hijos(zona: str) -> List[str]:
+    """Retorna sub-barrios de una zona padre. Lista vacía si no es zona padre."""
+    zona_canonica = normalizar_zona(zona)
+    return ZONA_HIJOS.get(zona_canonica, [])
 
 
 # =============================================================================
@@ -1042,10 +1065,18 @@ def get_zonas_expandidas(zona: str) -> List[str]:
 
     # Buscar en el diccionario de zonas similares
     similares = ZONAS_SIMILARES.get(zona_lower, [])
+    ciudad_origen = get_ciudad_de_zona(zona)
 
     # Siempre incluir la zona original primero
     resultado = [zona]
-    resultado.extend([z for z in similares if z.lower() != zona_lower])
+    for z in similares:
+        if z.lower() == zona_lower:
+            continue
+        # Defensa: no incluir zonas de otra ciudad
+        ciudad_z = get_ciudad_de_zona(z)
+        if ciudad_origen and ciudad_z and ciudad_z != ciudad_origen:
+            continue
+        resultado.append(z)
 
     return resultado
 
@@ -1441,6 +1472,12 @@ def get_variaciones_zona(zona: str) -> List[str]:
         # También agregar variaciones de la zona padre
         if zona_padre in VARIACIONES_ZONA:
             variaciones.update(VARIACIONES_ZONA[zona_padre])
+
+    # v2.15: Si es zona padre, incluir todos los sub-barrios (hijos)
+    if zona_canonica in ZONA_HIJOS:
+        for hijo in ZONA_HIJOS[zona_canonica]:
+            variaciones.add(hijo)
+            variaciones.add(hijo.lower())
 
     # Siempre incluir la zona original y la canónica
     variaciones.add(zona)

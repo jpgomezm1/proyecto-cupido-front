@@ -214,20 +214,23 @@ class QueryBuilder:
             descripcion, fecha_creacion
         FROM propiedades
         WHERE activa = TRUE
+        AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL)
         """
 
         conditions = []
         params = {}
 
-        # Filtro de precio máximo
+        # Filtro de precio (banda ±10% estricta)
         if criteria.get('precio_max'):
             precio_max_duro = criteria.get('precio_max_ajustado') or criteria['precio_max']
             conditions.append("precio <= %(precio_max_duro)s")
             params['precio_max_duro'] = precio_max_duro
 
-            if criteria.get('precio_min'):
+            # Usar precio_min explícito si existe, sino precio_min_implicito (±10%)
+            precio_min_duro = criteria.get('precio_min') or criteria.get('precio_min_implicito')
+            if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
-                params['precio_min_duro'] = criteria['precio_min']
+                params['precio_min_duro'] = precio_min_duro
 
         # Tipo de propiedad
         if criteria.get('tipo_propiedad'):
@@ -294,6 +297,15 @@ class QueryBuilder:
             elif isinstance(criteria['piso'], int):
                 conditions.append("piso = %(piso)s")
                 params['piso'] = criteria['piso']
+
+        # v2.15: Piso mínimo/máximo (piso alto / piso bajo)
+        if criteria.get('piso_min'):
+            conditions.append("piso >= %(piso_min)s")
+            params['piso_min'] = criteria['piso_min']
+
+        if criteria.get('piso_max'):
+            conditions.append("piso <= %(piso_max)s")
+            params['piso_max'] = criteria['piso_max']
 
         # Parqueaderos
         if criteria.get('parqueaderos_min'):
