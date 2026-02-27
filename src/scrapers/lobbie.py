@@ -142,13 +142,18 @@ class LobbieScraper:
         Returns:
             Dict con precio y precio_texto
         """
-        data = {'precio': None, 'precio_texto': None}
+        data = {'precio': None, 'precio_texto': None, 'tipo_negocio': 'Venta'}
 
-        # Buscar en h4 con patrón "Precio Venta: $XXX.XXX.XXX"
+        # Buscar en h4 con patrón "Precio Venta: $XXX.XXX.XXX" o "Precio Arriendo: ..."
         for h4 in soup.find_all('h4'):
             text = h4.get_text(strip=True)
             if 'precio' in text.lower():
                 data['precio_texto'] = text
+
+                # Detectar tipo de negocio desde el texto del h4
+                text_lower = text.lower()
+                if 'arriendo' in text_lower or 'arrendamiento' in text_lower or 'renta' in text_lower:
+                    data['tipo_negocio'] = 'Arriendo'
 
                 # Extraer valor numérico
                 match = re.search(r'\$\s*([\d.,]+)', text)

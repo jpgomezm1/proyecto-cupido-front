@@ -7,6 +7,7 @@ Funciones de normalización para tipos, ubicaciones, precios, etc.
 
 import re
 import os
+import unicodedata
 from typing import Optional, Dict, List
 from dotenv import load_dotenv
 
@@ -168,6 +169,50 @@ class PropertyNormalizer:
         'rent': 'Arriendo',
         'alquilar': 'Arriendo',
     }
+
+    @staticmethod
+    def slugify_titulo(titulo: Optional[str], max_length: int = 60) -> str:
+        """
+        Genera un slug URL-friendly a partir del título de una propiedad.
+
+        Ejemplos:
+            "APARTAMENTO 203 m2 SAN LUCAS AVIÑON" → "apartamento-203-m2-san-lucas-avinon"
+            "Casa en El Poblado" → "casa-en-el-poblado"
+
+        Args:
+            titulo: Título de la propiedad
+            max_length: Longitud máxima del slug
+
+        Returns:
+            Slug limpio o cadena vacía si no hay título
+        """
+        if not titulo:
+            return ''
+
+        # Lowercase
+        slug = titulo.lower()
+
+        # Quitar acentos: á→a, ñ→n, etc.
+        slug = unicodedata.normalize('NFD', slug)
+        slug = ''.join(c for c in slug if unicodedata.category(c) != 'Mn')
+
+        # Reemplazar caracteres no alfanuméricos con guión
+        slug = re.sub(r'[^a-z0-9]+', '-', slug)
+
+        # Colapsar múltiples guiones
+        slug = re.sub(r'-+', '-', slug)
+
+        # Quitar guiones al inicio y final
+        slug = slug.strip('-')
+
+        # Truncar al último guión antes del límite
+        if len(slug) > max_length:
+            slug = slug[:max_length]
+            last_dash = slug.rfind('-')
+            if last_dash > 0:
+                slug = slug[:last_dash]
+
+        return slug
 
     @staticmethod
     def normalizar_tipo_propiedad(tipo_raw: Optional[str]) -> str:

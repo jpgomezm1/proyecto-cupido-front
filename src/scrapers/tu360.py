@@ -291,6 +291,9 @@ class Tu360Scraper:
                 'telefono': agente_telefono,
                 'inmobiliaria': 'Tu360Inmobiliario',
 
+                # Tipo de negocio (Venta/Arriendo)
+                'tipo_negocio': tipo_negocio,
+
                 # Metadata
                 'fecha_extraccion': datetime.now().isoformat(),
                 'activa': True,

@@ -143,6 +143,7 @@ class VectorSearch:
         LEFT JOIN property_embeddings pe ON pe.propiedad_id = p.id
         LEFT JOIN property_visual_summary pvs ON pvs.propiedad_id = p.id
         WHERE p.activa = TRUE
+        AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
         AND pe.embedding IS NOT NULL
         """
 
@@ -364,6 +365,7 @@ class VectorSearch:
             0.5 as similarity
         FROM propiedades p
         WHERE p.activa = TRUE
+        AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
         ORDER BY p.fecha_creacion DESC
         LIMIT %s
         """
@@ -419,6 +421,7 @@ class VectorSearch:
                     FROM propiedades p
                     JOIN property_embeddings pe ON pe.propiedad_id = p.id
                     WHERE p.activa = TRUE
+                    AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
                     AND p.id != %s
                     ORDER BY pe.embedding <=> %s::vector
                     LIMIT %s

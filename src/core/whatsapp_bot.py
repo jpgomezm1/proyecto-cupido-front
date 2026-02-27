@@ -211,17 +211,15 @@ class WhatsAppBot:
                 else:
                     msg += f"• {amenidades[i]}\n"
 
-        # URL shareable (solo el link de compartir, no la fuente original)
-        slug = prop.get('slug')
+        # URL shareable con nombre legible
+        from src.scrapers.utils import PropertyNormalizer
+        slug = prop.get('slug') or str(prop.get('id', ''))
+        titulo = prop.get('titulo', '') or prop.get('title', '')
+        title_slug = PropertyNormalizer.slugify_titulo(titulo)
+        shareable_path = f"{slug}-{title_slug}" if title_slug else slug
         if slug:
-            # URL del frontend para compartir
-            shareable_link = f"{self.frontend_url}/compartir/{slug}"
+            shareable_link = f"{self.frontend_url}/compartir/{shareable_path}"
             msg += f"\n🔗 *Ver detalles:*\n{shareable_link}\n"
-        else:
-            # Fallback: usar ID si no hay slug
-            propiedad_id = prop.get('id')
-            if propiedad_id:
-                msg += f"\n🔗 *Ver detalles:*\n{self.frontend_url}/compartir/{propiedad_id}\n"
 
         return msg
 

@@ -7,6 +7,7 @@ Expone endpoints para que el frontend consuma la base de datos de Neon
 
 from flask import Blueprint, jsonify, request
 from src.db.database import DatabaseManager
+from src.scrapers.utils import PropertyNormalizer
 import traceback
 from typing import Dict, List, Optional
 
@@ -96,6 +97,7 @@ def get_properties():
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
             WHERE {status_condition}
+            AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
         """
         params = []
 
@@ -186,6 +188,11 @@ def get_properties():
             if prop_dict.get('area_m2'):
                 prop_dict['area_m2'] = float(prop_dict['area_m2'])
 
+            # Generar shareable_slug con nombre legible
+            title_slug = PropertyNormalizer.slugify_titulo(prop_dict.get('title', ''))
+            prop_id = str(prop_dict.get('id', ''))
+            prop_dict['shareable_slug'] = f"{prop_id}-{title_slug}" if title_slug else prop_id
+
             properties_list.append(prop_dict)
 
         return jsonify({
@@ -218,8 +225,12 @@ def get_property_by_slug(slug: str):
     try:
         db = get_db()
 
+        # Extraer ID numérico del inicio del slug para soportar
+        # slugs legibles tipo "7859-apto-san-lucas"
+        numeric_id = slug.split('-')[0] if '-' in slug else slug
+
         # Intentar buscar por codigo_propiedad primero, luego por ID
-        # Esto permite usar tanto "WASI-12345" como "26"
+        # Esto permite usar tanto "WASI-12345" como "26" como "7859-apto-san-lucas"
         query = """
             SELECT
                 p.id,
@@ -258,7 +269,7 @@ def get_property_by_slug(slug: str):
             WHERE (p.codigo_propiedad = %s OR p.id::text = %s) AND p.activa = true
         """
 
-        db.cursor.execute(query, (slug, slug))
+        db.cursor.execute(query, (slug, numeric_id))
         result = db.cursor.fetchall()
 
         if not result or len(result) == 0:
@@ -321,6 +332,11 @@ def get_property_by_slug(slug: str):
             prop_dict['lng'] = float(prop_dict['lng'])
         if prop_dict.get('area_m2'):
             prop_dict['area_m2'] = float(prop_dict['area_m2'])
+
+        # Generar shareable_slug con nombre legible
+        title_slug = PropertyNormalizer.slugify_titulo(prop_dict.get('title', ''))
+        prop_id = str(prop_dict.get('id', ''))
+        prop_dict['shareable_slug'] = f"{prop_id}-{title_slug}" if title_slug else prop_id
 
         return jsonify({
             'success': True,

@@ -101,7 +101,9 @@ class DatabaseManager:
                 'descripcion', 'descripcion_length',
                 'fecha_extraccion',
                 # Campos de captación (quién envió la propiedad)
-                'origen', 'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo'
+                'origen', 'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo',
+                # Tipo de negocio (Venta/Arriendo)
+                'tipo_negocio'
             ]
 
             # Campos AI enriquecidos (opcionales)
@@ -182,7 +184,7 @@ class DatabaseManager:
             fuente (str): Filtrar por fuente (Wasi, Fincaraiz, etc.)
         """
         try:
-            query = "SELECT * FROM propiedades WHERE activa = TRUE"
+            query = "SELECT * FROM propiedades WHERE activa = TRUE AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL)"
             params = []
 
             if fuente:

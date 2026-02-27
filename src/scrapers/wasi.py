@@ -104,6 +104,20 @@ class WasiScraper:
                 'fecha_extraccion': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
 
+            # === TIPO DE NEGOCIO ===
+            # Detectar desde URL (/arriendo en path) y fallback desde título
+            url_lower = url.lower()
+            if '/arriendo' in url_lower or '/rent' in url_lower or '/alquiler' in url_lower:
+                data['tipo_negocio'] = 'Arriendo'
+            else:
+                # Fallback: revisar título raw antes del cleaning
+                title_tag = soup.find('h1', class_='title') or soup.find('h1')
+                titulo_raw = title_tag.text.strip().lower() if title_tag else ''
+                if 'arriendo' in titulo_raw or 'se arrienda' in titulo_raw or 'arrendamiento' in titulo_raw:
+                    data['tipo_negocio'] = 'Arriendo'
+                else:
+                    data['tipo_negocio'] = 'Venta'
+
             # === INFORMACIÓN BÁSICA ===
             basic_info = self._extract_basic_info(soup)
             data.update(basic_info)
