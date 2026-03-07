@@ -50,7 +50,7 @@ MONTHS_ES = {
     9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
 }
 
-AI_MODEL = "claude-3-5-haiku-20241022"
+AI_MODEL = "claude-haiku-4-5-20251001"
 
 
 # ─── Utilities ───

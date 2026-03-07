@@ -40,7 +40,7 @@ def get_agents():
         offset = int(request.args.get('offset', 0))
         active = request.args.get('active', 'true').lower() == 'true'
 
-        # Query para obtener agentes con estadísticas calculadas
+        # Query optimizada: usar stats pre-computadas + subquery ligero para propiedades activas
         query = """
             SELECT
                 a.id,
@@ -52,17 +52,11 @@ def get_agents():
                 a.total_propiedades_captadas,
                 a.total_solicitudes_realizadas,
                 a.total_matches_logrados,
-                COUNT(DISTINCT p.id) as propiedades_activas,
-                COUNT(DISTINCT s.id) as solicitudes_totales,
-                COUNT(DISTINCT i.id) as interacciones_totales
+                (SELECT COUNT(*) FROM propiedades p
+                 WHERE p.agente_captador_telefono = a.telefono AND p.activa = TRUE
+                ) as propiedades_activas
             FROM agentes a
-            LEFT JOIN propiedades p ON a.telefono = p.agente_captador_telefono AND p.activa = TRUE
-            LEFT JOIN solicitudes_mercado s ON a.telefono = s.agente_telefono
-            LEFT JOIN interacciones i ON a.telefono = i.agente_comprador_telefono OR a.telefono = i.agente_vendedor_telefono
             WHERE a.activo = %s
-            GROUP BY a.id, a.telefono, a.nombre, a.activo, a.fecha_registro,
-                     a.fecha_actualizacion, a.total_propiedades_captadas,
-                     a.total_solicitudes_realizadas, a.total_matches_logrados
             ORDER BY a.fecha_registro DESC
             LIMIT %s OFFSET %s
         """
@@ -85,8 +79,8 @@ def get_agents():
                 'fecha_actualizacion': str(agent['fecha_actualizacion']) if agent['fecha_actualizacion'] else None,
                 'stats': {
                     'propiedades_captadas': agent['propiedades_activas'] or 0,
-                    'solicitudes_realizadas': agent['solicitudes_totales'] or 0,
-                    'interacciones': agent['interacciones_totales'] or 0,
+                    'solicitudes_realizadas': agent['total_solicitudes_realizadas'] or 0,
+                    'interacciones': agent['total_solicitudes_realizadas'] or 0,
                     'matches_logrados': agent['total_matches_logrados'] or 0,
                 }
             })

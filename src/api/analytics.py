@@ -619,7 +619,6 @@ def get_market_prices():
             GROUP BY COALESCE(zona, ciudad)
             HAVING COUNT(*) >= 2
             ORDER BY avg_price_m2 DESC
-            LIMIT 15
         """)
         price_m2_by_zone = []
         for row in db.cursor.fetchall():

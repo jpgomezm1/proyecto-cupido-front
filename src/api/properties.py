@@ -31,27 +31,55 @@ def get_properties():
 
     Query params:
     - status: string ('all', 'active', 'inactive') - default: 'active'
-    - limit: int (default: 10000)
+    - limit: int (default: 50)
     - offset: int (default: 0)
     - city: string
     - type: string
     - min_price: number
     - max_price: number
     - bedrooms: number
+    - source: string (Propia, Wasi, Tu360, Lobbie, Pulppo)
+    - zone: string (barrio/zona)
+    - stratum: int
+    - search: string (text search across title, city, zone, slug)
+    - min_area: number
+    - max_area: number
+    - sort_by: string (recent, price_asc, price_desc, area_desc, price_m2_asc, monthly_cost_asc)
+    - max_admin: number (max admin fee)
+    - min_year: number (min construction year)
+    - max_year: number (max construction year)
+    - opportunity: string ('true') - below zone avg price/m2 + recent 30 days
+    - min_price_m2: number (min price per m2)
+    - max_price_m2: number (max price per m2)
+    - below_zone_avg: string ('true') - below zone avg price/m2 (no date restriction)
     """
     db = None
     try:
         db = get_db()
 
         # Parámetros de query
-        status = request.args.get('status', 'active')  # all, active, inactive
-        limit = int(request.args.get('limit', 10000))  # Límite alto para mostrar todas las propiedades
+        status = request.args.get('status', 'active')
+        limit = int(request.args.get('limit', 50))
         offset = int(request.args.get('offset', 0))
         city = request.args.get('city')
         prop_type = request.args.get('type')
         min_price = request.args.get('min_price')
         max_price = request.args.get('max_price')
         bedrooms = request.args.get('bedrooms')
+        source = request.args.get('source')
+        zone = request.args.get('zone')
+        stratum = request.args.get('stratum')
+        search = request.args.get('search')
+        min_area = request.args.get('min_area')
+        max_area = request.args.get('max_area')
+        sort_by = request.args.get('sort_by', 'recent')
+        max_admin = request.args.get('max_admin')
+        min_year = request.args.get('min_year')
+        max_year = request.args.get('max_year')
+        opportunity = request.args.get('opportunity')
+        min_price_m2 = request.args.get('min_price_m2')
+        max_price_m2 = request.args.get('max_price_m2')
+        below_zone_avg = request.args.get('below_zone_avg')
 
         # Construir condición de estado
         if status == 'all':
@@ -61,7 +89,140 @@ def get_properties():
         else:
             status_condition = "p.activa = TRUE"
 
-        # Construir query SQL
+        # Base WHERE clause
+        where_clause = f"""
+            WHERE {status_condition}
+            AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
+        """
+        params = []
+
+        # Agregar filtros
+        if city:
+            where_clause += " AND LOWER(p.ciudad) = LOWER(%s)"
+            params.append(city)
+
+        if prop_type:
+            where_clause += " AND LOWER(p.tipo_propiedad) = LOWER(%s)"
+            params.append(prop_type)
+
+        if min_price:
+            where_clause += " AND p.precio >= %s"
+            params.append(int(min_price))
+
+        if max_price:
+            where_clause += " AND p.precio <= %s"
+            params.append(int(max_price))
+
+        if bedrooms:
+            bedrooms_val = int(bedrooms)
+            if bedrooms_val >= 5:
+                where_clause += " AND p.habitaciones >= %s"
+            else:
+                where_clause += " AND p.habitaciones = %s"
+            params.append(bedrooms_val)
+
+        if source:
+            if source == 'Wasi':
+                where_clause += " AND p.fuente LIKE %s"
+                params.append('%Wasi%')
+            elif source == 'Tu360':
+                where_clause += " AND p.fuente LIKE %s"
+                params.append('%Tu360%')
+            else:
+                where_clause += " AND p.fuente = %s"
+                params.append(source)
+
+        if zone:
+            where_clause += " AND LOWER(p.zona) = LOWER(%s)"
+            params.append(zone)
+
+        if stratum:
+            where_clause += " AND p.estrato = %s"
+            params.append(int(stratum))
+
+        if min_area:
+            where_clause += " AND p.area_construida >= %s"
+            params.append(float(min_area))
+
+        if max_area:
+            where_clause += " AND p.area_construida <= %s"
+            params.append(float(max_area))
+
+        if max_admin:
+            where_clause += " AND COALESCE(p.administracion, 0) <= %s"
+            params.append(int(max_admin))
+
+        if min_year:
+            where_clause += " AND p.ano_construccion >= %s"
+            params.append(int(min_year))
+
+        if max_year:
+            where_clause += " AND p.ano_construccion <= %s"
+            params.append(int(max_year))
+
+        if opportunity and opportunity.lower() == 'true':
+            where_clause += """
+                AND p.area_construida > 0 AND p.precio > 0
+                AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days'
+                AND p.precio / p.area_construida < (
+                    SELECT AVG(p2.precio / p2.area_construida)
+                    FROM propiedades p2
+                    WHERE p2.activa = true AND p2.area_construida > 0
+                    AND p2.precio > 0 AND LOWER(p2.zona) = LOWER(p.zona)
+                )
+            """
+
+        if below_zone_avg and below_zone_avg.lower() == 'true':
+            where_clause += """
+                AND p.area_construida > 0 AND p.precio > 0
+                AND p.precio / p.area_construida < (
+                    SELECT AVG(p2.precio / p2.area_construida)
+                    FROM propiedades p2
+                    WHERE p2.activa = true AND p2.area_construida > 0
+                    AND p2.precio > 0 AND LOWER(p2.zona) = LOWER(p.zona)
+                )
+            """
+
+        if min_price_m2:
+            where_clause += " AND p.area_construida > 0 AND (p.precio / p.area_construida) >= %s"
+            params.append(float(min_price_m2))
+
+        if max_price_m2:
+            where_clause += " AND p.area_construida > 0 AND (p.precio / p.area_construida) <= %s"
+            params.append(float(max_price_m2))
+
+        if search:
+            search_term = f"%{search.strip()}%"
+            where_clause += """ AND (
+                LOWER(p.titulo) LIKE LOWER(%s) OR
+                LOWER(p.zona) LIKE LOWER(%s) OR
+                LOWER(p.ciudad) LIKE LOWER(%s) OR
+                LOWER(p.codigo_propiedad) LIKE LOWER(%s) OR
+                CAST(p.id AS TEXT) = %s
+            )"""
+            params.extend([search_term, search_term, search_term, search_term, search.strip()])
+
+        # COUNT query (same filters, no limit/offset)
+        count_query = f"""
+            SELECT COUNT(*) as total
+            FROM propiedades p
+            LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
+            {where_clause}
+        """
+        db.cursor.execute(count_query, tuple(params))
+        total_count = db.cursor.fetchone()['total']
+
+        # Sort
+        sort_map = {
+            'price_asc': 'p.precio ASC NULLS LAST',
+            'price_desc': 'p.precio DESC NULLS LAST',
+            'area_desc': 'p.area_construida DESC NULLS LAST',
+            'price_m2_asc': 'CASE WHEN p.area_construida > 0 THEN p.precio / p.area_construida ELSE NULL END ASC NULLS LAST',
+            'monthly_cost_asc': '(COALESCE(p.administracion, 0) + COALESCE(p.predial, 0) / 12.0) ASC NULLS LAST',
+        }
+        order_clause = sort_map.get(sort_by, 'p.fecha_creacion DESC')
+
+        # Main query with cover image subquery
         query = f"""
             SELECT
                 p.id,
@@ -79,6 +240,7 @@ def get_properties():
                 p.estrato as stratum,
                 p.ano_construccion as age_years,
                 p.administracion as admin_fee_cop,
+                p.predial as predial_cop,
                 p.descripcion as description,
                 p.direccion_completa as address,
                 p.latitud as lat,
@@ -93,41 +255,18 @@ def get_properties():
                 p.fecha_actualizacion as updated_at,
                 p.agente_captador_telefono as owner_phone,
                 p.grupo_origen as source_group,
-                a.nombre as owner_name
+                a.nombre as owner_name,
+                p.imagen_principal as cover_image_url
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
-            WHERE {status_condition}
-            AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
+            {where_clause}
+            ORDER BY {order_clause}
+            LIMIT %s OFFSET %s
         """
-        params = []
-
-        # Agregar filtros
-        if city:
-            query += " AND LOWER(p.ciudad) = LOWER(%s)"
-            params.append(city)
-
-        if prop_type:
-            query += " AND LOWER(p.tipo_propiedad) = LOWER(%s)"
-            params.append(prop_type)
-
-        if min_price:
-            query += " AND p.precio >= %s"
-            params.append(int(min_price))
-
-        if max_price:
-            query += " AND p.precio <= %s"
-            params.append(int(max_price))
-
-        if bedrooms:
-            query += " AND p.habitaciones = %s"
-            params.append(int(bedrooms))
-
-        # Ordenar y paginar
-        query += " ORDER BY p.fecha_creacion DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        paginate_params = list(params) + [limit, offset]
 
         # Ejecutar query
-        db.cursor.execute(query, tuple(params))
+        db.cursor.execute(query, tuple(paginate_params))
         properties = db.cursor.fetchall()
 
         # Convertir a formato JSON compatible
@@ -150,6 +289,7 @@ def get_properties():
                 'stratum': prop.get('stratum'),
                 'age_years': prop.get('age_years'),
                 'admin_fee_cop': prop.get('admin_fee_cop'),
+                'predial_cop': prop.get('predial_cop'),
                 'description': prop.get('description'),
                 'address': prop.get('address'),
                 'lat': prop.get('lat'),
@@ -165,6 +305,7 @@ def get_properties():
                 'owner_phone': prop.get('owner_phone'),
                 'owner_name': prop.get('owner_name'),
                 'source_group': prop.get('source_group'),
+                'cover_image_url': prop.get('cover_image_url'),
             }
 
             # Convertir features de texto a JSON
@@ -195,10 +336,15 @@ def get_properties():
 
             properties_list.append(prop_dict)
 
+        page = (offset // limit) + 1 if limit > 0 else 1
+
         return jsonify({
             'success': True,
             'data': properties_list,
-            'count': len(properties_list)
+            'count': len(properties_list),
+            'total_count': total_count,
+            'page': page,
+            'per_page': limit
         }), 200
 
     except Exception as e:
@@ -248,6 +394,7 @@ def get_property_by_slug(slug: str):
                 p.estrato as stratum,
                 p.ano_construccion as age_years,
                 p.administracion as admin_fee_cop,
+                p.predial as predial_cop,
                 p.descripcion as description,
                 p.direccion_completa as address,
                 p.latitud as lat,
@@ -540,14 +687,13 @@ def get_filter_options():
             for row in db.cursor.fetchall()
         ]
 
-        # 2. ZONAS/BARRIOS (top 10)
+        # 2. ZONAS/BARRIOS (todas)
         db.cursor.execute("""
             SELECT zona, COUNT(*) as count
             FROM propiedades
             WHERE activa = true AND zona IS NOT NULL AND zona != ''
             GROUP BY zona
             ORDER BY count DESC
-            LIMIT 10
         """)
         filter_options['zones'] = [
             {'value': row['zona'], 'count': row['count']}
@@ -1651,35 +1797,32 @@ def improve_description():
         # Crear cliente de Anthropic
         client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
-        prompt = f"""Eres un experto en marketing inmobiliario. Tu tarea es tomar una descripción de propiedad que viene de un portal inmobiliario (usualmente desordenada, con información repetida y mal estructurada) y convertirla en una descripción profesional, clara y atractiva.
+        prompt = f"""Eres un copywriter inmobiliario experto. Transforma esta descripción cruda de portal en texto profesional y atractivo.
 
-INFORMACIÓN DE LA PROPIEDAD:
-{context}
+PROPIEDAD: {context}
 
-DESCRIPCIÓN ORIGINAL:
+TEXTO ORIGINAL (crudo, desordenado, con metadatos mezclados):
 {original_description}
 
-INSTRUCCIONES:
-1. Elimina información redundante o repetida
-2. NO incluyas información que ya está en otros campos (precio, área, habitaciones, baños, etc.) - eso ya se muestra por separado
-3. Organiza la información de forma lógica y fluida
-4. Usa un tono profesional pero cálido
-5. Destaca los puntos más atractivos de la propiedad
-6. Mantén la descripción concisa (máximo 3-4 párrafos)
-7. NO inventes información que no esté en la descripción original
-8. Si hay amenidades del conjunto/edificio, menciónalas de forma organizada
-9. Escribe en español
+REGLAS:
+1. ELIMINA toda la metadata técnica (País, Provincia, Estado, Tipo Inmueble, Negocio, Galería, Detalle del Inmueble, etc.) — eso ya se muestra en la ficha
+2. ELIMINA datos repetidos que ya están en campos separados: precio, área, habitaciones, baños, estrato, año, administración
+3. ELIMINA listas de características sueltas tipo "Admite mascotas Agua Balcón..." — eso ya se muestra como amenidades
+4. CONSERVA solo la narrativa descriptiva: qué hace especial esta propiedad, distribución, vistas, acabados, ubicación
+5. Escribe 2-3 párrafos fluidos, profesionales y en español colombiano
+6. NO inventes información que no esté en el original
+7. Si queda poca narrativa real después de limpiar, escribe una descripción atractiva breve basada en lo que sí hay
 
-Responde SOLO con un JSON válido en este formato exacto (sin markdown, sin ```):
-{{"improved_description": "La descripción mejorada aquí...", "highlights": ["punto destacado 1", "punto destacado 2", "punto destacado 3"]}}
+FORMATO DE RESPUESTA — JSON puro sin markdown, sin ```:
+{{"improved_description": "Párrafo 1.\\n\\nPárrafo 2.\\n\\nPárrafo 3.", "highlights": ["destacado 1", "destacado 2", "destacado 3", "destacado 4"]}}
 
-Los highlights deben ser 3-5 características únicas y atractivas de la propiedad (no información genérica como "tiene baños")."""
+Los highlights son 3-5 puntos únicos y atractivos (no genéricos como "tiene baños")."""
 
         import time
         start_time = time.time()
 
         message = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt}
@@ -1689,7 +1832,7 @@ Los highlights deben ser 3-5 características únicas y atractivas de la propied
         # Track AI usage
         from src.core.ai_usage_tracker import get_ai_tracker
         get_ai_tracker().track_anthropic_response(
-            model='claude-3-5-haiku-20241022',
+            model='claude-haiku-4-5-20251001',
             usage_type='description_improvement',
             function_name='properties.improve_property_description',
             response=message,
@@ -1698,6 +1841,12 @@ Los highlights deben ser 3-5 características únicas y atractivas de la propied
         )
 
         response_text = message.content[0].text.strip()
+
+        # Strip markdown code fences if present
+        if response_text.startswith('```'):
+            response_text = response_text.split('\n', 1)[-1] if '\n' in response_text else response_text[3:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3].strip()
 
         # Intentar parsear JSON
         try:
@@ -1746,3 +1895,167 @@ Los highlights deben ser 3-5 características únicas y atractivas de la propied
                 'highlights': []
             }
         }), 200
+
+
+@api_bp.route('/properties/<int:property_id>/opportunity-insight', methods=['POST'])
+def get_opportunity_insight(property_id):
+    """
+    POST /api/properties/<id>/opportunity-insight
+
+    Genera un análisis con AI de por qué una propiedad es una oportunidad.
+    Recibe datos de mercado del frontend para evitar queries extra.
+
+    Body JSON:
+    - price_cop: number
+    - area_m2: number
+    - price_m2: number
+    - zone: string
+    - zone_avg_m2: number
+    - city: string
+    - type: string
+    - bedrooms: number
+    - bathrooms: number
+    - stratum: number
+    - admin_fee: number | null
+    - days_listed: number
+    """
+    db = None
+    try:
+        import anthropic
+        import os
+        import json
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'Request body required'}), 400
+
+        price_cop = data.get('price_cop', 0)
+        area_m2 = data.get('area_m2', 0)
+        price_m2 = data.get('price_m2', 0)
+        zone = data.get('zone', '')
+        zone_avg_m2 = data.get('zone_avg_m2', 0)
+        city = data.get('city', '')
+        prop_type = data.get('type', '')
+        bedrooms = data.get('bedrooms', 0)
+        bathrooms = data.get('bathrooms', 0)
+        stratum = data.get('stratum', 0)
+        admin_fee = data.get('admin_fee')
+        days_listed = data.get('days_listed', 0)
+
+        # Calcular % por debajo del promedio
+        pct_below = round(((zone_avg_m2 - price_m2) / zone_avg_m2) * 100) if zone_avg_m2 > 0 else 0
+
+        # Check cache in DB
+        try:
+            db = get_db()
+            db.cursor.execute("""
+                SELECT oportunidad_insight_ai
+                FROM propiedades
+                WHERE id = %s AND oportunidad_insight_ai IS NOT NULL
+            """, (property_id,))
+            cached = db.cursor.fetchone()
+            if cached and cached.get('oportunidad_insight_ai'):
+                print(f"[API] opportunity-insight: usando cache para propiedad {property_id}")
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'insight': cached['oportunidad_insight_ai'],
+                        'cached': True
+                    }
+                }), 200
+        except Exception:
+            pass  # Column may not exist yet, continue to generate
+
+        # Format price for prompt
+        def fmt_cop(v):
+            if v >= 1_000_000_000:
+                return f"${v/1_000_000_000:.1f} mil millones"
+            elif v >= 1_000_000:
+                return f"${v/1_000_000:.1f}M"
+            elif v >= 1_000:
+                return f"${v/1_000:.0f}K"
+            return f"${v:,.0f}"
+
+        admin_text = f"Administración: {fmt_cop(admin_fee)}/mes" if admin_fee else "Sin admin reportada"
+
+        prompt = f"""Eres un analista inmobiliario experto en el mercado colombiano. Analiza esta propiedad y explica por qué es una oportunidad.
+
+PROPIEDAD: {prop_type} en {zone}, {city} (Estrato {stratum})
+Precio: {fmt_cop(price_cop)} | Área: {area_m2} m² | Precio/m²: {fmt_cop(price_m2)}
+{bedrooms} hab, {bathrooms} baños | {admin_text}
+Publicada hace {days_listed} días
+
+MERCADO: Promedio en {zone}: {fmt_cop(zone_avg_m2)}/m² → esta propiedad está {pct_below}% por debajo.
+
+REGLAS ESTRICTAS DE FORMATO:
+- Escribe EXACTAMENTE 3 párrafos cortos separados por línea en blanco
+- Párrafo 1: Por qué el precio es atractivo vs la zona (usa los números)
+- Párrafo 2: Qué hace especial esta propiedad (área, ubicación, estrato, admin)
+- Párrafo 3: Para quién es ideal (tipo de comprador) y urgencia si es reciente
+- PROHIBIDO usar títulos, headers (#), bullets, asteriscos o markdown
+- PROHIBIDO empezar con "# Análisis" o cualquier encabezado
+- Solo texto plano en español colombiano, tono profesional pero cercano
+- Máximo 4 frases por párrafo, sé concreto con datos"""
+
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+        import time
+        start_time = time.time()
+
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # Track AI usage
+        try:
+            from src.core.ai_usage_tracker import get_ai_tracker
+            get_ai_tracker().track_anthropic_response(
+                model='claude-haiku-4-5-20251001',
+                usage_type='opportunity_insight',
+                function_name='properties.get_opportunity_insight',
+                response=message,
+                start_time=start_time,
+                context={'property_id': property_id, 'zone': zone}
+            )
+        except Exception:
+            pass
+
+        insight = message.content[0].text.strip()
+
+        # Try to cache in DB
+        try:
+            if db:
+                db.cursor.execute("""
+                    UPDATE propiedades SET oportunidad_insight_ai = %s WHERE id = %s
+                """, (insight, property_id))
+                db.conn.commit()
+                print(f"[API] opportunity-insight: guardado para propiedad {property_id}")
+        except Exception as e:
+            print(f"[API] Error al guardar insight en cache: {e}")
+            # Column may not exist — that's fine, still return the result
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'insight': insight,
+                'cached': False
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"Error en get_opportunity_insight: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass

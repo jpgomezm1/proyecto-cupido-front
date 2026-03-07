@@ -30,7 +30,7 @@ client = anthropic.Anthropic(api_key=api_key)
 modelos = [
     "claude-sonnet-4-20250514",     # Claude Sonnet 4 (más reciente)
     "claude-3-5-sonnet-20241022",   # Claude 3.5 Sonnet v2
-    "claude-3-5-haiku-20241022",    # Claude 3.5 Haiku
+    "claude-haiku-4-5-20251001",    # Claude 3.5 Haiku
 ]
 
 print("🔍 Probando modelos disponibles...")
