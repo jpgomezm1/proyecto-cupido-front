@@ -38,7 +38,7 @@ def _base_template(content: str, accent_color: str = "#2AE38C") -> str:
     <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; background: #ffffff;">
         <div style="border-top: 4px solid {accent_color}; padding: 32px 28px;">
             <div style="margin-bottom: 24px;">
-                <img src="https://storage.googleapis.com/cluvi/FYNDER/logo_negro_fynder_final.png" alt="Fynder" style="height: 28px; width: auto;" />
+                <img src="https://storage.googleapis.com/cluvi/FYNDER/logo_negro_fynder_final.png" alt="" style="height: 28px; width: auto; display: block;" />
             </div>
             {content}
             <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
