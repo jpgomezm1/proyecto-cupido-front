@@ -83,7 +83,7 @@ CORS(app,
      ],
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 
 # Rate limiting para prevenir abuso (DoS, brute force)
 # Usa Redis en produccion, memoria en desarrollo
