@@ -417,7 +417,7 @@ def create_deal():
             return jsonify({'success': False, 'error': 'Nombre y teléfono del contacto son requeridos'}), 400
 
         # Verificar que la propiedad existe
-        db.cursor.execute("SELECT id, agente_captador_telefono, precio FROM propiedades WHERE id = %s", (propiedad_id,))
+        db.cursor.execute("SELECT id, agente_captador_telefono, precio, titulo FROM propiedades WHERE id = %s", (propiedad_id,))
         propiedad = db.cursor.fetchone()
 
         if not propiedad:
@@ -522,6 +522,22 @@ def create_deal():
         """, (deal_id, data.get('creado_por')))
 
         db.conn.commit()
+
+        # Notificacion por correo
+        try:
+            print(f"[EMAIL] Intentando enviar notificacion para deal {codigo}...")
+            from src.notifications.email import send_deal_created_email
+            send_deal_created_email(
+                deal_code=codigo,
+                contact_name=contacto_data.get('nombre', ''),
+                contact_phone=contacto_data.get('telefono', ''),
+                property_title=str(propiedad.get('titulo', '') or ''),
+                property_price=float(propiedad.get('precio', 0) or 0),
+            )
+        except Exception as email_err:
+            import traceback
+            print(f"[EMAIL ERROR] create_deal notification: {email_err}")
+            traceback.print_exc()
 
         return jsonify({
             'success': True,
@@ -640,6 +656,48 @@ def update_deal_state(deal_id: int):
         """, (deal_id, descripcion, estado_anterior, nuevo_estado, data.get('usuario')))
 
         db.conn.commit()
+
+        # Notificacion por correo
+        try:
+            from src.notifications.email import send_deal_stage_changed_email, send_deal_won_email, send_deal_lost_email
+            # Fetch deal info for email
+            db.cursor.execute("""
+                SELECT c.nombre as contacto_nombre, p.titulo as propiedad_titulo
+                FROM deals d
+                JOIN contactos c ON c.id = d.contacto_id
+                JOIN propiedades p ON p.id = d.propiedad_id
+                WHERE d.id = %s
+            """, (deal_id,))
+            deal_info = db.cursor.fetchone()
+            c_name = deal_info['contacto_nombre'] if deal_info else ''
+            p_title = deal_info['propiedad_titulo'] if deal_info else ''
+
+            if nuevo_estado == 'ganado':
+                send_deal_won_email(
+                    deal_code=result['codigo'],
+                    contact_name=c_name,
+                    property_title=p_title,
+                    sale_price=float(data.get('precio_venta', 0) or 0),
+                    commission=float(data.get('precio_venta', 0) or 0) * float(data.get('porcentaje_comision', 0) or 0) / 100,
+                    commission_pct=float(data.get('porcentaje_comision', 0) or 0),
+                )
+            elif nuevo_estado == 'perdido':
+                send_deal_lost_email(
+                    deal_code=result['codigo'],
+                    contact_name=c_name,
+                    property_title=p_title,
+                    reason=data.get('motivo_perdida', ''),
+                )
+            else:
+                send_deal_stage_changed_email(
+                    deal_code=result['codigo'],
+                    contact_name=c_name,
+                    previous_stage=estado_anterior,
+                    new_stage=nuevo_estado,
+                    property_title=p_title,
+                )
+        except Exception as email_err:
+            print(f"[EMAIL ERROR] update_deal_state notification: {email_err}")
 
         return jsonify({
             'success': True,
@@ -1009,6 +1067,21 @@ def create_deal_from_whatsapp(
         """, (deal_id,))
 
         db.conn.commit()
+
+        # Notificacion por correo
+        try:
+            from src.notifications.email import send_deal_created_email
+            db.cursor.execute("SELECT titulo, precio FROM propiedades WHERE id = %s", (propiedad_id,))
+            prop_row = db.cursor.fetchone()
+            send_deal_created_email(
+                deal_code=codigo,
+                contact_name=contacto_nombre,
+                contact_phone=contacto_telefono,
+                property_title=prop_row['titulo'] if prop_row else '',
+                property_price=prop_row['precio'] if prop_row else 0,
+            )
+        except Exception as email_err:
+            print(f"[EMAIL ERROR] whatsapp deal notification: {email_err}")
 
         print(f"✅ Deal {codigo} creado automáticamente")
         return {'id': deal_id, 'codigo': codigo, 'existente': False}

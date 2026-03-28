@@ -77,12 +77,24 @@ def init_pedidos_table():
                 agente_nombre VARCHAR(255),
                 texto_pedido TEXT NOT NULL,
                 mensaje_completo TEXT,
-                fecha_captura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                fecha_captura TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                texto_formateado TEXT,
+                procesado BOOLEAN DEFAULT false,
+                estado VARCHAR(15) DEFAULT 'pendiente' NOT NULL
             )
         """)
         db.cursor.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_grupo ON pedidos(grupo_id)")
         db.cursor.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha ON pedidos(fecha_captura DESC)")
         db.cursor.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_agente ON pedidos(agente_telefono)")
+        for col_sql in [
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS texto_formateado TEXT",
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS procesado BOOLEAN DEFAULT false",
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS estado VARCHAR(15) DEFAULT 'pendiente' NOT NULL",
+        ]:
+            try:
+                db.cursor.execute(col_sql)
+            except Exception:
+                pass
         db.conn.commit()
 
 

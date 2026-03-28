@@ -151,14 +151,17 @@ class WhatsAppBot:
             print(f"   👤 Agente: {agente_nombre or 'N/A'} ({agente_telefono or 'N/A'})")
             print(f"   📝 Texto: {texto_pedido[:100]}...")
 
+            # Formatear con AI para búsqueda en Fynder
+            texto_formateado = self._formatear_pedido_con_ai(texto_pedido)
+
             # Guardar en base de datos
             from src.db.database import DatabaseManager
             with DatabaseManager() as db:
                 db.cursor.execute("""
-                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo, texto_formateado)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body))
+                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body, texto_formateado))
                 pedido_id = db.cursor.fetchone()['id']
 
                 db.cursor.execute("""
@@ -170,6 +173,8 @@ class WhatsAppBot:
                 db.conn.commit()
 
             print(f"   ✅ Pedido guardado con ID: {pedido_id}")
+            if texto_formateado:
+                print(f"   🤖 Formateado: {texto_formateado[:100]}...")
             return {
                 'status': 'pedido_capturado',
                 'pedido_id': pedido_id,
@@ -181,6 +186,38 @@ class WhatsAppBot:
             import traceback
             traceback.print_exc()
             return {'status': 'error', 'error': str(e)}
+
+    def _formatear_pedido_con_ai(self, texto_pedido: str) -> str:
+        """Usa Claude para reformatear un pedido de WhatsApp en query lista para Fynder."""
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY', ''))
+
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Reformatea este pedido inmobiliario de WhatsApp en una búsqueda limpia y concisa para copiar y pegar en un chat de búsqueda de propiedades.
+
+Reglas:
+- Extrae SOLO los criterios de búsqueda: ubicación, tipo de propiedad, habitaciones, baños, parqueaderos, precio, área, amenidades
+- Elimina todo lo que NO sea criterio de búsqueda: comisiones, "pedido para intermediar", "me reservo puntas", saludos, emojis, nombres de personas
+- Usa formato natural en español colombiano: "Apto en El Poblado, 3 alcobas, 2 parqueaderos, presupuesto 800 a 1000 millones"
+- Si hay rango de precio usa "entre X y Y millones" o "hasta X millones"
+- Sé conciso: una sola línea o máximo dos
+- NO agregues información que no esté en el mensaje original
+- Responde SOLO con el texto formateado, nada más
+
+Pedido original:
+{texto_pedido}"""
+                }]
+            )
+
+            return response.content[0].text.strip()
+        except Exception as e:
+            print(f"[WARN] No se pudo formatear pedido con AI: {e}")
+            return None
 
     def send_message(self, to: str, body: str) -> Dict[str, Any]:
         """

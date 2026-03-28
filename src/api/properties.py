@@ -268,7 +268,8 @@ def get_properties():
                 p.agente_captador_telefono as owner_phone,
                 p.grupo_origen as source_group,
                 a.nombre as owner_name,
-                p.imagen_principal as cover_image_url
+                p.imagen_principal as cover_image_url,
+                p.url as source_url
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
             {where_clause}
@@ -318,6 +319,7 @@ def get_properties():
                 'owner_name': prop.get('owner_name'),
                 'source_group': prop.get('source_group'),
                 'cover_image_url': prop.get('cover_image_url'),
+                'source_url': prop.get('source_url'),
             }
 
             # Convertir features de texto a JSON

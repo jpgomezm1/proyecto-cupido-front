@@ -54,3 +54,4 @@ newrelic>=9.0.0
 bcrypt>=4.0.0
 flask-limiter>=3.0.0
 reportlab>=4.0.0
+resend==2.26.0
