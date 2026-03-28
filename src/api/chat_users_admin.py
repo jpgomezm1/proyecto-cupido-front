@@ -57,7 +57,7 @@ def list_users():
         offset = request.args.get('offset', 0, type=int)
 
         with DatabaseManager() as db:
-            # Query base con stats de conversaciones
+            # Query base con stats de conversaciones + shares
             query = """
                 SELECT
                     u.id,
@@ -77,7 +77,13 @@ def list_users():
                     (SELECT COALESCE(SUM(c.total_mensajes), 0) FROM conversaciones_busqueda c
                      WHERE c.user_id = u.id) as total_mensajes,
                     (SELECT MAX(l.fecha) FROM chat_usage_log l
-                     WHERE l.user_id = u.id) as ultima_actividad
+                     WHERE l.user_id = u.id) as ultima_actividad,
+                    (SELECT COUNT(*) FROM shared_property_selections sps
+                     WHERE sps.user_id = u.id) as total_shares,
+                    (SELECT COALESCE(SUM(sps.view_count), 0) FROM shared_property_selections sps
+                     WHERE sps.user_id = u.id) as total_share_views,
+                    (SELECT COALESCE(SUM(sps.whatsapp_clicks), 0) FROM shared_property_selections sps
+                     WHERE sps.user_id = u.id) as total_whatsapp_clicks
                 FROM chat_users u
             """
 
@@ -129,7 +135,10 @@ def list_users():
                         'sesiones_activas': u['sesiones_activas'],
                         'total_conversaciones': u['total_conversaciones'],
                         'total_mensajes': u['total_mensajes'],
-                        'ultima_actividad': u['ultima_actividad'].isoformat() if u['ultima_actividad'] else None
+                        'ultima_actividad': u['ultima_actividad'].isoformat() if u['ultima_actividad'] else None,
+                        'total_shares': u['total_shares'] or 0,
+                        'total_share_views': u['total_share_views'] or 0,
+                        'total_whatsapp_clicks': u['total_whatsapp_clicks'] or 0,
                     } for u in users],
                     'total': total,
                     'stats': {
@@ -652,7 +661,7 @@ def get_user_activity(user_id):
         }
     """
     try:
-        limit = request.args.get('limit', 50, type=int)
+        limit = request.args.get('limit', 200, type=int)
 
         with DatabaseManager() as db:
             # Verificar que existe
@@ -692,9 +701,19 @@ def get_user_activity(user_id):
                 FROM conversaciones_busqueda
                 WHERE user_id = %s AND activa = TRUE
                 ORDER BY fecha_actualizacion DESC
-                LIMIT 20
+                LIMIT 50
             """, (user_id,))
             conversations = db.cursor.fetchall()
+
+            # Obtener shares del usuario
+            db.cursor.execute("""
+                SELECT share_id, property_ids, view_count, unique_visitors,
+                       total_clicks, whatsapp_clicks, share_type, created_at
+                FROM shared_property_selections
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            """, (user_id,))
+            shares = db.cursor.fetchall()
 
             return jsonify({
                 'success': True,
@@ -718,7 +737,16 @@ def get_user_activity(user_id):
                         'criterios': c['criterios_acumulados'],
                         'fecha_creacion': c['fecha_creacion'].isoformat() if c['fecha_creacion'] else None,
                         'fecha_actualizacion': c['fecha_actualizacion'].isoformat() if c['fecha_actualizacion'] else None
-                    } for c in conversations]
+                    } for c in conversations],
+                    'shares': [{
+                        'share_id': s['share_id'],
+                        'property_count': len(s['property_ids']) if s['property_ids'] else 0,
+                        'view_count': s['view_count'] or 0,
+                        'total_clicks': s['total_clicks'] or 0,
+                        'whatsapp_clicks': s['whatsapp_clicks'] or 0,
+                        'share_type': s['share_type'] or 'agente',
+                        'created_at': s['created_at'].isoformat() if s['created_at'] else None,
+                    } for s in shares]
                 }
             })
 

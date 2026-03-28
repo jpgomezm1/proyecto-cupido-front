@@ -16,7 +16,8 @@ agents_bp = Blueprint('agents', __name__, url_prefix='/api/agents')
 def get_db():
     """Helper para obtener conexión a la base de datos"""
     db = DatabaseManager()
-    db.connect()
+    if not db.connect():
+        raise ConnectionError("No se pudo conectar a la base de datos")
     return db
 
 
@@ -40,7 +41,6 @@ def get_agents():
         offset = int(request.args.get('offset', 0))
         active = request.args.get('active', 'true').lower() == 'true'
 
-        # Query optimizada: usar stats pre-computadas + subquery ligero para propiedades activas
         query = """
             SELECT
                 a.id,
@@ -54,7 +54,21 @@ def get_agents():
                 a.total_matches_logrados,
                 (SELECT COUNT(*) FROM propiedades p
                  WHERE p.agente_captador_telefono = a.telefono AND p.activa = TRUE
-                ) as propiedades_activas
+                ) as propiedades_activas,
+                (SELECT COUNT(*) FROM propiedades p
+                 WHERE p.agente_captador_telefono = a.telefono
+                ) as propiedades_total,
+                (SELECT MAX(p.fecha_creacion) FROM propiedades p
+                 WHERE p.agente_captador_telefono = a.telefono
+                ) as ultima_captura,
+                (SELECT COUNT(*) FROM propiedades p
+                 WHERE p.agente_captador_telefono = a.telefono
+                 AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '7 days'
+                ) as capturas_semana,
+                (SELECT COUNT(*) FROM propiedades p
+                 WHERE p.agente_captador_telefono = a.telefono
+                 AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days'
+                ) as capturas_mes
             FROM agentes a
             WHERE a.activo = %s
             ORDER BY a.fecha_registro DESC
@@ -64,7 +78,6 @@ def get_agents():
         db.cursor.execute(query, (active, limit, offset))
         agents = db.cursor.fetchall()
 
-        # Obtener total de agentes
         db.cursor.execute("SELECT COUNT(*) as count FROM agentes WHERE activo = %s", (active,))
         total = db.cursor.fetchone()['count']
 
@@ -79,10 +92,14 @@ def get_agents():
                 'fecha_actualizacion': str(agent['fecha_actualizacion']) if agent['fecha_actualizacion'] else None,
                 'stats': {
                     'propiedades_captadas': agent['propiedades_activas'] or 0,
+                    'propiedades_total': agent['propiedades_total'] or 0,
                     'solicitudes_realizadas': agent['total_solicitudes_realizadas'] or 0,
                     'interacciones': agent['total_solicitudes_realizadas'] or 0,
                     'matches_logrados': agent['total_matches_logrados'] or 0,
-                }
+                    'capturas_semana': agent['capturas_semana'] or 0,
+                    'capturas_mes': agent['capturas_mes'] or 0,
+                },
+                'ultima_captura': str(agent['ultima_captura']) if agent['ultima_captura'] else None,
             })
 
         return jsonify({

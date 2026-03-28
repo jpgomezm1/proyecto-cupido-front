@@ -32,7 +32,7 @@ def get_current_user():
     try:
         with DatabaseManager() as db:
             query = """
-                SELECT u.id, u.email, u.nombre, u.telefono
+                SELECT u.id, u.email, u.nombre, u.telefono, u.correo_personal
                 FROM chat_users u
                 JOIN chat_user_sessions s ON s.user_id = u.id
                 WHERE s.token = %s
@@ -113,7 +113,7 @@ def login():
         with DatabaseManager() as db:
             # Verificar credenciales
             query = """
-                SELECT id, nombre, email, telefono
+                SELECT id, nombre, email, telefono, correo_personal
                 FROM chat_users
                 WHERE email = %s
                   AND password_hash = crypt(%s, password_hash)
@@ -168,7 +168,8 @@ def login():
                         'id': user['id'],
                         'email': user['email'],
                         'nombre': user['nombre'],
-                        'telefono': user.get('telefono')
+                        'telefono': user.get('telefono'),
+                        'correo_personal': user.get('correo_personal')
                     },
                     'expires_at': expiration.isoformat()
                 }
@@ -219,7 +220,8 @@ def verify_token():
                 'id': user['id'],
                 'email': user['email'],
                 'nombre': user['nombre'],
-                'telefono': user.get('telefono')
+                'telefono': user.get('telefono'),
+                'correo_personal': user.get('correo_personal')
             }
         }
     })
@@ -273,7 +275,7 @@ def get_me():
         with DatabaseManager() as db:
             # Obtener stats del usuario
             db.cursor.execute(
-                """SELECT total_sesiones, total_busquedas, ultimo_login
+                """SELECT total_sesiones, total_busquedas, ultimo_login, correo_personal
                    FROM chat_users WHERE id = %s""",
                 (user['id'],)
             )
@@ -285,6 +287,8 @@ def get_me():
                     'id': user['id'],
                     'email': user['email'],
                     'nombre': user['nombre'],
+                    'telefono': user.get('telefono'),
+                    'correo_personal': stats.get('correo_personal') if stats else None,
                     'total_sesiones': stats['total_sesiones'] if stats else 0,
                     'total_busquedas': stats['total_busquedas'] if stats else 0,
                     'ultimo_login': stats['ultimo_login'].isoformat() if stats and stats['ultimo_login'] else None
@@ -297,6 +301,82 @@ def get_me():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@chat_auth_bp.route('/profile', methods=['PUT'])
+@require_chat_auth
+def update_profile():
+    """
+    Actualiza el perfil del usuario autenticado.
+    Campos editables: nombre, telefono, correo_personal.
+    NO se puede editar: email (login), password, activo.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No se enviaron datos'}), 400
+
+        user = request.chat_user
+        user_id = user['id']
+
+        updates = []
+        params = []
+
+        if 'nombre' in data:
+            nombre = data['nombre'].strip()
+            if not nombre:
+                return jsonify({'success': False, 'error': 'El nombre no puede estar vacio'}), 400
+            updates.append("nombre = %s")
+            params.append(nombre)
+
+        if 'telefono' in data:
+            telefono = data['telefono'].strip() if data['telefono'] else None
+            updates.append("telefono = %s")
+            params.append(telefono)
+
+        if 'correo_personal' in data:
+            correo = data['correo_personal'].strip() if data['correo_personal'] else None
+            if correo and '@' not in correo:
+                return jsonify({'success': False, 'error': 'El correo personal no es valido'}), 400
+            updates.append("correo_personal = %s")
+            params.append(correo)
+
+        if not updates:
+            return jsonify({'success': False, 'error': 'No se enviaron campos para actualizar'}), 400
+
+        params.append(user_id)
+
+        with DatabaseManager() as db:
+            query = f"""
+                UPDATE chat_users
+                SET {', '.join(updates)}
+                WHERE id = %s
+                RETURNING id, email, nombre, telefono, correo_personal
+            """
+            db.cursor.execute(query, params)
+            updated = db.cursor.fetchone()
+            db.conn.commit()
+
+            if not updated:
+                return jsonify({'success': False, 'error': 'Usuario no encontrado'}), 404
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'user': {
+                        'id': updated['id'],
+                        'email': updated['email'],
+                        'nombre': updated['nombre'],
+                        'telefono': updated.get('telefono'),
+                        'correo_personal': updated.get('correo_personal')
+                    }
+                }
+            })
+
+    except Exception as e:
+        print(f"Error actualizando perfil: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Error en el servidor'}), 500
 
 
 @chat_auth_bp.route('/agent/<int:user_id>', methods=['GET'])

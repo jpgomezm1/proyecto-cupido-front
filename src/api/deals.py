@@ -44,7 +44,8 @@ STATE_DATE_FIELDS = {
 def get_db():
     """Helper para obtener conexión a la base de datos"""
     db = DatabaseManager()
-    db.connect()
+    if not db.connect():
+        raise Exception("No se pudo conectar a la base de datos")
     return db
 
 
@@ -96,7 +97,11 @@ def get_deals():
                 av.nombre as agente_vendedor_nombre,
                 -- Días
                 EXTRACT(DAY FROM NOW() - d.fecha_actualizacion)::INTEGER as dias_en_estado,
-                EXTRACT(DAY FROM NOW() - d.fecha_creacion)::INTEGER as dias_totales
+                EXTRACT(DAY FROM NOW() - d.fecha_creacion)::INTEGER as dias_totales,
+                -- Propiedades activas
+                (SELECT COUNT(*) FROM deal_propiedades dp2
+                 WHERE dp2.deal_id = d.id AND dp2.estado != 'descartado'
+                ) as propiedades_activas
             FROM deals d
             JOIN propiedades p ON p.id = d.propiedad_id
             JOIN contactos c ON c.id = d.contacto_id
@@ -332,14 +337,33 @@ def get_deal(deal_id: int):
 
         documentos = [dict(row) for row in db.cursor.fetchall()]
 
+        # Propiedades asociadas (multi-propiedad) con captador
+        db.cursor.execute("""
+            SELECT
+                dp.id, dp.propiedad_id, dp.estado as estado_en_deal,
+                dp.notas as notas_propiedad, dp.fecha_agregado,
+                p.titulo, p.precio, p.imagen_principal as imagen,
+                p.codigo_propiedad as slug, p.ciudad, p.zona,
+                p.tipo_propiedad, p.habitaciones, p.area_construida,
+                p.agente_captador_telefono as captador_telefono,
+                ag.nombre as captador_nombre
+            FROM deal_propiedades dp
+            JOIN propiedades p ON p.id = dp.propiedad_id
+            LEFT JOIN agentes ag ON ag.telefono = p.agente_captador_telefono
+            WHERE dp.deal_id = %s
+            ORDER BY dp.fecha_agregado ASC
+        """, (deal_id,))
+        propiedades_asociadas = [dict(row) for row in db.cursor.fetchall()]
+
         # Convertir fechas
-        for item in [deal] + actividades + documentos:
+        for item in [deal] + actividades + documentos + propiedades_asociadas:
             for key, value in item.items():
                 if hasattr(value, 'isoformat'):
                     item[key] = value.isoformat()
 
         deal['actividades'] = actividades
         deal['documentos'] = documentos
+        deal['propiedades'] = propiedades_asociadas
 
         return jsonify({
             'success': True,
@@ -393,7 +417,7 @@ def create_deal():
             return jsonify({'success': False, 'error': 'Nombre y teléfono del contacto son requeridos'}), 400
 
         # Verificar que la propiedad existe
-        db.cursor.execute("SELECT id, agente_captador_telefono FROM propiedades WHERE id = %s", (propiedad_id,))
+        db.cursor.execute("SELECT id, agente_captador_telefono, precio FROM propiedades WHERE id = %s", (propiedad_id,))
         propiedad = db.cursor.fetchone()
 
         if not propiedad:
@@ -432,14 +456,27 @@ def create_deal():
                 'error': f'Ya existe un deal activo para esta propiedad y contacto: {existing["codigo"]}'
             }), 409
 
+        # Tipo de negocio y comision
+        tipo_negocio = data.get('tipo_negocio', 'tercero')  # tercero, cliente, propiedad
+        if tipo_negocio in ('cliente', 'propiedad'):
+            porcentaje = 1.50
+            tipo_com = 'captacion'
+        else:
+            porcentaje = 0.50
+            tipo_com = 'matching'
+
+        precio_prop = propiedad.get('precio') or 0
+        valor_com = float(precio_prop) * (porcentaje / 100) if precio_prop else 0
+
         # Crear deal
         db.cursor.execute("""
             INSERT INTO deals (
                 propiedad_id, contacto_id,
                 agente_vendedor_telefono,
                 origen, notas, creado_por,
+                tipo_comision, porcentaje_comision, valor_comision,
                 codigo
-            ) VALUES (%s, %s, %s, %s, %s, %s, '')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '')
             RETURNING id, codigo
         """, (
             propiedad_id,
@@ -447,7 +484,10 @@ def create_deal():
             propiedad['agente_captador_telefono'],
             data.get('origen', 'manual'),
             data.get('notas'),
-            data.get('creado_por')
+            data.get('creado_por'),
+            tipo_com,
+            porcentaje,
+            valor_com,
         ))
 
         result = db.cursor.fetchone()
@@ -462,10 +502,23 @@ def create_deal():
 
         codigo = db.cursor.fetchone()['codigo']
 
+        # Poner estado inicial en contactado
+        db.cursor.execute("""
+            UPDATE deals SET estado = 'contactado', fecha_contactado = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (deal_id,))
+
+        # Insertar propiedad principal en deal_propiedades
+        db.cursor.execute("""
+            INSERT INTO deal_propiedades (deal_id, propiedad_id, estado)
+            VALUES (%s, %s, 'interesado')
+            ON CONFLICT (deal_id, propiedad_id) DO NOTHING
+        """, (deal_id, propiedad_id))
+
         # Registrar actividad
         db.cursor.execute("""
             INSERT INTO deal_actividades (deal_id, tipo, descripcion, estado_nuevo, usuario)
-            VALUES (%s, 'estado_cambio', 'Deal creado', 'lead', %s)
+            VALUES (%s, 'estado_cambio', 'Deal creado', 'contactado', %s)
         """, (deal_id, data.get('creado_por')))
 
         db.conn.commit()
@@ -708,6 +761,158 @@ def get_contactos():
     finally:
         if db:
             db.disconnect()
+
+
+# ============================================================================
+# ELIMINAR DEAL
+# ============================================================================
+
+@deals_bp.route('/<int:deal_id>', methods=['DELETE'])
+def delete_deal(deal_id: int):
+    """Elimina un deal permanentemente"""
+    db = None
+    try:
+        db = get_db()
+
+        db.cursor.execute("SELECT id, codigo FROM deals WHERE id = %s", (deal_id,))
+        deal = db.cursor.fetchone()
+        if not deal:
+            return jsonify({'success': False, 'error': 'Deal no encontrado'}), 404
+
+        # CASCADE borra deal_actividades, deal_propiedades, deal_documentos
+        db.cursor.execute("DELETE FROM deals WHERE id = %s", (deal_id,))
+        db.conn.commit()
+
+        return jsonify({'success': True, 'data': {'codigo': deal['codigo']}}), 200
+
+    except Exception as e:
+        if db: db.conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db: db.disconnect()
+
+
+# ============================================================================
+# MULTI-PROPIEDAD: Gestión de propiedades por deal
+# ============================================================================
+
+@deals_bp.route('/<int:deal_id>/propiedades', methods=['POST'])
+def add_deal_property(deal_id: int):
+    """Agrega una propiedad a un deal"""
+    db = None
+    try:
+        db = get_db()
+        data = request.json
+        propiedad_id = data.get('propiedad_id')
+
+        if not propiedad_id:
+            return jsonify({'success': False, 'error': 'propiedad_id requerido'}), 400
+
+        db.cursor.execute("""
+            INSERT INTO deal_propiedades (deal_id, propiedad_id, estado)
+            VALUES (%s, %s, 'interesado')
+            ON CONFLICT (deal_id, propiedad_id) DO NOTHING
+            RETURNING id
+        """, (deal_id, propiedad_id))
+
+        result = db.cursor.fetchone()
+        if not result:
+            return jsonify({'success': False, 'error': 'La propiedad ya está asociada a este deal'}), 409
+
+        # Registrar actividad
+        db.cursor.execute("""
+            SELECT titulo FROM propiedades WHERE id = %s
+        """, (propiedad_id,))
+        prop = db.cursor.fetchone()
+        prop_name = prop['titulo'] if prop else f'ID {propiedad_id}'
+
+        db.cursor.execute("""
+            INSERT INTO deal_actividades (deal_id, tipo, descripcion)
+            VALUES (%s, 'nota', %s)
+        """, (deal_id, f'Propiedad agregada: {prop_name}'))
+
+        db.conn.commit()
+
+        return jsonify({'success': True, 'data': {'id': result['id']}}), 201
+
+    except Exception as e:
+        if db: db.conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db: db.disconnect()
+
+
+@deals_bp.route('/<int:deal_id>/propiedades/<int:propiedad_id>', methods=['PUT'])
+def update_deal_property(deal_id: int, propiedad_id: int):
+    """Actualiza el estado de una propiedad dentro de un deal"""
+    db = None
+    try:
+        db = get_db()
+        data = request.json
+        estado = data.get('estado', 'interesado')
+        notas = data.get('notas')
+
+        db.cursor.execute("""
+            UPDATE deal_propiedades
+            SET estado = %s, notas = %s
+            WHERE deal_id = %s AND propiedad_id = %s
+            RETURNING id
+        """, (estado, notas, deal_id, propiedad_id))
+
+        result = db.cursor.fetchone()
+        if not result:
+            return jsonify({'success': False, 'error': 'Propiedad no encontrada en este deal'}), 404
+
+        # Registrar actividad
+        db.cursor.execute("""
+            SELECT titulo FROM propiedades WHERE id = %s
+        """, (propiedad_id,))
+        prop = db.cursor.fetchone()
+        prop_name = prop['titulo'] if prop else f'ID {propiedad_id}'
+        estado_labels = {'interesado': 'Interesado', 'descartado': 'Descartada', 'seleccionado': 'Seleccionada'}
+
+        db.cursor.execute("""
+            INSERT INTO deal_actividades (deal_id, tipo, descripcion)
+            VALUES (%s, 'nota', %s)
+        """, (deal_id, f'Propiedad {estado_labels.get(estado, estado)}: {prop_name}'))
+
+        db.conn.commit()
+
+        return jsonify({'success': True}), 200
+
+    except Exception as e:
+        if db: db.conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db: db.disconnect()
+
+
+@deals_bp.route('/<int:deal_id>/propiedades/<int:propiedad_id>', methods=['DELETE'])
+def remove_deal_property(deal_id: int, propiedad_id: int):
+    """Quita una propiedad de un deal"""
+    db = None
+    try:
+        db = get_db()
+
+        db.cursor.execute("""
+            DELETE FROM deal_propiedades
+            WHERE deal_id = %s AND propiedad_id = %s
+            RETURNING id
+        """, (deal_id, propiedad_id))
+
+        result = db.cursor.fetchone()
+        if not result:
+            return jsonify({'success': False, 'error': 'Propiedad no encontrada en este deal'}), 404
+
+        db.conn.commit()
+
+        return jsonify({'success': True}), 200
+
+    except Exception as e:
+        if db: db.conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db: db.disconnect()
 
 
 # Función helper para crear deal desde WhatsApp (usada por cupido_manager)

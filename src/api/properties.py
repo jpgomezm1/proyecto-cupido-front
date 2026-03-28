@@ -18,7 +18,8 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 def get_db():
     """Helper para obtener conexión a la base de datos"""
     db = DatabaseManager()
-    db.connect()
+    if not db.connect():
+        raise ConnectionError("No se pudo conectar a la base de datos")
     return db
 
 
@@ -192,15 +193,26 @@ def get_properties():
             params.append(float(max_price_m2))
 
         if search:
-            search_term = f"%{search.strip()}%"
-            where_clause += """ AND (
-                LOWER(p.titulo) LIKE LOWER(%s) OR
-                LOWER(p.zona) LIKE LOWER(%s) OR
-                LOWER(p.ciudad) LIKE LOWER(%s) OR
-                LOWER(p.codigo_propiedad) LIKE LOWER(%s) OR
-                CAST(p.id AS TEXT) = %s
-            )"""
-            params.extend([search_term, search_term, search_term, search_term, search.strip()])
+            search_clean = search.strip()
+            # Detectar búsqueda múltiple por códigos/IDs (ej: "9654920, 9481415")
+            potential_codes = [s.strip() for s in search_clean.replace(',', ' ').split() if s.strip().isdigit()]
+
+            if len(potential_codes) > 1:
+                # Búsqueda múltiple: buscar por ID numérico O por codigo_propiedad
+                placeholders = ','.join(['%s'] * len(potential_codes))
+                where_clause += f" AND (p.id IN ({placeholders}) OR p.codigo_propiedad IN ({placeholders}))"
+                params.extend([int(c) for c in potential_codes])
+                params.extend(potential_codes)
+            else:
+                search_term = f"%{search_clean}%"
+                where_clause += """ AND (
+                    LOWER(p.titulo) LIKE LOWER(%s) OR
+                    LOWER(p.zona) LIKE LOWER(%s) OR
+                    LOWER(p.ciudad) LIKE LOWER(%s) OR
+                    LOWER(p.codigo_propiedad) LIKE LOWER(%s) OR
+                    CAST(p.id AS TEXT) = %s
+                )"""
+                params.extend([search_term, search_term, search_term, search_term, search_clean])
 
         # COUNT query (same filters, no limit/offset)
         count_query = f"""

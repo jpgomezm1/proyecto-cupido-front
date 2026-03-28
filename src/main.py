@@ -40,6 +40,7 @@ from src.api.ai_costs import ai_costs_bp
 from src.api.system_health import system_health_bp
 from src.api.activity import activity_bp
 from src.api.whatsapp_groups import whatsapp_groups_bp
+from src.api.pedidos import pedidos_bp
 from src.api.dashboard import dashboard_bp
 from src.api.dependencies import dependencies_bp
 from src.api.alerts import alerts_bp
@@ -153,6 +154,7 @@ app.register_blueprint(ai_costs_bp)
 app.register_blueprint(system_health_bp)
 app.register_blueprint(activity_bp)
 app.register_blueprint(whatsapp_groups_bp)
+app.register_blueprint(pedidos_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(dependencies_bp)
 app.register_blueprint(alerts_bp)

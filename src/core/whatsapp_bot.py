@@ -56,8 +56,8 @@ class WhatsAppBot:
         # En producción esto debería ser Redis o una BD
         self.user_sessions = {}
 
-        # Cache de grupos activos (se actualiza cada X minutos)
-        self._grupos_activos_cache = set()
+        # Cache de grupos activos: {grupo_id: tipo} (se actualiza cada X minutos)
+        self._grupos_activos_cache = {}
         self._cache_timestamp = None
         self._cache_ttl = 60  # segundos
 
@@ -79,10 +79,10 @@ class WhatsAppBot:
         try:
             with DatabaseManager() as db:
                 db.cursor.execute(
-                    "SELECT grupo_id FROM grupos_whatsapp WHERE activo = true"
+                    "SELECT grupo_id, COALESCE(tipo, 'oferta') as tipo FROM grupos_whatsapp WHERE activo = true"
                 )
                 rows = db.cursor.fetchall()
-                self._grupos_activos_cache = {row['grupo_id'] for row in rows}
+                self._grupos_activos_cache = {row['grupo_id']: row['tipo'] for row in rows}
                 self._cache_timestamp = datetime.now()
                 print(f"[OK] Grupos activos cargados: {len(self._grupos_activos_cache)}")
         except Exception as e:
@@ -90,11 +90,11 @@ class WhatsAppBot:
             # Fallback: usar variable de entorno si existe
             env_grupo = os.getenv('GRUPO_CUPIDO_ID', '')
             if env_grupo:
-                self._grupos_activos_cache = {env_grupo}
+                self._grupos_activos_cache = {env_grupo: 'oferta'}
                 print(f"[OK] Usando grupo de .env como fallback: {env_grupo}")
 
-    def _get_grupos_activos(self) -> set:
-        """Obtiene los grupos activos, actualizando cache si es necesario."""
+    def _get_grupos_activos(self) -> dict:
+        """Obtiene los grupos activos {grupo_id: tipo}, actualizando cache si es necesario."""
         now = datetime.now()
         if (self._cache_timestamp is None or
             (now - self._cache_timestamp).total_seconds() > self._cache_ttl):
@@ -120,6 +120,67 @@ class WhatsAppBot:
                 db.conn.commit()
         except Exception as e:
             print(f"[WARN] No se pudo actualizar stats del grupo: {e}")
+
+    def _get_tipo_grupo(self, grupo_id: str) -> str:
+        """Retorna 'oferta' o 'demanda' para un grupo activo."""
+        grupos = self._get_grupos_activos()
+        return grupos.get(grupo_id, 'oferta')
+
+    def _handle_demanda_message(self, message_data: dict, message_body: str,
+                                 message_type: str, grupo_id: str) -> dict:
+        """Procesa un mensaje de un grupo de demanda — captura pedidos."""
+        try:
+            if message_type != 'chat':
+                return {'status': 'ignored', 'reason': 'demanda_unsupported_type'}
+
+            if not message_body or len(message_body.strip()) < 10:
+                return {'status': 'ignored', 'reason': 'demanda_message_too_short'}
+
+            # Extraer info del agente
+            author = message_data.get('author', '')
+            agente_telefono = None
+            if author and '@c.us' in author:
+                agente_telefono = author.replace('@c.us', '')
+                if not agente_telefono.startswith('+'):
+                    agente_telefono = '+' + agente_telefono
+
+            agente_nombre = message_data.get('pushname', None)
+            texto_pedido = message_body.strip()
+
+            print(f"\n📋 Pedido capturado de grupo demanda")
+            print(f"   👤 Agente: {agente_nombre or 'N/A'} ({agente_telefono or 'N/A'})")
+            print(f"   📝 Texto: {texto_pedido[:100]}...")
+
+            # Guardar en base de datos
+            from src.db.database import DatabaseManager
+            with DatabaseManager() as db:
+                db.cursor.execute("""
+                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body))
+                pedido_id = db.cursor.fetchone()['id']
+
+                db.cursor.execute("""
+                    UPDATE grupos_whatsapp
+                    SET total_pedidos = total_pedidos + 1,
+                        ultimo_pedido = CURRENT_TIMESTAMP
+                    WHERE grupo_id = %s
+                """, (grupo_id,))
+                db.conn.commit()
+
+            print(f"   ✅ Pedido guardado con ID: {pedido_id}")
+            return {
+                'status': 'pedido_capturado',
+                'pedido_id': pedido_id,
+                'grupo_id': grupo_id
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Error procesando pedido de demanda: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'status': 'error', 'error': str(e)}
 
     def send_message(self, to: str, body: str) -> Dict[str, Any]:
         """
@@ -627,7 +688,16 @@ class WhatsAppBot:
             print(f"   ✅ Mensaje de grupo activo: {grupo_id[:30]}...")
 
             # =====================================================================
-            # PROCESAMIENTO: Solo mensajes del grupo Cupido llegan aquí
+            # BIFURCACIÓN POR TIPO DE GRUPO: oferta vs demanda
+            # =====================================================================
+            tipo_grupo = self._get_tipo_grupo(grupo_id)
+
+            if tipo_grupo == 'demanda':
+                # Grupo de demanda — capturar como pedido (no requiere URL)
+                return self._handle_demanda_message(message_data, message_body, message_type, grupo_id)
+
+            # =====================================================================
+            # PROCESAMIENTO OFERTA: Solo grupos de oferta llegan aquí (flujo original)
             # =====================================================================
 
             # Ignorar mensajes que no son de texto

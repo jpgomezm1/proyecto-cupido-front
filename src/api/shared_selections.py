@@ -19,7 +19,8 @@ shared_selections_bp = Blueprint('shared_selections', __name__, url_prefix='/api
 def get_db():
     """Helper para obtener conexión a la base de datos"""
     db = DatabaseManager()
-    db.connect()
+    if not db.connect():
+        raise ConnectionError("No se pudo conectar a la base de datos")
     return db
 
 
@@ -206,7 +207,9 @@ def get_selection(share_id: str):
                 p.banos,
                 p.parqueaderos,
                 p.imagen_principal,
-                p.imagen_principal as cover_image_url
+                p.imagen_principal as cover_image_url,
+                p.estrato,
+                p.administracion as admin_fee
             FROM propiedades p
             WHERE p.id = ANY(%s)
             ORDER BY array_position(%s, p.id)

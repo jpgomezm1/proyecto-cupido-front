@@ -18,7 +18,8 @@ share_analytics_bp = Blueprint('share_analytics', __name__, url_prefix='/api/sha
 def get_db():
     """Helper para obtener conexión a la base de datos"""
     db = DatabaseManager()
-    db.connect()
+    if not db.connect():
+        raise ConnectionError("No se pudo conectar a la base de datos")
     return db
 
 
