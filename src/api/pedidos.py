@@ -61,16 +61,23 @@ def list_pedidos():
             db.cursor.execute(f"SELECT COUNT(*) as total FROM pedidos p {where_clause}", params)
             total = db.cursor.fetchone()['total']
 
+            # Score = presupuesto normalizado - penalizacion por dias de antigüedad
+            # Un pedido de $2B de hace 10 dias: 2.0 - (10*0.15) = 0.5
+            # Un pedido de $800M de hoy: 0.8 - (0*0.15) = 0.8 → gana el reciente
+            # Un pedido sin presupuesto se ordena solo por fecha
             db.cursor.execute(f"""
                 SELECT
                     p.id, p.grupo_id, p.agente_telefono, p.agente_nombre,
                     p.texto_pedido, p.texto_formateado, p.estado,
-                    p.fecha_captura,
+                    p.fecha_captura, p.presupuesto_estimado,
                     g.nombre as grupo_nombre
                 FROM pedidos p
                 LEFT JOIN grupos_whatsapp g ON p.grupo_id = g.grupo_id
                 {where_clause}
-                ORDER BY p.fecha_captura DESC
+                ORDER BY
+                    (COALESCE(p.presupuesto_estimado, 0) / 1000000000.0)
+                    - (EXTRACT(EPOCH FROM (NOW() - p.fecha_captura)) / 86400.0 * 0.15)
+                    DESC
                 LIMIT %s OFFSET %s
             """, params + [per_page, offset])
 
@@ -83,6 +90,7 @@ def list_pedidos():
                 'texto_pedido': row['texto_pedido'],
                 'texto_formateado': row['texto_formateado'],
                 'estado': row['estado'] or 'pendiente',
+                'presupuesto_estimado': row['presupuesto_estimado'] if 'presupuesto_estimado' in row else None,
                 'fecha_captura': row['fecha_captura'].isoformat() if row['fecha_captura'] else None
             } for row in db.cursor.fetchall()]
 

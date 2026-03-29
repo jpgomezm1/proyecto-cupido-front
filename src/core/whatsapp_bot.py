@@ -147,21 +147,25 @@ class WhatsAppBot:
             agente_nombre = message_data.get('pushname', None)
             texto_pedido = message_body.strip()
 
-            print(f"\n📋 Pedido capturado de grupo demanda")
+            print(f"\n📋 Mensaje de grupo demanda")
             print(f"   👤 Agente: {agente_nombre or 'N/A'} ({agente_telefono or 'N/A'})")
             print(f"   📝 Texto: {texto_pedido[:100]}...")
 
-            # Formatear con AI para búsqueda en Fynder
-            texto_formateado = self._formatear_pedido_con_ai(texto_pedido)
+            # Clasificar y formatear con AI
+            es_pedido, texto_formateado, presupuesto = self._clasificar_y_formatear_pedido(texto_pedido)
+
+            if not es_pedido:
+                print(f"   ⏭️ No es un pedido inmobiliario, ignorado")
+                return {'status': 'ignored', 'reason': 'not_a_property_request'}
 
             # Guardar en base de datos
             from src.db.database import DatabaseManager
             with DatabaseManager() as db:
                 db.cursor.execute("""
-                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo, texto_formateado)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo, texto_formateado, presupuesto_estimado)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body, texto_formateado))
+                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body, texto_formateado, presupuesto))
                 pedido_id = db.cursor.fetchone()['id']
 
                 db.cursor.execute("""
@@ -187,37 +191,72 @@ class WhatsAppBot:
             traceback.print_exc()
             return {'status': 'error', 'error': str(e)}
 
-    def _formatear_pedido_con_ai(self, texto_pedido: str) -> str:
-        """Usa Claude para reformatear un pedido de WhatsApp en query lista para Fynder."""
+    def _clasificar_y_formatear_pedido(self, texto_pedido: str) -> tuple:
+        """
+        Usa Claude para clasificar si un mensaje es un pedido inmobiliario real,
+        formatearlo como query de busqueda, y extraer el presupuesto.
+
+        Returns:
+            tuple: (es_pedido: bool, texto_formateado: str or None, presupuesto: int or None)
+        """
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY', ''))
 
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=200,
+                max_tokens=300,
                 messages=[{
                     "role": "user",
-                    "content": f"""Reformatea este pedido inmobiliario de WhatsApp en una búsqueda limpia y concisa para copiar y pegar en un chat de búsqueda de propiedades.
+                    "content": f"""Analiza este mensaje de un grupo de WhatsApp inmobiliario y determina si es un PEDIDO REAL de busqueda de propiedad.
 
-Reglas:
-- Extrae SOLO los criterios de búsqueda: ubicación, tipo de propiedad, habitaciones, baños, parqueaderos, precio, área, amenidades
-- Elimina todo lo que NO sea criterio de búsqueda: comisiones, "pedido para intermediar", "me reservo puntas", saludos, emojis, nombres de personas
-- Usa formato natural en español colombiano: "Apto en El Poblado, 3 alcobas, 2 parqueaderos, presupuesto 800 a 1000 millones"
-- Si hay rango de precio usa "entre X y Y millones" o "hasta X millones"
-- Sé conciso: una sola línea o máximo dos
-- NO agregues información que no esté en el mensaje original
-- Responde SOLO con el texto formateado, nada más
+ES un pedido si: menciona buscar/necesitar una propiedad, tipo de inmueble, ubicacion, precio, habitaciones, o cualquier criterio de busqueda inmobiliaria.
 
-Pedido original:
+NO es un pedido si: es un saludo, agradecimiento, comentario general, pregunta no relacionada, oferta de propiedad (alguien vendiendo), spam, sticker, chiste, mensaje administrativo del grupo, confirmacion de recibido, o cualquier mensaje que no sea alguien buscando comprar/arrendar un inmueble.
+
+Responde EXACTAMENTE en este formato (3 lineas si es SI, 1 linea si es NO):
+
+SI
+Apto en El Poblado, 3 alcobas, presupuesto 800 a 1000 millones
+1000000000
+
+o simplemente:
+
+NO
+
+Linea 1: SI o NO
+Linea 2: Texto formateado (solo si es SI). Reglas: extrae SOLO criterios de busqueda (ubicacion, tipo, habitaciones, precio, area, amenidades). Elimina comisiones, "pedido para intermediar", "me reservo puntas", saludos, emojis, nombres. Conciso, maximo 2 lineas.
+Linea 3: Presupuesto maximo en NUMERO ENTERO sin puntos ni comas (solo si es SI). Si hay rango, poner el maximo. Si dice "1.400 millones" poner 1400000000. Si dice "800M" poner 800000000. Si no menciona precio, poner 0.
+
+Mensaje:
 {texto_pedido}"""
                 }]
             )
 
-            return response.content[0].text.strip()
+            resultado = response.content[0].text.strip()
+            lineas = resultado.split('\n')
+            primera_linea = lineas[0].strip().upper()
+
+            if primera_linea == 'SI' and len(lineas) >= 2:
+                texto_formateado = lineas[1].strip()
+                presupuesto = None
+                if len(lineas) >= 3:
+                    try:
+                        presupuesto = int(lineas[2].strip().replace('.', '').replace(',', ''))
+                        if presupuesto == 0:
+                            presupuesto = None
+                    except (ValueError, IndexError):
+                        presupuesto = None
+                return (True, texto_formateado, presupuesto)
+            elif primera_linea == 'SI':
+                return (True, None, None)
+            else:
+                return (False, None, None)
+
         except Exception as e:
-            print(f"[WARN] No se pudo formatear pedido con AI: {e}")
-            return None
+            print(f"[WARN] No se pudo clasificar pedido con AI: {e}")
+            # En caso de error, dejar pasar para no perder pedidos reales
+            return (True, None, None)
 
     def send_message(self, to: str, body: str) -> Dict[str, Any]:
         """
