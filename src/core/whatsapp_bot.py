@@ -225,7 +225,12 @@ o simplemente:
 NO
 
 Linea 1: SI o NO
-Linea 2: Texto formateado (solo si es SI). Reglas: extrae SOLO criterios de busqueda (ubicacion, tipo, habitaciones, precio, area, amenidades). Elimina comisiones, "pedido para intermediar", "me reservo puntas", saludos, emojis, nombres. Conciso, maximo 2 lineas.
+Linea 2: Texto formateado (solo si es SI). Reglas:
+  - SIEMPRE incluir el precio/presupuesto si aparece en el mensaje. Esto es OBLIGATORIO. Si dice "$1.200 a $1.300 millones" DEBE aparecer "presupuesto $1.200 a $1.300 millones" en el texto formateado. Nunca omitir el precio.
+  - Incluir: ubicacion, tipo de propiedad, habitaciones, banos, parqueaderos, precio/presupuesto, area, amenidades
+  - Eliminar SOLO: porcentajes de comision (0.25%, puntas), "pedido para intermediar", "me reservo X de las puntas", saludos, emojis, nombres de personas
+  - El precio del inmueble NO es comision. "$1.400 millones" es presupuesto, "0.25 de las puntas" es comision. No confundir.
+  - Conciso, maximo 2 lineas
 Linea 3: Presupuesto maximo en NUMERO ENTERO sin puntos ni comas (solo si es SI). Si hay rango, poner el maximo. Si dice "1.400 millones" poner 1400000000. Si dice "800M" poner 800000000. Si no menciona precio, poner 0.
 
 Mensaje:
