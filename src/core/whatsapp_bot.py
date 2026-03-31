@@ -166,6 +166,21 @@ class WhatsAppBot:
             print(f"   👤 Agente: {agente_nombre or 'N/A'} ({agente_telefono or 'N/A'})")
             print(f"   📝 Texto: {texto_pedido[:100]}...")
 
+            # Deduplicacion: mismo texto + mismo agente en las ultimas 24h = duplicado
+            from src.db.database import DatabaseManager
+            with DatabaseManager() as db:
+                db.cursor.execute("""
+                    SELECT id FROM pedidos
+                    WHERE agente_telefono = %s
+                      AND texto_pedido = %s
+                      AND fecha_captura >= NOW() - INTERVAL '24 hours'
+                    LIMIT 1
+                """, (agente_telefono, texto_pedido))
+                duplicado = db.cursor.fetchone()
+                if duplicado:
+                    print(f"   ⏭️ Duplicado detectado (pedido #{duplicado['id']}), ignorado")
+                    return {'status': 'ignored', 'reason': 'duplicate', 'original_id': duplicado['id']}
+
             # Clasificar con AI (solo SI/NO + presupuesto, sin reformatear)
             es_pedido, presupuesto = self._clasificar_y_formatear_pedido(texto_pedido)
 
