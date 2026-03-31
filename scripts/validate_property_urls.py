@@ -30,8 +30,8 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 BATCH_SIZE = 100
-DELAY_BETWEEN_REQUESTS = 1.5  # seconds
-DELAY_BETWEEN_BATCHES = 5     # seconds
+DELAY_BETWEEN_REQUESTS = 0.5  # seconds
+DELAY_BETWEEN_BATCHES = 2     # seconds
 REQUEST_TIMEOUT = 20           # seconds
 
 USER_AGENT = (
