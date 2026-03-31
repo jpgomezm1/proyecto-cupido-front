@@ -259,23 +259,29 @@ def enviar_pedido(pedido_id):
                 row = db.cursor.fetchone()
                 count = row['share_count'] or 0
 
-            # Construir mensaje
+            # Construir mensajes (2 separados)
             link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
-            message = (
+            message_text = (
                 f"Hola, soy *Hernan Rios*, agente inmobiliario. "
-                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido:\n\n"
-                f"{link}\n\n"
+                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido.\n\n"
                 f"Quedo super pendiente de cual de las {count} te interesa!\n\n"
                 f"Tu pedido fue: _{texto_pedido}_"
             )
 
-            # Enviar WhatsApp (SEGUNDA LINEA, al numero PERSONAL)
-            url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
-            payload = {'token': token, 'to': agente_telefono, 'body': message}
-            resp = req.post(url, data=payload, timeout=30)
+            # Enviar 2 WhatsApps (SEGUNDA LINEA, al numero PERSONAL)
+            import time
+            api_url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
 
+            # Mensaje 1: texto
+            resp = req.post(api_url, data={'token': token, 'to': agente_telefono, 'body': message_text}, timeout=30)
             if resp.status_code != 200:
-                return jsonify({'success': False, 'error': f'Error UltraMSG: {resp.status_code}'}), 500
+                return jsonify({'success': False, 'error': f'Error UltraMSG mensaje 1: {resp.status_code}'}), 500
+
+            # Mensaje 2: link solo (clickeable)
+            time.sleep(1)
+            resp2 = req.post(api_url, data={'token': token, 'to': agente_telefono, 'body': link}, timeout=30)
+            if resp2.status_code != 200:
+                return jsonify({'success': False, 'error': f'Error UltraMSG mensaje 2: {resp2.status_code}'}), 500
 
             # Actualizar pedido
             db.cursor.execute("""

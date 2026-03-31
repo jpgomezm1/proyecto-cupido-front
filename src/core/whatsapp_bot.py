@@ -273,23 +273,31 @@ class WhatsAppBot:
                 """, (share_id, property_ids))
                 db.conn.commit()
 
-            # 5. Construir mensaje
+            # 5. Construir mensajes (2 mensajes separados)
             link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
             count = len(property_ids)
-            message = (
+            message_text = (
                 f"Hola, soy *Hernan Rios*, agente inmobiliario. "
-                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido:\n\n"
-                f"{link}\n\n"
+                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido.\n\n"
                 f"Quedo super pendiente de cual de las {count} te interesa!\n\n"
                 f"Tu pedido fue: _{texto_pedido}_"
             )
 
-            # 6. Enviar WhatsApp al NUMERO PERSONAL (SEGUNDA LINEA, no la de captacion)
-            url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
-            payload = {'token': token, 'to': agente_telefono, 'body': message}
+            # 6. Enviar 2 WhatsApps al NUMERO PERSONAL (SEGUNDA LINEA, no la de captacion)
+            api_url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
 
             print(f"[AUTO-RESP] Enviando a {agente_telefono} (PERSONAL, no grupo)")
-            resp = req.post(url, data=payload, timeout=30)
+
+            # Mensaje 1: texto
+            resp = req.post(api_url, data={'token': token, 'to': agente_telefono, 'body': message_text}, timeout=30)
+
+            # Mensaje 2: link solo (clickeable)
+            import time
+            time.sleep(1)
+            resp2 = req.post(api_url, data={'token': token, 'to': agente_telefono, 'body': link}, timeout=30)
+
+            # Usar el status del primer mensaje como referencia
+            resp = resp if resp.status_code == 200 else resp2
 
             if resp.status_code == 200:
                 # 7. Actualizar pedido en DB
