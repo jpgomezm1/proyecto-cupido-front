@@ -43,8 +43,7 @@ def list_pedidos():
                 params.append(grupo_id)
 
             if search_q:
-                conditions.append("(p.texto_pedido ILIKE %s OR p.texto_formateado ILIKE %s)")
-                params.append(f"%{search_q}%")
+                conditions.append("p.texto_pedido ILIKE %s")
                 params.append(f"%{search_q}%")
 
             if estado_filter in ESTADOS_VALIDOS:
@@ -68,7 +67,7 @@ def list_pedidos():
             db.cursor.execute(f"""
                 SELECT
                     p.id, p.grupo_id, p.agente_telefono, p.agente_nombre,
-                    p.texto_pedido, p.texto_formateado, p.estado,
+                    p.texto_pedido, p.estado,
                     p.fecha_captura, p.presupuesto_estimado,
                     g.nombre as grupo_nombre
                 FROM pedidos p
@@ -88,7 +87,6 @@ def list_pedidos():
                 'agente_telefono': row['agente_telefono'],
                 'agente_nombre': row['agente_nombre'],
                 'texto_pedido': row['texto_pedido'],
-                'texto_formateado': row['texto_formateado'],
                 'estado': row['estado'] or 'pendiente',
                 'presupuesto_estimado': row['presupuesto_estimado'] if 'presupuesto_estimado' in row else None,
                 'fecha_captura': row['fecha_captura'].isoformat() if row['fecha_captura'] else None

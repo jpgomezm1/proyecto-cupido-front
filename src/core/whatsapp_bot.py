@@ -151,21 +151,21 @@ class WhatsAppBot:
             print(f"   👤 Agente: {agente_nombre or 'N/A'} ({agente_telefono or 'N/A'})")
             print(f"   📝 Texto: {texto_pedido[:100]}...")
 
-            # Clasificar y formatear con AI
-            es_pedido, texto_formateado, presupuesto = self._clasificar_y_formatear_pedido(texto_pedido)
+            # Clasificar con AI (solo SI/NO + presupuesto, sin reformatear)
+            es_pedido, presupuesto = self._clasificar_y_formatear_pedido(texto_pedido)
 
             if not es_pedido:
                 print(f"   ⏭️ No es un pedido inmobiliario, ignorado")
                 return {'status': 'ignored', 'reason': 'not_a_property_request'}
 
-            # Guardar en base de datos
+            # Guardar en base de datos (texto original, sin reformateo AI)
             from src.db.database import DatabaseManager
             with DatabaseManager() as db:
                 db.cursor.execute("""
-                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo, texto_formateado, presupuesto_estimado)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO pedidos (grupo_id, agente_telefono, agente_nombre, texto_pedido, mensaje_completo, presupuesto_estimado)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body, texto_formateado, presupuesto))
+                """, (grupo_id, agente_telefono, agente_nombre, texto_pedido, message_body, presupuesto))
                 pedido_id = db.cursor.fetchone()['id']
 
                 db.cursor.execute("""
@@ -193,11 +193,11 @@ class WhatsAppBot:
 
     def _clasificar_y_formatear_pedido(self, texto_pedido: str) -> tuple:
         """
-        Usa Claude para clasificar si un mensaje es un pedido inmobiliario real,
-        formatearlo como query de busqueda, y extraer el presupuesto.
+        Usa Claude para clasificar si un mensaje es un pedido inmobiliario real
+        y extraer el presupuesto. No reformatea el texto.
 
         Returns:
-            tuple: (es_pedido: bool, texto_formateado: str or None, presupuesto: int or None)
+            tuple: (es_pedido: bool, presupuesto: int or None)
         """
         try:
             import anthropic
@@ -205,33 +205,23 @@ class WhatsAppBot:
 
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=300,
+                max_tokens=100,
                 messages=[{
                     "role": "user",
-                    "content": f"""Analiza este mensaje de un grupo de WhatsApp inmobiliario y determina si es un PEDIDO REAL de busqueda de propiedad.
+                    "content": f"""Analiza este mensaje de un grupo de WhatsApp inmobiliario.
 
-ES un pedido si: menciona buscar/necesitar una propiedad, tipo de inmueble, ubicacion, precio, habitaciones, o cualquier criterio de busqueda inmobiliaria.
-
-NO es un pedido si: es un saludo, agradecimiento, comentario general, pregunta no relacionada, oferta de propiedad (alguien vendiendo), spam, sticker, chiste, mensaje administrativo del grupo, confirmacion de recibido, o cualquier mensaje que no sea alguien buscando comprar/arrendar un inmueble.
-
-Responde EXACTAMENTE en este formato (3 lineas si es SI, 1 linea si es NO):
-
-SI
-Apto en El Poblado, 3 alcobas, presupuesto 800 a 1000 millones
-1000000000
-
-o simplemente:
-
-NO
+Responde SOLO 2 lineas, nada mas:
 
 Linea 1: SI o NO
-Linea 2: Texto formateado (solo si es SI). Reglas:
-  - SIEMPRE incluir el precio/presupuesto si aparece en el mensaje. Esto es OBLIGATORIO. Si dice "$1.200 a $1.300 millones" DEBE aparecer "presupuesto $1.200 a $1.300 millones" en el texto formateado. Nunca omitir el precio.
-  - Incluir: ubicacion, tipo de propiedad, habitaciones, banos, parqueaderos, precio/presupuesto, area, amenidades
-  - Eliminar SOLO: porcentajes de comision (0.25%, puntas), "pedido para intermediar", "me reservo X de las puntas", saludos, emojis, nombres de personas
-  - El precio del inmueble NO es comision. "$1.400 millones" es presupuesto, "0.25 de las puntas" es comision. No confundir.
-  - Conciso, maximo 2 lineas
-Linea 3: Presupuesto maximo en NUMERO ENTERO sin puntos ni comas (solo si es SI). Si hay rango, poner el maximo. Si dice "1.400 millones" poner 1400000000. Si dice "800M" poner 800000000. Si no menciona precio, poner 0.
+- SI si es un pedido de busqueda de propiedad (alguien buscando comprar/arrendar un inmueble)
+- NO si es: saludo, agradecimiento, comentario, oferta de venta, spam, mensaje administrativo, confirmacion, o cualquier cosa que NO sea buscar un inmueble
+
+Linea 2: Presupuesto maximo en NUMERO ENTERO (solo si es SI)
+- Si dice "1.400 millones" responder 1400000000
+- Si dice "$800M" responder 800000000
+- Si dice "presupuesto $1.200 a $1.300 millones" responder 1300000000 (el maximo del rango)
+- Si no menciona precio responder 0
+- Ignorar porcentajes de comision (0.25%, puntas), esos NO son precios
 
 Mensaje:
 {texto_pedido}"""
@@ -242,26 +232,23 @@ Mensaje:
             lineas = resultado.split('\n')
             primera_linea = lineas[0].strip().upper()
 
-            if primera_linea == 'SI' and len(lineas) >= 2:
-                texto_formateado = lineas[1].strip()
+            if primera_linea == 'SI':
                 presupuesto = None
-                if len(lineas) >= 3:
+                if len(lineas) >= 2:
                     try:
-                        presupuesto = int(lineas[2].strip().replace('.', '').replace(',', ''))
+                        presupuesto = int(lineas[1].strip().replace('.', '').replace(',', ''))
                         if presupuesto == 0:
                             presupuesto = None
                     except (ValueError, IndexError):
                         presupuesto = None
-                return (True, texto_formateado, presupuesto)
-            elif primera_linea == 'SI':
-                return (True, None, None)
+                return (True, presupuesto)
             else:
-                return (False, None, None)
+                return (False, None)
 
         except Exception as e:
             print(f"[WARN] No se pudo clasificar pedido con AI: {e}")
             # En caso de error, dejar pasar para no perder pedidos reales
-            return (True, None, None)
+            return (True, None)
 
     def send_message(self, to: str, body: str) -> Dict[str, Any]:
         """
