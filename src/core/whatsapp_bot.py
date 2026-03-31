@@ -126,6 +126,21 @@ class WhatsAppBot:
         grupos = self._get_grupos_activos()
         return grupos.get(grupo_id, 'oferta')
 
+    # Keywords que excluyen auto-respuesta
+    _EXCLUIR_AUTO = ['bodega', 'lote', 'terreno', 'finca', 'local comercial', 'oficina']
+    _PRESUPUESTO_MIN_AUTO = 800_000_000
+
+    def _is_auto_responder_enabled(self) -> bool:
+        """Consulta la DB para saber si el auto-responder esta habilitado."""
+        try:
+            from src.db.database import DatabaseManager
+            with DatabaseManager() as db:
+                db.cursor.execute("SELECT value FROM system_config WHERE key = 'auto_responder_enabled'")
+                row = db.cursor.fetchone()
+                return row['value'] == 'true' if row else False
+        except Exception:
+            return False
+
     def _handle_demanda_message(self, message_data: dict, message_body: str,
                                  message_type: str, grupo_id: str) -> dict:
         """Procesa un mensaje de un grupo de demanda — captura pedidos."""
@@ -177,8 +192,21 @@ class WhatsAppBot:
                 db.conn.commit()
 
             print(f"   ✅ Pedido guardado con ID: {pedido_id}")
-            if texto_formateado:
-                print(f"   🤖 Formateado: {texto_formateado[:100]}...")
+
+            # === AUTO-RESPUESTA: solo si cumple criterios y esta habilitado ===
+            auto_enabled = self._is_auto_responder_enabled()
+            if (auto_enabled and presupuesto and presupuesto >= self._PRESUPUESTO_MIN_AUTO
+                    and agente_telefono and '@g.us' not in agente_telefono):
+                texto_lower = texto_pedido.lower()
+                es_excluido = any(kw in texto_lower for kw in self._EXCLUIR_AUTO)
+                if not es_excluido:
+                    print(f"   🤖 Auto-respuesta iniciada (presupuesto=${presupuesto:,.0f})")
+                    self._auto_responder_pedido(pedido_id, texto_pedido, agente_telefono)
+                else:
+                    print(f"   ⏭️ Auto-respuesta omitida: tipo excluido")
+            elif presupuesto and presupuesto < self._PRESUPUESTO_MIN_AUTO:
+                print(f"   ⏭️ Auto-respuesta omitida: presupuesto ${presupuesto:,.0f} < $800M")
+
             return {
                 'status': 'pedido_capturado',
                 'pedido_id': pedido_id,
@@ -190,6 +218,97 @@ class WhatsAppBot:
             import traceback
             traceback.print_exc()
             return {'status': 'error', 'error': str(e)}
+
+    def _auto_responder_pedido(self, pedido_id: int, texto_pedido: str, agente_telefono: str):
+        """
+        Auto-busca propiedades, genera shareable link, y envia WhatsApp
+        al NUMERO PERSONAL del agente desde la segunda linea UltraMSG.
+        JAMAS envia a un grupo.
+        """
+        try:
+            import requests as req
+            import uuid
+
+            # SAFEGUARD: NUNCA enviar a un grupo
+            if '@g.us' in agente_telefono or not agente_telefono:
+                print(f"[AUTO-RESP] BLOQUEADO: {agente_telefono} es grupo o vacio. NO se envia.")
+                return
+
+            # 1. Verificar credenciales de la segunda linea
+            instance_id = os.getenv('ULTRAMSG_RESPONDER_INSTANCE_ID')
+            token = os.getenv('ULTRAMSG_RESPONDER_TOKEN')
+            if not instance_id or not token:
+                print(f"[AUTO-RESP] Credenciales ULTRAMSG_RESPONDER no configuradas, omitiendo")
+                return
+
+            # 2. Buscar propiedades con AI
+            from src.core.search_agent import PropertySearchAgent
+            agent = PropertySearchAgent()
+            search_response = agent.search(texto_pedido, limit=20, sender='auto')
+
+            results = search_response.get('results', [])
+            good_results = [r for r in results if r.get('match_score', 0) >= 40]
+
+            from src.db.database import DatabaseManager
+
+            # 3. Si no hay match con score suficiente
+            if not good_results:
+                print(f"[AUTO-RESP] Pedido {pedido_id}: {len(results)} resultados pero ninguno con score >= 40. NO_MATCH.")
+                with DatabaseManager() as db:
+                    db.cursor.execute(
+                        "UPDATE pedidos SET share_id = 'NO_MATCH', share_count = 0, canal = 'auto' WHERE id = %s",
+                        (pedido_id,)
+                    )
+                    db.conn.commit()
+                return
+
+            property_ids = [r['id'] for r in good_results]
+
+            # 4. Crear shared selection directamente en DB
+            share_id = str(uuid.uuid4())[:12]
+            with DatabaseManager() as db:
+                db.cursor.execute("""
+                    INSERT INTO shared_property_selections (share_id, property_ids, created_at, expires_at, view_count)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '30 days', 0)
+                """, (share_id, property_ids))
+                db.conn.commit()
+
+            # 5. Construir mensaje
+            base_url = os.getenv('FRONTEND_BASE_URL', 'https://fyndercol.netlify.app')
+            link = f"{base_url}/compartir/propiedades/{share_id}"
+            count = len(property_ids)
+            message = (
+                f"Hola, soy *Hernan Rios*, agente inmobiliario. "
+                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido:\n\n"
+                f"{link}\n\n"
+                f"Quedo super pendiente de cual de las {count} te interesa!\n\n"
+                f"Tu pedido fue: _{texto_pedido}_"
+            )
+
+            # 6. Enviar WhatsApp al NUMERO PERSONAL (SEGUNDA LINEA, no la de captacion)
+            url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
+            payload = {'token': token, 'to': agente_telefono, 'body': message}
+
+            print(f"[AUTO-RESP] Enviando a {agente_telefono} (PERSONAL, no grupo)")
+            resp = req.post(url, data=payload, timeout=30)
+
+            if resp.status_code == 200:
+                # 7. Actualizar pedido en DB
+                with DatabaseManager() as db:
+                    db.cursor.execute("""
+                        UPDATE pedidos
+                        SET share_id = %s, share_count = %s, estado = 'procesado', canal = 'auto'
+                        WHERE id = %s
+                    """, (share_id, count, pedido_id))
+                    db.conn.commit()
+                print(f"[AUTO-RESP] ✅ Pedido {pedido_id} respondido: {count} props → {agente_telefono}")
+            else:
+                print(f"[AUTO-RESP] ❌ Error UltraMSG: {resp.status_code} {resp.text[:200]}")
+
+        except Exception as e:
+            print(f"[AUTO-RESP] ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _clasificar_y_formatear_pedido(self, texto_pedido: str) -> tuple:
         """

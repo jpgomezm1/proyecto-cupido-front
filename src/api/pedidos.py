@@ -69,6 +69,7 @@ def list_pedidos():
                     p.id, p.grupo_id, p.agente_telefono, p.agente_nombre,
                     p.texto_pedido, p.estado,
                     p.fecha_captura, p.presupuesto_estimado,
+                    p.share_id, p.share_count, p.canal,
                     g.nombre as grupo_nombre
                 FROM pedidos p
                 LEFT JOIN grupos_whatsapp g ON p.grupo_id = g.grupo_id
@@ -89,6 +90,9 @@ def list_pedidos():
                 'texto_pedido': row['texto_pedido'],
                 'estado': row['estado'] or 'pendiente',
                 'presupuesto_estimado': row['presupuesto_estimado'] if 'presupuesto_estimado' in row else None,
+                'share_id': row['share_id'] if 'share_id' in row else None,
+                'share_count': row['share_count'] if 'share_count' in row else None,
+                'canal': row['canal'] if 'canal' in row else 'manual',
                 'fecha_captura': row['fecha_captura'].isoformat() if row['fecha_captura'] else None
             } for row in db.cursor.fetchall()]
 
@@ -158,6 +162,167 @@ def set_estado(pedido_id):
                 'data': {'id': result['id'], 'estado': result['estado']}
             })
 
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@pedidos_bp.route('/pedidos/<int:pedido_id>/share', methods=['PATCH'])
+def set_share(pedido_id):
+    """Asocia un share_id (link compartible) a un pedido."""
+    try:
+        data = request.get_json()
+        share_id = data.get('share_id', '') if data else ''
+        share_count = data.get('share_count', 0) if data else 0
+        if not share_id:
+            return jsonify({'success': False, 'error': 'share_id requerido'}), 400
+
+        with DatabaseManager() as db:
+            db.cursor.execute(
+                "UPDATE pedidos SET share_id = %s, share_count = %s WHERE id = %s RETURNING id, share_id, share_count",
+                (share_id, share_count, pedido_id)
+            )
+            result = db.cursor.fetchone()
+            if not result:
+                return jsonify({'success': False, 'error': 'Pedido no encontrado'}), 404
+            db.conn.commit()
+
+            return jsonify({
+                'success': True,
+                'data': {'id': result['id'], 'share_id': result['share_id'], 'share_count': result['share_count']}
+            })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@pedidos_bp.route('/pedidos/<int:pedido_id>/enviar', methods=['POST'])
+def enviar_pedido(pedido_id):
+    """
+    Ejecuta el flujo completo manualmente: buscar con AI, generar link, enviar WhatsApp.
+    Usa la segunda linea de UltraMSG. Envia al numero personal del agente, NUNCA al grupo.
+    """
+    import os
+    import uuid
+    import requests as req
+
+    try:
+        with DatabaseManager() as db:
+            db.cursor.execute("SELECT id, texto_pedido, agente_telefono, share_id FROM pedidos WHERE id = %s", (pedido_id,))
+            pedido = db.cursor.fetchone()
+            if not pedido:
+                return jsonify({'success': False, 'error': 'Pedido no encontrado'}), 404
+
+            texto_pedido = pedido['texto_pedido']
+            agente_telefono = pedido['agente_telefono']
+
+            if not agente_telefono or '@g.us' in agente_telefono:
+                return jsonify({'success': False, 'error': 'No se puede enviar: sin telefono personal'}), 400
+
+            # Verificar credenciales segunda linea
+            instance_id = os.getenv('ULTRAMSG_RESPONDER_INSTANCE_ID')
+            token = os.getenv('ULTRAMSG_RESPONDER_TOKEN')
+            if not instance_id or not token:
+                return jsonify({'success': False, 'error': 'Credenciales ULTRAMSG_RESPONDER no configuradas'}), 500
+
+            # Usar share_id existente si ya tiene, o generar uno nuevo
+            share_id = pedido['share_id'] if pedido['share_id'] and pedido['share_id'] != 'NO_MATCH' else None
+            count = 0
+
+            if not share_id:
+                # Buscar propiedades con AI
+                from src.core.search_agent import PropertySearchAgent
+                agent = PropertySearchAgent()
+                search_response = agent.search(texto_pedido, limit=20, sender='manual_send')
+
+                results = search_response.get('results', [])
+                good_results = [r for r in results if r.get('match_score', 0) >= 40]
+
+                if not good_results:
+                    db.cursor.execute(
+                        "UPDATE pedidos SET share_id = 'NO_MATCH', share_count = 0 WHERE id = %s",
+                        (pedido_id,)
+                    )
+                    db.conn.commit()
+                    return jsonify({'success': False, 'error': f'Sin match: {len(results)} resultados pero ninguno con score >= 40'}), 200
+
+                property_ids = [r['id'] for r in good_results]
+                count = len(property_ids)
+                share_id = str(uuid.uuid4())[:12]
+                db.cursor.execute("""
+                    INSERT INTO shared_property_selections (share_id, property_ids, created_at, expires_at, view_count)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '30 days', 0)
+                """, (share_id, property_ids))
+                db.conn.commit()
+            else:
+                # Ya tiene link, obtener count
+                db.cursor.execute("SELECT share_count FROM pedidos WHERE id = %s", (pedido_id,))
+                row = db.cursor.fetchone()
+                count = row['share_count'] or 0
+
+            # Construir mensaje
+            base_url = os.getenv('FRONTEND_BASE_URL', 'https://fyndercol.netlify.app')
+            link = f"{base_url}/compartir/propiedades/{share_id}"
+            message = (
+                f"Hola, soy *Hernan Rios*, agente inmobiliario. "
+                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido:\n\n"
+                f"{link}\n\n"
+                f"Quedo super pendiente de cual de las {count} te interesa!\n\n"
+                f"Tu pedido fue: _{texto_pedido}_"
+            )
+
+            # Enviar WhatsApp (SEGUNDA LINEA, al numero PERSONAL)
+            url = f"https://api.ultramsg.com/{instance_id}/messages/chat"
+            payload = {'token': token, 'to': agente_telefono, 'body': message}
+            resp = req.post(url, data=payload, timeout=30)
+
+            if resp.status_code != 200:
+                return jsonify({'success': False, 'error': f'Error UltraMSG: {resp.status_code}'}), 500
+
+            # Actualizar pedido
+            db.cursor.execute("""
+                UPDATE pedidos SET share_id = %s, share_count = %s, estado = 'procesado', canal = 'auto'
+                WHERE id = %s
+            """, (share_id, count, pedido_id))
+            db.conn.commit()
+
+            return jsonify({
+                'success': True,
+                'data': {'id': pedido_id, 'share_id': share_id, 'share_count': count, 'enviado_a': agente_telefono}
+            })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@pedidos_bp.route('/pedidos/auto-responder', methods=['GET'])
+def get_auto_responder():
+    """Retorna si el auto-responder esta habilitado."""
+    try:
+        with DatabaseManager() as db:
+            db.cursor.execute("SELECT value FROM system_config WHERE key = 'auto_responder_enabled'")
+            row = db.cursor.fetchone()
+            enabled = row['value'] == 'true' if row else False
+            return jsonify({'success': True, 'data': {'enabled': enabled}})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@pedidos_bp.route('/pedidos/auto-responder', methods=['PATCH'])
+def toggle_auto_responder():
+    """Activa o desactiva el auto-responder."""
+    try:
+        data = request.get_json()
+        enabled = data.get('enabled', False) if data else False
+        value = 'true' if enabled else 'false'
+
+        with DatabaseManager() as db:
+            db.cursor.execute("""
+                INSERT INTO system_config (key, value, updated_at)
+                VALUES ('auto_responder_enabled', %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+            """, (value, value))
+            db.conn.commit()
+            return jsonify({'success': True, 'data': {'enabled': enabled}})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
