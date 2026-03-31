@@ -632,30 +632,52 @@ def get_property_images_by_id(property_id: int):
 
         images = []
 
-        # Agregar imagen principal como primera imagen
-        if imagen_principal:
-            images.append({
-                'id': f"{prop_id}-1",
-                'property_id': prop_id,
-                'url': imagen_principal,
-                'position': 1,
-                'is_cover': True,
-                'created_at': None
-            })
-
-        # Agregar resto de imágenes si existen
-        if imagenes_urls:
-            urls = imagenes_urls.split('|')
-            for idx, url in enumerate(urls, start=2):
-                if url.strip() and url != imagen_principal:
+        # Primero intentar tabla property_images (imagenes cargadas manualmente)
+        try:
+            db.cursor.execute("""
+                SELECT id, property_id, url, is_cover, position, created_at
+                FROM property_images
+                WHERE property_id = %s
+                ORDER BY position
+            """, (property_id,))
+            pi_rows = db.cursor.fetchall()
+            if pi_rows:
+                for pi in pi_rows:
                     images.append({
-                        'id': f"{prop_id}-{idx}",
-                        'property_id': prop_id,
-                        'url': url.strip(),
-                        'position': idx,
-                        'is_cover': False,
-                        'created_at': None
+                        'id': pi['id'],
+                        'property_id': pi['property_id'],
+                        'url': pi['url'],
+                        'position': pi['position'],
+                        'is_cover': pi['is_cover'],
+                        'created_at': pi['created_at'].isoformat() if pi.get('created_at') else None
                     })
+        except Exception:
+            pass  # Tabla puede no existir en algun entorno
+
+        # Si no hay en property_images, usar campos legacy
+        if not images:
+            if imagen_principal:
+                images.append({
+                    'id': f"{prop_id}-1",
+                    'property_id': prop_id,
+                    'url': imagen_principal,
+                    'position': 1,
+                    'is_cover': True,
+                    'created_at': None
+                })
+
+            if imagenes_urls:
+                urls = imagenes_urls.split('|')
+                for idx, url in enumerate(urls, start=2):
+                    if url.strip() and url != imagen_principal:
+                        images.append({
+                            'id': f"{prop_id}-{idx}",
+                            'property_id': prop_id,
+                            'url': url.strip(),
+                            'position': idx,
+                            'is_cover': False,
+                            'created_at': None
+                        })
 
         return jsonify({
             'success': True,
