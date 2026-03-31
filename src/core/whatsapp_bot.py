@@ -181,16 +181,12 @@ class WhatsAppBot:
                     print(f"   ⏭️ Duplicado detectado (pedido #{duplicado['id']}), ignorado")
                     return {'status': 'ignored', 'reason': 'duplicate', 'original_id': duplicado['id']}
 
-            # Clasificar con AI (solo SI/NO + presupuesto, sin reformatear)
-            es_pedido, presupuesto = self._clasificar_y_formatear_pedido(texto_pedido)
-
-            if not es_pedido:
-                print(f"   ⏭️ No es un pedido inmobiliario, ignorado")
-                return {'status': 'ignored', 'reason': 'not_a_property_request'}
+            # Extraer presupuesto con AI (NO clasificar SI/NO — guardar todo)
+            # En grupos de demanda, casi todo es pedido. Preferimos guardar de mas que perder uno.
+            presupuesto = self._extraer_presupuesto(texto_pedido)
 
             if not presupuesto:
-                print(f"   ⏭️ Sin presupuesto en el pedido, ignorado")
-                return {'status': 'ignored', 'reason': 'no_budget'}
+                print(f"   ⚠️ Sin presupuesto detectado, se guarda pero sin auto-envio")
 
             # Guardar en base de datos (texto original, sin reformateo AI)
             from src.db.database import DatabaseManager
@@ -237,6 +233,44 @@ class WhatsAppBot:
             import traceback
             traceback.print_exc()
             return {'status': 'error', 'error': str(e)}
+
+    def _extraer_presupuesto(self, texto_pedido: str) -> int:
+        """
+        Usa Claude SOLO para extraer el presupuesto del mensaje.
+        No clasifica SI/NO — en grupos de demanda, todo se guarda.
+        Returns: presupuesto como int, o None si no menciona precio.
+        """
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY', ''))
+
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=50,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Extrae el presupuesto MAXIMO de este mensaje inmobiliario como un NUMERO ENTERO en pesos colombianos.
+
+- "800 millones" o "$800M" o "$800.000.000" = 800000000
+- "1.400 millones" = 1400000000
+- Si hay rango, poner el MAXIMO
+- Porcentajes de comision (0.25%, 1.25%, puntas) NO son precios
+- Si NO menciona precio/presupuesto, responder 0
+- Responde SOLO el numero, nada mas
+
+Mensaje: {texto_pedido[:500]}"""
+                }]
+            )
+
+            try:
+                val = int(response.content[0].text.strip().replace('.', '').replace(',', ''))
+                return val if val > 0 else None
+            except (ValueError, IndexError):
+                return None
+
+        except Exception as e:
+            print(f"[WARN] Error extrayendo presupuesto: {e}")
+            return None
 
     def _auto_responder_pedido(self, pedido_id: int, texto_pedido: str, agente_telefono: str):
         """
