@@ -40,17 +40,27 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-# Wasi redirects to this URL when property doesn't exist
-WASI_HOME_URL = "https://wasi.co"
-WASI_NOT_FOUND_PATTERNS = ["wasi.co/es", "wasi.co/en", "inmueble-no-encontrado"]
-
-# Tu360 shows this text when property is removed
-TU360_NOT_FOUND_PATTERNS = [
+# Patrones en el HTML que indican que la propiedad ya no existe.
+# Los portales devuelven HTTP 200 pero muestran estos mensajes en el contenido.
+CONTENT_NOT_FOUND_PATTERNS = [
+    "no se encontró inmueble",
+    "no se encontro inmueble",
+    "inmueble no encontrado",
     "propiedad no encontrada",
     "esta propiedad ya no está disponible",
-    "property not found",
+    "esta propiedad ya no esta disponible",
     "no encontramos la propiedad",
+    "property not found",
+    "this property is no longer available",
+    "el inmueble que buscas ya no está disponible",
+    "el inmueble que buscas ya no esta disponible",
+    "este inmueble ya no se encuentra disponible",
+    "publicación no disponible",
+    "publicacion no disponible",
 ]
+
+# Wasi a veces redirige al home cuando no existe
+WASI_REDIRECT_PATTERNS = ["wasi.co/es", "wasi.co/en"]
 
 
 class Colors:
@@ -73,6 +83,8 @@ def get_connection():
 def check_url(session, url, fuente):
     """
     Verifica si una URL sigue activa.
+    Approach principal: leer el contenido HTML y buscar patrones de "no encontrada".
+    Los portales inmobiliarios devuelven HTTP 200 aun cuando la propiedad ya no existe.
     Returns: (is_active: bool, reason: str, status_code: int|None)
     """
     if not url or not url.startswith("http"):
@@ -83,50 +95,49 @@ def check_url(session, url, fuente):
         status = response.status_code
         final_url = response.url
 
-        # 404 explícito
-        if status == 404:
-            return False, "404", status
-
-        # 410 Gone
+        # 410 Gone — definitivamente eliminada
         if status == 410:
             return False, "410_gone", status
 
-        # Server error — no desactivar, puede ser temporal
+        # 404 — no existe
+        if status == 404:
+            return False, "404", status
+
+        # Server error (500+) — NO desactivar, es temporal
         if status >= 500:
             return True, f"server_error_{status}", status
 
-        # 403 Forbidden — no desactivar, puede ser rate limit
+        # 403 Forbidden — NO desactivar, puede ser rate limit
         if status == 403:
             return True, "forbidden_skip", status
 
-        # 200 pero verificar contenido
-        if status == 200:
-            # Wasi: redirect a home page = propiedad no existe
-            if fuente and "wasi" in fuente.lower():
-                for pattern in WASI_NOT_FOUND_PATTERNS:
-                    if pattern in final_url.lower():
-                        return False, "wasi_redirect_home", status
+        # === DETECCION POR CONTENIDO (approach principal) ===
+        # Los portales devuelven 200 pero muestran "no encontrada" en el HTML
+        if 200 <= status < 400:
+            content_lower = response.text[:8000].lower()
 
-            # Tu360/Pulppo: 200 pero con texto de "no encontrada"
-            if fuente and ("tu360" in fuente.lower() or "pulppo" in fuente.lower()):
-                content_lower = response.text[:5000].lower()
-                for pattern in TU360_NOT_FOUND_PATTERNS:
-                    if pattern in content_lower:
-                        return False, "tu360_not_found_content", status
+            # Buscar patrones genericos de "no encontrada" en el HTML
+            for pattern in CONTENT_NOT_FOUND_PATTERNS:
+                if pattern in content_lower:
+                    return False, f"content_not_found: {pattern}", status
+
+            # Wasi: a veces redirige al home en vez de mostrar mensaje
+            if fuente and "wasi" in fuente.lower():
+                for pattern in WASI_REDIRECT_PATTERNS:
+                    if pattern in final_url.lower() and "info.wasi.co" not in final_url.lower():
+                        return False, "wasi_redirect_home", status
 
             return True, "ok", status
 
-        # Otros status codes (200-399) — probablemente OK
-        if 200 <= status < 400:
-            return True, f"ok_{status}", status
-
-        # Cualquier otro — no desactivar por seguridad
+        # Cualquier otro status — no desactivar por seguridad
         return True, f"unknown_{status}", status
 
     except requests.exceptions.Timeout:
-        return False, "timeout", None
+        # Timeout — NO desactivar, puede ser temporal
+        return True, "timeout_skip", None
     except requests.exceptions.ConnectionError:
-        return False, "connection_error", None
+        # Error de conexion — NO desactivar, puede ser temporal
+        return True, "connection_error_skip", None
     except requests.exceptions.TooManyRedirects:
         return False, "too_many_redirects", None
     except Exception as e:
