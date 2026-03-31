@@ -128,7 +128,7 @@ class WhatsAppBot:
 
     # Keywords que excluyen auto-respuesta
     _EXCLUIR_AUTO = ['bodega', 'lote', 'terreno', 'finca', 'local comercial', 'oficina']
-    _PRESUPUESTO_MIN_AUTO = 800_000_000
+    _PRESUPUESTO_MIN_AUTO = 450_000_000
 
     def _is_auto_responder_enabled(self) -> bool:
         """Consulta la DB para saber si el auto-responder esta habilitado."""
@@ -187,6 +187,10 @@ class WhatsAppBot:
             if not es_pedido:
                 print(f"   ⏭️ No es un pedido inmobiliario, ignorado")
                 return {'status': 'ignored', 'reason': 'not_a_property_request'}
+
+            if not presupuesto:
+                print(f"   ⏭️ Sin presupuesto en el pedido, ignorado")
+                return {'status': 'ignored', 'reason': 'no_budget'}
 
             # Guardar en base de datos (texto original, sin reformateo AI)
             from src.db.database import DatabaseManager
@@ -262,7 +266,7 @@ class WhatsAppBot:
             search_response = agent.search(texto_pedido, limit=20, sender='auto')
 
             results = search_response.get('results', [])
-            good_results = [r for r in results if r.get('match_score', 0) >= 40]
+            good_results = [r for r in results if r.get('match_score', 0) >= 40][:5]
 
             from src.db.database import DatabaseManager
 
@@ -271,7 +275,7 @@ class WhatsAppBot:
                 print(f"[AUTO-RESP] Pedido {pedido_id}: {len(results)} resultados pero ninguno con score >= 40. NO_MATCH.")
                 with DatabaseManager() as db:
                     db.cursor.execute(
-                        "UPDATE pedidos SET share_id = 'NO_MATCH', share_count = 0, canal = 'auto' WHERE id = %s",
+                        "UPDATE pedidos SET estado = 'no_match', share_count = 0, canal = 'auto' WHERE id = %s",
                         (pedido_id,)
                     )
                     db.conn.commit()
@@ -354,15 +358,21 @@ class WhatsAppBot:
 Responde SOLO 2 lineas, nada mas:
 
 Linea 1: SI o NO
-- SI si es un pedido de busqueda de propiedad (alguien buscando comprar/arrendar un inmueble)
-- NO si es: saludo, agradecimiento, comentario, oferta de venta, spam, mensaje administrativo, confirmacion, o cualquier cosa que NO sea buscar un inmueble
+- SI si es un pedido RELEVANTE para intermediacion inmobiliaria de VENTA de apartamentos, casas, penthouses o casas campestres
+- NO si es:
+  * No es un pedido (saludo, comentario, oferta de venta, spam, admin del grupo, confirmacion)
+  * Es busqueda de BODEGA, LOCAL COMERCIAL, OFICINA, LOTE (no manejamos estos tipos)
+  * Es busqueda de ARRIENDO (solo manejamos venta)
+  * Es un pedido de plataforma Tu360 (dice "cliente tu360", "tu360 inmobiliario")
+  * La comision no deja espacio para intermediario (dice "1.5% y 1.5%" o similar, sin espacio para el 0.5% del intermediario)
+  * No menciona ningun criterio de busqueda (zona, precio, tipo, habitaciones)
 
 Linea 2: Presupuesto maximo en NUMERO ENTERO (solo si es SI)
-- Si dice "1.400 millones" responder 1400000000
-- Si dice "$800M" responder 800000000
-- Si dice "presupuesto $1.200 a $1.300 millones" responder 1300000000 (el maximo del rango)
-- Si no menciona precio responder 0
-- Ignorar porcentajes de comision (0.25%, puntas), esos NO son precios
+- "1.400 millones" = 1400000000
+- "$800M" o "800 millones" = 800000000
+- "presupuesto $1.200 a $1.300 millones" = 1300000000 (el maximo)
+- Si no menciona precio = 0
+- Porcentajes de comision (0.25%, 1.25%, puntas) NO son precios, ignorarlos
 
 Mensaje:
 {texto_pedido}"""

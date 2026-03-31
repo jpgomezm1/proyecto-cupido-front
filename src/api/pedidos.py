@@ -3,13 +3,15 @@ API endpoints para gestión de pedidos (demandas capturadas de grupos WhatsApp).
 Estados: pendiente → en_proceso → procesado
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from src.db.database import DatabaseManager
+import csv
+import io
 
 pedidos_bp = Blueprint('pedidos', __name__, url_prefix='/api')
 
-ESTADOS_VALIDOS = ('pendiente', 'en_proceso', 'procesado')
-NEXT_ESTADO = {'pendiente': 'en_proceso', 'en_proceso': 'procesado', 'procesado': 'pendiente'}
+ESTADOS_VALIDOS = ('pendiente', 'en_proceso', 'procesado', 'no_match')
+NEXT_ESTADO = {'pendiente': 'en_proceso', 'en_proceso': 'procesado', 'procesado': 'pendiente', 'no_match': 'pendiente'}
 
 
 @pedidos_bp.route('/pedidos', methods=['GET'])
@@ -31,8 +33,17 @@ def list_pedidos():
         search_q = request.args.get('q', '').strip()
         estado_filter = request.args.get('estado', '')
         fecha_filter = request.args.get('fecha', '')
+        presupuesto_filter = request.args.get('presupuesto', '')
 
         offset = (page - 1) * per_page
+
+        RANGOS_PRESUPUESTO = {
+            '<300M': (0, 300000000),
+            '300-500M': (300000000, 500000000),
+            '500-800M': (500000001, 800000000),
+            '800M-1.2B': (800000001, 1200000000),
+            '>1.2B': (1200000001, None),  # >1.200 millones
+        }
 
         with DatabaseManager() as db:
             conditions = []
@@ -43,7 +54,9 @@ def list_pedidos():
                 params.append(grupo_id)
 
             if search_q:
-                conditions.append("p.texto_pedido ILIKE %s")
+                conditions.append("(p.texto_pedido ILIKE %s OR p.agente_nombre ILIKE %s OR p.agente_telefono ILIKE %s)")
+                params.append(f"%{search_q}%")
+                params.append(f"%{search_q}%")
                 params.append(f"%{search_q}%")
 
             if estado_filter in ESTADOS_VALIDOS:
@@ -54,6 +67,14 @@ def list_pedidos():
                 conditions.append("p.fecha_captura >= CURRENT_DATE")
             elif fecha_filter == 'week':
                 conditions.append("p.fecha_captura >= CURRENT_DATE - INTERVAL '7 days'")
+
+            if presupuesto_filter in RANGOS_PRESUPUESTO:
+                rango = RANGOS_PRESUPUESTO[presupuesto_filter]
+                conditions.append("p.presupuesto_estimado >= %s")
+                params.append(rango[0])
+                if rango[1] is not None:
+                    conditions.append("p.presupuesto_estimado <= %s")
+                    params.append(rango[1])
 
             where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -225,7 +246,7 @@ def enviar_pedido(pedido_id):
                 return jsonify({'success': False, 'error': 'Credenciales ULTRAMSG_RESPONDER no configuradas'}), 500
 
             # Usar share_id existente si ya tiene, o generar uno nuevo
-            share_id = pedido['share_id'] if pedido['share_id'] and pedido['share_id'] != 'NO_MATCH' else None
+            share_id = pedido['share_id'] if pedido['share_id'] else None
             count = 0
 
             if not share_id:
@@ -235,11 +256,11 @@ def enviar_pedido(pedido_id):
                 search_response = agent.search(texto_pedido, limit=20, sender='manual_send')
 
                 results = search_response.get('results', [])
-                good_results = [r for r in results if r.get('match_score', 0) >= 40]
+                good_results = [r for r in results if r.get('match_score', 0) >= 40][:5]
 
                 if not good_results:
                     db.cursor.execute(
-                        "UPDATE pedidos SET share_id = 'NO_MATCH', share_count = 0 WHERE id = %s",
+                        "UPDATE pedidos SET estado = 'no_match', share_count = 0 WHERE id = %s",
                         (pedido_id,)
                     )
                     db.conn.commit()
@@ -332,6 +353,86 @@ def toggle_auto_responder():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@pedidos_bp.route('/pedidos/export', methods=['GET'])
+def export_pedidos():
+    """Exporta pedidos como CSV para descargar en Excel."""
+    try:
+        estado_filter = request.args.get('estado', '')
+
+        with DatabaseManager() as db:
+            conditions = []
+            params = []
+
+            if estado_filter in ESTADOS_VALIDOS:
+                conditions.append("p.estado = %s")
+                params.append(estado_filter)
+
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+            db.cursor.execute(f"""
+                SELECT
+                    p.id,
+                    p.fecha_captura,
+                    p.agente_nombre,
+                    p.agente_telefono,
+                    p.texto_pedido,
+                    p.presupuesto_estimado,
+                    p.estado,
+                    p.canal,
+                    p.share_id,
+                    p.share_count,
+                    g.nombre as grupo_nombre
+                FROM pedidos p
+                LEFT JOIN grupos_whatsapp g ON p.grupo_id = g.grupo_id
+                {where_clause}
+                ORDER BY p.fecha_captura DESC
+            """, params)
+
+            rows = db.cursor.fetchall()
+
+            output = io.StringIO()
+            output.write('\ufeff')  # BOM for Excel UTF-8
+            writer = csv.writer(output)
+
+            writer.writerow([
+                'ID', 'Fecha', 'Agente', 'Telefono', 'Pedido',
+                'Presupuesto', 'Estado', 'Canal', 'Link Fynder', 'Propiedades', 'Grupo'
+            ])
+
+            for row in rows:
+                presupuesto = row['presupuesto_estimado']
+                pres_fmt = f"${presupuesto:,.0f}" if presupuesto else ''
+                fecha = row['fecha_captura'].strftime('%Y-%m-%d %H:%M') if row['fecha_captura'] else ''
+                share_link = f"https://fyndercol.netlify.app/compartir/propiedades/{row['share_id']}" if row['share_id'] else ''
+
+                writer.writerow([
+                    row['id'],
+                    fecha,
+                    row['agente_nombre'] or '',
+                    row['agente_telefono'] or '',
+                    row['texto_pedido'] or '',
+                    pres_fmt,
+                    row['estado'] or '',
+                    row['canal'] or 'manual',
+                    share_link,
+                    row['share_count'] or '',
+                    row['grupo_nombre'] or '',
+                ])
+
+            response = Response(
+                output.getvalue(),
+                mimetype='text/csv; charset=utf-8',
+                headers={
+                    'Content-Disposition': 'attachment; filename=pedidos_fynder.csv',
+                    'Content-Type': 'text/csv; charset=utf-8',
+                }
+            )
+            return response
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # Backwards compat
 @pedidos_bp.route('/pedidos/<int:pedido_id>/toggle-procesado', methods=['PATCH'])
 def toggle_procesado(pedido_id):
@@ -352,6 +453,7 @@ def pedidos_stats():
                     COUNT(*) FILTER (WHERE estado = 'procesado') as procesados,
                     COUNT(*) FILTER (WHERE estado = 'en_proceso') as en_proceso,
                     COUNT(*) FILTER (WHERE estado = 'pendiente' OR estado IS NULL) as pendientes,
+                    COUNT(*) FILTER (WHERE estado = 'no_match') as no_match,
                     COUNT(*) FILTER (WHERE fecha_captura >= CURRENT_DATE - INTERVAL '7 days') as esta_semana,
                     COUNT(*) FILTER (WHERE fecha_captura >= CURRENT_DATE - INTERVAL '1 day') as hoy
                 FROM pedidos
@@ -361,6 +463,7 @@ def pedidos_stats():
             procesados = c['procesados'] or 0
             en_proceso = c['en_proceso'] or 0
             pendientes = c['pendientes'] or 0
+            no_match = c['no_match'] or 0
             tasa_respuesta = round((procesados / total * 100), 1) if total > 0 else 0
             tasa_en_gestion = round(((procesados + en_proceso) / total * 100), 1) if total > 0 else 0
 
@@ -435,6 +538,47 @@ def pedidos_stats():
             """)
             weekly = db.cursor.fetchone()
 
+            # Distribucion por rango de presupuesto
+            db.cursor.execute("""
+                SELECT
+                    CASE
+                        WHEN presupuesto_estimado < 300000000 THEN '<$300M'
+                        WHEN presupuesto_estimado BETWEEN 300000000 AND 500000000 THEN '$300-500M'
+                        WHEN presupuesto_estimado BETWEEN 500000001 AND 800000000 THEN '$500-800M'
+                        WHEN presupuesto_estimado BETWEEN 800000001 AND 1200000000 THEN '$800-1.200M'
+                        WHEN presupuesto_estimado > 1200000000 THEN '>$1.200M'
+                    END as rango,
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE estado = 'procesado') as procesados,
+                    COUNT(*) FILTER (WHERE estado = 'no_match') as no_match,
+                    COUNT(*) FILTER (WHERE estado IN ('pendiente', 'en_proceso')) as sin_gestionar
+                FROM pedidos
+                WHERE presupuesto_estimado IS NOT NULL AND presupuesto_estimado > 0
+                GROUP BY rango
+                ORDER BY MIN(presupuesto_estimado)
+            """)
+            por_presupuesto = [{
+                'rango': row['rango'],
+                'total': row['total'],
+                'procesados': row['procesados'],
+                'no_match': row['no_match'],
+                'sin_gestionar': row['sin_gestionar']
+            } for row in db.cursor.fetchall()]
+
+            # Canal de procesamiento (auto vs manual)
+            db.cursor.execute("""
+                SELECT
+                    COALESCE(canal, 'manual') as canal,
+                    COUNT(*) as total
+                FROM pedidos
+                WHERE estado = 'procesado'
+                GROUP BY COALESCE(canal, 'manual')
+            """)
+            por_canal = [{
+                'canal': row['canal'],
+                'total': row['total']
+            } for row in db.cursor.fetchall()]
+
             return jsonify({
                 'success': True,
                 'data': {
@@ -442,6 +586,7 @@ def pedidos_stats():
                     'procesados': procesados,
                     'en_proceso': en_proceso,
                     'pendientes': pendientes,
+                    'no_match': no_match,
                     'tasa_respuesta': tasa_respuesta,
                     'tasa_en_gestion': tasa_en_gestion,
                     'esta_semana': c['esta_semana'] or 0,
@@ -449,7 +594,9 @@ def pedidos_stats():
                     'hoy': c['hoy'] or 0,
                     'pedidos_por_dia': pedidos_por_dia,
                     'top_agentes': top_agentes,
-                    'por_grupo': por_grupo
+                    'por_grupo': por_grupo,
+                    'por_presupuesto': por_presupuesto,
+                    'por_canal': por_canal
                 }
             })
 
