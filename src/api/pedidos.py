@@ -260,8 +260,7 @@ def enviar_pedido(pedido_id):
                 count = row['share_count'] or 0
 
             # Construir mensaje
-            base_url = os.getenv('FRONTEND_BASE_URL', 'https://fyndercol.netlify.app')
-            link = f"{base_url}/compartir/propiedades/{share_id}"
+            link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
             message = (
                 f"Hola, soy *Hernan Rios*, agente inmobiliario. "
                 f"Aca te comparto *{count} propiedades* que encontre segun tu pedido:\n\n"
