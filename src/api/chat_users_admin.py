@@ -83,7 +83,10 @@ def list_users():
                     (SELECT COALESCE(SUM(sps.view_count), 0) FROM shared_property_selections sps
                      WHERE sps.user_id = u.id) as total_share_views,
                     (SELECT COALESCE(SUM(sps.whatsapp_clicks), 0) FROM shared_property_selections sps
-                     WHERE sps.user_id = u.id) as total_whatsapp_clicks
+                     WHERE sps.user_id = u.id) as total_whatsapp_clicks,
+                    (SELECT COUNT(*) FROM propiedades p
+                     WHERE p.activa = TRUE AND u.telefono IS NOT NULL
+                     AND p.agente_captador_telefono = u.telefono) as total_propiedades
                 FROM chat_users u
             """
 
@@ -139,6 +142,7 @@ def list_users():
                         'total_shares': u['total_shares'] or 0,
                         'total_share_views': u['total_share_views'] or 0,
                         'total_whatsapp_clicks': u['total_whatsapp_clicks'] or 0,
+                        'total_propiedades': u['total_propiedades'] or 0,
                     } for u in users],
                     'total': total,
                     'stats': {
@@ -627,6 +631,47 @@ def close_all_sessions(user_id):
 # ============================================================================
 # ACTIVIDAD Y CONVERSACIONES
 # ============================================================================
+
+@chat_users_admin_bp.route('/<int:user_id>/propiedades', methods=['GET'])
+@token_required
+def get_user_propiedades(user_id):
+    """Retorna las propiedades cargadas por un usuario de chat (match por telefono)."""
+    try:
+        with DatabaseManager() as db:
+            db.cursor.execute("SELECT telefono FROM chat_users WHERE id = %s", (user_id,))
+            user = db.cursor.fetchone()
+            if not user or not user['telefono']:
+                return jsonify({'success': True, 'data': []})
+
+            db.cursor.execute("""
+                SELECT id, codigo_propiedad, titulo, precio, zona, ciudad,
+                       tipo_propiedad, area_construida, habitaciones, banos,
+                       activa, imagen_principal, url
+                FROM propiedades
+                WHERE agente_captador_telefono = %s
+                ORDER BY activa DESC, fecha_creacion DESC
+            """, (user['telefono'],))
+
+            props = [{
+                'id': r['id'],
+                'codigo': r['codigo_propiedad'],
+                'titulo': r['titulo'],
+                'precio': r['precio'],
+                'zona': r['zona'],
+                'ciudad': r['ciudad'],
+                'tipo': r['tipo_propiedad'],
+                'area': float(r['area_construida']) if r['area_construida'] else None,
+                'habitaciones': r['habitaciones'],
+                'banos': r['banos'],
+                'activa': r['activa'],
+                'imagen': r['imagen_principal'],
+                'url': r['url'],
+            } for r in db.cursor.fetchall()]
+
+            return jsonify({'success': True, 'data': props})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @chat_users_admin_bp.route('/<int:user_id>/activity', methods=['GET'])
 @token_required
