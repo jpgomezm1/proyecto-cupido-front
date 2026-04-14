@@ -283,10 +283,14 @@ def enviar_pedido(pedido_id):
             # Construir mensajes (2 separados)
             link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
             message_text = (
-                f"Hola, soy *Hernan Rios*, agente inmobiliario. "
-                f"Aca te comparto *{count} propiedades* que encontre segun tu pedido.\n\n"
-                f"Quedo super pendiente de cual de las {count} te interesa!\n\n"
-                f"Tu pedido fue: _{texto_pedido}_"
+                f"Hola, soy *Hernan Rios* de *Fynder* 🏡\n\n"
+                f"Te comparto *{count} propiedades* para el pedido de tu cliente: _{texto_pedido}_\n\n"
+                f"Antes de que las veas, asi trabajamos en Fynder — para que no haya sorpresas despues:\n\n"
+                f"Comision total del *3%*:\n"
+                f"• *1.25%* para ti como agente del comprador\n"
+                f"• *1.25%* para el captador\n"
+                f"• *0.5%* para Fynder, que te conectamos con la propiedad\n\n"
+                f"Mira las opciones en el link 👇 y me confirmas si te sirve trabajar asi"
             )
 
             # Enviar 2 WhatsApps (SEGUNDA LINEA, al numero PERSONAL)
