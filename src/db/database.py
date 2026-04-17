@@ -90,7 +90,7 @@ class DatabaseManager:
                 'codigo_propiedad', 'fuente', 'url',
                 'titulo', 'precio', 'precio_texto', 'tipo_propiedad', 'estado',
                 'pais', 'departamento', 'ciudad', 'zona', 'direccion_completa',
-                'latitud', 'longitud',
+                'latitud', 'longitud', 'ubicacion_aproximada',
                 'area_construida', 'habitaciones', 'banos', 'parqueaderos',
                 'estrato', 'piso', 'ano_construccion', 'caracteristicas_adicionales',
                 'administracion', 'predial',

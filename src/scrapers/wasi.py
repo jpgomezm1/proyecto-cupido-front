@@ -321,15 +321,30 @@ class WasiScraper:
                 data['zona'] = None
 
         # Coordenadas GPS (buscar en scripts o atributos data)
+        # Wasi nunca publica la coordenada exacta de la propiedad: redondea
+        # al centroide de barrio/ciudad. La marcamos como aproximada siempre.
         map_script = soup.find('script', string=re.compile(r'latitude|longitude|lat|lng'))
+        lat_val = None
+        lng_val = None
         if map_script:
-            lat_match = re.search(r'lat(?:itude)?["\']?\s*[:=]\s*["\']?([-\d.]+)', map_script.string)
-            lng_match = re.search(r'lng|lon(?:gitude)?["\']?\s*[:=]\s*["\']?([-\d.]+)', map_script.string)
-            data['latitud'] = float(lat_match.group(1)) if lat_match else None
-            data['longitud'] = float(lng_match.group(1)) if lng_match else None
-        else:
-            data['latitud'] = None
-            data['longitud'] = None
+            lat_match = re.search(
+                r'(?:lat(?:itude)?)["\']?\s*[:=]\s*["\']?(-?\d+\.\d+)',
+                map_script.string,
+            )
+            lng_match = re.search(
+                r'(?:lng|lon(?:gitude)?)["\']?\s*[:=]\s*["\']?(-?\d+\.\d+)',
+                map_script.string,
+            )
+            try:
+                lat_val = float(lat_match.group(1)) if lat_match else None
+                lng_val = float(lng_match.group(1)) if lng_match else None
+            except (ValueError, IndexError):
+                lat_val = None
+                lng_val = None
+        data['latitud'] = lat_val
+        data['longitud'] = lng_val
+        # Wasi siempre entrega ubicación de barrio/ciudad, no de la propiedad
+        data['ubicacion_aproximada'] = True if (lat_val and lng_val) else None
 
         # Dirección completa
         address = soup.find('address') or soup.find(class_=re.compile(r'address|direccion'))

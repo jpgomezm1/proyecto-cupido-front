@@ -160,13 +160,13 @@ class Tu360Scraper:
             # Parsear datos
             self._log("[3/3] Procesando información...")
 
-            listing = property_data.get('listing', {})
-            address = property_data.get('address', {})
-            features = property_data.get('features', {})
-            attributes = property_data.get('attributes', {})
-            pictures = property_data.get('pictures', [])
-            services = property_data.get('services', [])
-            contact = property_data.get('contact', {})
+            listing = property_data.get('listing') or {}
+            address = property_data.get('address') or {}
+            features = property_data.get('features') or {}
+            attributes = property_data.get('attributes') or {}
+            pictures = property_data.get('pictures') or []
+            services = property_data.get('services') or []
+            contact = property_data.get('contact') or {}
 
             # Extraer datos principales
             # Limpiar título con AI para quitar "Venta", "Arriendo", etc.
@@ -180,11 +180,25 @@ class Tu360Scraper:
             moneda = price_info.get('currency', 'COP')
             precio_formateado = PropertyNormalizer.formatear_precio(precio, moneda)
 
+            # Precisión de la ubicación: Tu360/Pulppo redondea coordenadas
+            # cuando el vendedor oculta la direccion exacta (addressIsRounded).
+            # manuallySet=false indica que vino de geocoding, no del mapa real.
+            address_location = address.get('location') or {}
+            is_rounded = bool(listing.get('addressIsRounded'))
+            manually_set = bool(address_location.get('manuallySet'))
+            ubicacion_aproximada = is_rounded or not manually_set
+
             # Ubicación (con normalización)
-            ciudad_raw = address.get('city', {}).get('name', '')
-            departamento_raw = address.get('state', {}).get('name', '')
-            barrio_raw = address.get('neighborhood', {}).get('name', '')
-            direccion = address.get('streetAddress', '')
+            ciudad_raw = (address.get('city') or {}).get('name', '')
+            departamento_raw = (address.get('state') or {}).get('name', '')
+            barrio_raw = (address.get('neighborhood') or {}).get('name', '')
+            direccion = (
+                address.get('streetAddress')
+                or address.get('publicStreet')
+                or address.get('street')
+                or address.get('name')
+                or ''
+            )
 
             ciudad = PropertyNormalizer.normalizar_ciudad(ciudad_raw)
             departamento = PropertyNormalizer.normalizar_departamento(departamento_raw)
@@ -202,37 +216,58 @@ class Tu360Scraper:
             tipo_negocio = PropertyNormalizer.normalizar_tipo_negocio(listing.get('operation', 'sale'))
 
             # Características
-            habitaciones = attributes.get('bedrooms', 0) or features.get('bedrooms', 0) or 0
-            banos = attributes.get('bathrooms', 0) or features.get('bathrooms', 0) or 0
-            area_total = attributes.get('totalSurface') or attributes.get('surface') or attributes.get('roofedSurface') or 0
-            area_construida = attributes.get('roofedSurface') or attributes.get('surface') or 0
-            parqueaderos = attributes.get('parkings', 0) or features.get('parkingSpaces', 0) or 0
-            piso = features.get('floor', 0) or 0
-            antiguedad = features.get('age', 0) or 0
+            # Pulppo/Tu360 usa 'suites' como habitaciones; algunas propiedades
+            # aun exponen 'bedrooms'/'rooms', así que probamos varios aliases.
+            habitaciones = (
+                attributes.get('suites')
+                or attributes.get('bedrooms')
+                or attributes.get('rooms')
+                or features.get('bedrooms')
+                or 0
+            )
+            banos = attributes.get('bathrooms') or features.get('bathrooms') or 0
+            area_construida = attributes.get('roofedSurface') or attributes.get('totalSurface') or 0
+            area_total = attributes.get('totalSurface') or area_construida or 0
+            parqueaderos = attributes.get('parkings') or features.get('parkingSpaces') or 0
+            piso = attributes.get('floor') or features.get('floor') or 0
+            ano_construccion = attributes.get('yearBuild') or None
+            antiguedad = features.get('age') or 0
+            administracion = attributes.get('expenses') or None
 
             # Código
             codigo_interno = property_data.get('internalId', '')
             codigo_mongo = property_data.get('_id', '')
 
-            # Imágenes
+            # Imágenes — incluir todas las publicas y omitir planos/AI
             imagenes = []
-            for pic in pictures[:20]:  # Máximo 20 imágenes
+            for pic in pictures:
+                if not isinstance(pic, dict):
+                    continue
+                if pic.get('is_blueprint'):
+                    continue
+                if pic.get('public') is False:
+                    continue
                 img_url = pic.get('url', '')
                 if img_url:
                     imagenes.append({
                         'url': img_url,
                         'descripcion': pic.get('description', ''),
-                        'es_portada': len(imagenes) == 0  # Primera imagen es portada
+                        'es_portada': len(imagenes) == 0
                     })
 
             # Amenidades/Servicios
             amenidades = [s.get('name', s) if isinstance(s, dict) else s for s in services]
 
             # Contacto (con validación de teléfono)
-            agente_nombre = contact.get('agent', {}).get('name', 'Tu360Inmobiliario')
-            agente_telefono_raw = contact.get('agent', {}).get('phone', '')
+            agent_obj = contact.get('agent') or {}
+            agente_nombre = (
+                agent_obj.get('name')
+                or ' '.join(filter(None, [agent_obj.get('firstName'), agent_obj.get('lastName')])).strip()
+                or 'Tu360Inmobiliario'
+            )
+            agente_telefono_raw = agent_obj.get('phone', '')
             agente_telefono = PropertyNormalizer.validar_telefono(agente_telefono_raw) or agente_telefono_raw
-            agente_email = contact.get('agent', {}).get('email', '')
+            agente_email = agent_obj.get('email', '')
 
             # Construir imágenes como string separado por |
             imagenes_urls_str = '|'.join([img['url'] for img in imagenes]) if imagenes else None
@@ -264,8 +299,8 @@ class Tu360Scraper:
                 'ciudad': ciudad,
                 'zona': barrio,  # zona es el campo esperado por la DB
                 'direccion_completa': direccion,
-                'latitud': address.get('coordinates', [None, None])[1],
-                'longitud': address.get('coordinates', [None, None])[0],
+                'latitud': ((address.get('location') or {}).get('coordinates') or [None, None])[1],
+                'longitud': ((address.get('location') or {}).get('coordinates') or [None, None])[0],
 
                 # Características
                 'habitaciones': habitaciones,
@@ -273,7 +308,9 @@ class Tu360Scraper:
                 'area_construida': int(area_construida) if area_construida else (int(area_total) if area_total else None),
                 'parqueaderos': parqueaderos,
                 'piso': piso,
-                'ano_construccion': (datetime.now().year - antiguedad) if antiguedad else None,
+                'ano_construccion': ano_construccion or ((datetime.now().year - antiguedad) if antiguedad else None),
+                'administracion': administracion,
+                'ubicacion_aproximada': ubicacion_aproximada,
 
                 # Imágenes
                 'imagenes_urls': imagenes_urls_str,
