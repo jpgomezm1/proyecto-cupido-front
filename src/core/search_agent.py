@@ -932,6 +932,24 @@ Responde SOLO con el JSON de criterios."""
             "Ajustamos algunos criterios para mostrarte opciones cercanas."
         )
 
+    def _has_explicit_barrios(self, ubicaciones: List[str]) -> bool:
+        """
+        True si al menos una de las ubicaciones es un barrio específico
+        (no una ciudad/municipio). Usado para decidir si se salta la
+        relajación a "toda la ciudad" que es demasiado agresiva.
+        """
+        if not ubicaciones:
+            return False
+        ciudades_conocidas = {
+            'medellín', 'medellin', 'envigado', 'sabaneta', 'itagüí', 'itagui',
+            'bello', 'rionegro', 'la estrella', 'el retiro', 'la ceja',
+            'copacabana', 'girardota', 'caldas',
+        }
+        for u in ubicaciones:
+            if (u or '').strip().lower() not in ciudades_conocidas:
+                return True
+        return False
+
     def _progressive_search(
         self,
         criteria: Dict[str, Any],
@@ -987,8 +1005,19 @@ Responde SOLO con el JSON de criterios."""
         # ========== FASE 1: RELAJACIÓN DE UBICACIÓN ==========
         # Intentar primero con diferentes niveles de ubicación ANTES de relajar otros criterios
 
-        ubicacion_levels = [0, 1, 2]  # 0=zona exacta, 1=ciudad, 2=zonas expandidas
-        ubicacion_names = ['zona exacta', 'ciudad', 'zonas similares']
+        # Bug #28: cuando el usuario nombra barrios explícitos (no solo ciudades),
+        # saltar de "Zúñiga" a "toda Envigado" (nivel 1) es demasiado agresivo y
+        # mete resultados irrelevantes. Vamos directo a zonas adyacentes (nivel 2)
+        # y bajamos el umbral de resultados mínimos.
+        has_explicit_barrios = self._has_explicit_barrios(ubicaciones_originales)
+        if has_explicit_barrios:
+            ubicacion_levels = [0, 2]
+            ubicacion_names_map = {0: 'zona exacta', 2: 'zonas similares'}
+            min_results = min(min_results, 3)
+        else:
+            ubicacion_levels = [0, 1, 2]
+            ubicacion_names_map = {0: 'zona exacta', 1: 'ciudad', 2: 'zonas similares'}
+        ubicacion_names = [ubicacion_names_map[lvl] for lvl in ubicacion_levels]
 
         # Diagnostic: run filter impact analysis on first search
         search_log.log_filter_impact(db, criteria)
@@ -1023,7 +1052,7 @@ Responde SOLO con el JSON de criterios."""
 
                 # Diagnostic SQL logging
                 search_log.log_sql_diagnostic(
-                    f"Fase1 ub_level={ub_level} ({ubicacion_names[ub_level]})",
+                    f"Fase1 ub_level={ub_level} ({ubicacion_names_map.get(ub_level, str(ub_level))})",
                     sql_query, params, len(results), sql_elapsed
                 )
 
@@ -1824,6 +1853,16 @@ Responde SOLO con el JSON de criterios."""
             result['match_reasons'] = reasons[:5]  # Máximo 5 razones para no saturar
             result['match_details'] = match_details
             result['perfil_aplicado'] = perfil_comprador
+
+            # Etiqueta normalizada para que la UI pueda separar "en tu zona"
+            # de resultados ampliados sin tener que interpretar match_details.
+            _ub = match_details.get('ubicacion')
+            if _ub == 'exacta':
+                result['match_level'] = 'exact'
+            elif _ub in ('hermana', 'cercana'):
+                result['match_level'] = 'nearby'
+            else:
+                result['match_level'] = 'expanded'
 
         # Ordenar por score descendente
         results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
