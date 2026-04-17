@@ -8,6 +8,7 @@ Expone endpoints para que el frontend consuma la base de datos de Neon
 from flask import Blueprint, jsonify, request
 from src.db.database import DatabaseManager
 from src.scrapers.utils import PropertyNormalizer
+from src.utils.phone import normalize_colombia_phone
 import traceback
 from typing import Dict, List, Optional
 
@@ -1009,6 +1010,15 @@ def scrape_wasi():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Fynder solo capta propiedades en venta. Rechazar arriendos antes de guardar.
+        if property_data.get('tipo_negocio') == 'Arriendo':
+            print(f"[API] ❌ Propiedad rechazada: tipo_negocio=Arriendo")
+            return jsonify({
+                'success': False,
+                'error': 'Fynder solo captura propiedades en venta. Esta publicacion esta marcada como Arriendo y no sera guardada.',
+                'code': 'ARRIENDO_NOT_SUPPORTED'
+            }), 400
+
         # Verificar si es propiedad propia
         if data.get('es_propia', False):
             property_data['fuente'] = 'Propia'
@@ -1018,11 +1028,8 @@ def scrape_wasi():
         agente_telefono = data.get('agente_telefono')
         agente_nombre = data.get('agente_nombre')
 
-        if agente_telefono:
-            # Normalizar teléfono a formato +57
-            telefono_normalizado = agente_telefono.strip()
-            if not telefono_normalizado.startswith('+'):
-                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+        telefono_normalizado = normalize_colombia_phone(agente_telefono)
+        if telefono_normalizado:
             property_data['agente_captador_telefono'] = telefono_normalizado
             print(f"[API] Agente captador: {telefono_normalizado}")
 
@@ -1030,8 +1037,7 @@ def scrape_wasi():
         db = get_db()
 
         # Si hay nombre de agente, crear o actualizar en tabla agentes
-        if agente_telefono and agente_nombre:
-            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+        if telefono_normalizado and agente_nombre:
             db.get_or_create_agente(telefono_normalizado, agente_nombre)
             print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
 
@@ -1181,15 +1187,21 @@ def scrape_tu360():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Fynder solo capta propiedades en venta. Rechazar arriendos antes de guardar.
+        if property_data.get('tipo_negocio') == 'Arriendo':
+            print(f"[API] ❌ Propiedad rechazada: tipo_negocio=Arriendo")
+            return jsonify({
+                'success': False,
+                'error': 'Fynder solo captura propiedades en venta. Esta publicacion esta marcada como Arriendo y no sera guardada.',
+                'code': 'ARRIENDO_NOT_SUPPORTED'
+            }), 400
+
         # Agregar información del agente captador si se proporciona
         agente_telefono = data.get('agente_telefono')
         agente_nombre = data.get('agente_nombre')
 
-        if agente_telefono:
-            # Normalizar teléfono a formato +57
-            telefono_normalizado = agente_telefono.strip()
-            if not telefono_normalizado.startswith('+'):
-                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+        telefono_normalizado = normalize_colombia_phone(agente_telefono)
+        if telefono_normalizado:
             property_data['agente_captador_telefono'] = telefono_normalizado
             print(f"[API] Agente captador: {telefono_normalizado}")
 
@@ -1197,8 +1209,7 @@ def scrape_tu360():
         db = get_db()
 
         # Si hay nombre de agente, crear o actualizar en tabla agentes
-        if agente_telefono and agente_nombre:
-            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+        if telefono_normalizado and agente_nombre:
             db.get_or_create_agente(telefono_normalizado, agente_nombre)
             print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
 
@@ -1348,15 +1359,21 @@ def scrape_lobbie():
 
         print(f"[API] Datos extraídos: {property_data.get('titulo', 'Sin título')}")
 
+        # Fynder solo capta propiedades en venta. Rechazar arriendos antes de guardar.
+        if property_data.get('tipo_negocio') == 'Arriendo':
+            print(f"[API] ❌ Propiedad rechazada: tipo_negocio=Arriendo")
+            return jsonify({
+                'success': False,
+                'error': 'Fynder solo captura propiedades en venta. Esta publicacion esta marcada como Arriendo y no sera guardada.',
+                'code': 'ARRIENDO_NOT_SUPPORTED'
+            }), 400
+
         # Agregar información del agente captador si se proporciona
         agente_telefono = data.get('agente_telefono')
         agente_nombre = data.get('agente_nombre')
 
-        if agente_telefono:
-            # Normalizar teléfono a formato +57
-            telefono_normalizado = agente_telefono.strip()
-            if not telefono_normalizado.startswith('+'):
-                telefono_normalizado = '+57' + telefono_normalizado.lstrip('0')
+        telefono_normalizado = normalize_colombia_phone(agente_telefono)
+        if telefono_normalizado:
             property_data['agente_captador_telefono'] = telefono_normalizado
             print(f"[API] Agente captador: {telefono_normalizado}")
 
@@ -1364,8 +1381,7 @@ def scrape_lobbie():
         db = get_db()
 
         # Si hay nombre de agente, crear o actualizar en tabla agentes
-        if agente_telefono and agente_nombre:
-            telefono_normalizado = property_data.get('agente_captador_telefono', agente_telefono)
+        if telefono_normalizado and agente_nombre:
             db.get_or_create_agente(telefono_normalizado, agente_nombre)
             print(f"[API] Agente registrado: {agente_nombre} ({telefono_normalizado})")
 

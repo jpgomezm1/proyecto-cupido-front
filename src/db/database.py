@@ -130,8 +130,26 @@ class DatabaseManager:
             fields_str = ', '.join(available_fields)
             placeholders = ', '.join([f'%({f})s' for f in available_fields])
 
+            # Campos de ownership/origen: si ya estan seteados en la fila existente,
+            # NO los sobrescribimos cuando otro agente re-capta la misma URL.
+            # Evita que el ultimo en scrapear "robe" la propiedad del captador original.
+            preserve_on_conflict = {
+                'agente_captador_telefono',
+                'origen',
+                'grupo_origen',
+                'mensaje_original_grupo',
+            }
+
             # Construir cláusula UPDATE para ON CONFLICT
-            update_clauses = ', '.join([f'{f} = EXCLUDED.{f}' for f in available_fields if f != 'codigo_propiedad'])
+            update_parts = []
+            for f in available_fields:
+                if f == 'codigo_propiedad':
+                    continue
+                if f in preserve_on_conflict:
+                    update_parts.append(f'{f} = COALESCE(propiedades.{f}, EXCLUDED.{f})')
+                else:
+                    update_parts.append(f'{f} = EXCLUDED.{f}')
+            update_clauses = ', '.join(update_parts)
 
             query = f"""
                 INSERT INTO propiedades ({fields_str})

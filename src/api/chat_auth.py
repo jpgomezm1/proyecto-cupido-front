@@ -12,6 +12,7 @@ import secrets
 import traceback
 
 from src.db.database import DatabaseManager
+from src.utils.phone import normalize_colombia_phone
 
 chat_auth_bp = Blueprint('chat_auth', __name__, url_prefix='/api/chat')
 
@@ -330,9 +331,8 @@ def update_profile():
             params.append(nombre)
 
         if 'telefono' in data:
-            telefono = data['telefono'].strip() if data['telefono'] else None
             updates.append("telefono = %s")
-            params.append(telefono)
+            params.append(normalize_colombia_phone(data['telefono']))
 
         if 'correo_personal' in data:
             correo = data['correo_personal'].strip() if data['correo_personal'] else None

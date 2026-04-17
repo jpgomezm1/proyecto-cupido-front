@@ -12,6 +12,7 @@ import traceback
 
 from src.db.database import DatabaseManager
 from src.api.auth import token_required
+from src.utils.phone import normalize_colombia_phone
 
 chat_users_admin_bp = Blueprint('chat_users_admin', __name__, url_prefix='/api/admin/chat-users')
 
@@ -197,7 +198,7 @@ def create_user():
         email = data['email'].strip().lower()
         nombre = data['nombre'].strip()
         password = data.get('password', generate_password())
-        telefono = data.get('telefono', '').strip() or None
+        telefono = normalize_colombia_phone(data.get('telefono'))
 
         # Validar email
         if '@' not in email:
@@ -357,7 +358,7 @@ def update_user(user_id):
 
             if 'telefono' in data:
                 updates.append("telefono = %s")
-                params.append(data['telefono'].strip() if data['telefono'] else None)
+                params.append(normalize_colombia_phone(data['telefono']))
 
             if 'activo' in data:
                 updates.append("activo = %s")
