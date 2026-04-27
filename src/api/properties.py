@@ -82,6 +82,7 @@ def get_properties():
         min_price_m2 = request.args.get('min_price_m2')
         max_price_m2 = request.args.get('max_price_m2')
         below_zone_avg = request.args.get('below_zone_avg')
+        owner_phone = request.args.get('owner_phone')
 
         # Construir condición de estado
         if status == 'all':
@@ -97,6 +98,22 @@ def get_properties():
             AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
         """
         params = []
+
+        # Filtro por dueño (Mis Propiedades en chat). Match por los ultimos 10 digitos
+        # del telefono para tolerar formatos distintos en DB:
+        # "+573001234567", "573001234567", "3001234567" todos terminan en "3001234567".
+        if owner_phone:
+            owner_digits = ''.join(ch for ch in owner_phone if ch.isdigit())
+            if len(owner_digits) >= 10:
+                last10 = owner_digits[-10:]
+                where_clause += (
+                    " AND p.agente_captador_telefono IS NOT NULL"
+                    " AND RIGHT(REGEXP_REPLACE(p.agente_captador_telefono, '[^0-9]', '', 'g'), 10) = %s"
+                )
+                params.append(last10)
+            else:
+                # Telefono invalido => no coincide con nada
+                where_clause += " AND FALSE"
 
         # Agregar filtros
         if city:
