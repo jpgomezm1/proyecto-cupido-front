@@ -61,6 +61,11 @@ class WhatsAppBot:
         self._cache_timestamp = None
         self._cache_ttl = 60  # segundos
 
+        # Conexión Redis para deduplicación de webhooks (UltraMSG reenvía duplicados).
+        # Si Redis no está disponible, se degrada con gracia (no se deduplica).
+        self._dedup_ttl = 300  # segundos que recordamos un id de mensaje
+        self._redis = self._init_redis_dedup()
+
         # URL base del frontend (para links en WhatsApp)
         self.frontend_url = 'https://fyndercol.netlify.app'
 
@@ -72,6 +77,47 @@ class WhatsAppBot:
         print(f"   Base URL: {self.base_url}")
         print(f"   Frontend URL: {self.frontend_url}")
         print(f"   Grupos activos: {len(self._grupos_activos_cache)}")
+
+    def _init_redis_dedup(self):
+        """
+        Inicializa una conexión Redis para deduplicar webhooks.
+        Retorna None si Redis no está disponible (degradación con gracia).
+        """
+        try:
+            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+            if redis_url.startswith('rediss://'):
+                conn = redis.from_url(redis_url, ssl_cert_reqs=None)
+            else:
+                conn = redis.from_url(redis_url)
+            conn.ping()  # falla rápido si no hay servidor
+            print("[OK] Redis conectado para deduplicación de webhooks")
+            return conn
+        except Exception as e:
+            print(f"[WARN] Redis no disponible para deduplicación ({e}). "
+                  f"Los webhooks NO se deduplicarán.")
+            return None
+
+    def _es_mensaje_duplicado(self, message_id: str) -> bool:
+        """
+        Determina si un mensaje ya fue procesado recientemente.
+
+        Usa SET NX (set-if-not-exists) sobre el id único del mensaje de UltraMSG.
+        La primera vez devuelve True en el SET → no es duplicado.
+        Las siguientes veces (dentro del TTL) el SET falla → es duplicado.
+
+        Si no hay id o Redis no está disponible, devuelve False (deja pasar):
+        es preferible procesar de más que descartar un mensaje legítimo.
+        """
+        if not message_id or self._redis is None:
+            return False
+        try:
+            key = f"webhook:dedup:{message_id}"
+            # nx=True: solo escribe si la clave no existe. Retorna True si escribió.
+            fue_nuevo = self._redis.set(key, "1", nx=True, ex=self._dedup_ttl)
+            return not fue_nuevo
+        except Exception as e:
+            print(f"[WARN] Error verificando duplicado ({e}). Se procesa el mensaje.")
+            return False
 
     def _refresh_grupos_activos(self):
         """Recarga los grupos activos desde la base de datos."""
@@ -908,6 +954,14 @@ Mensaje:
             # Ignorar mensajes propios (fromMe)
             if message_data.get('fromMe') or message_data.get('self'):
                 return {'status': 'ignored', 'reason': 'own_message'}
+
+            # Deduplicación: UltraMSG reenvía el mismo webhook varias veces.
+            # Si ya procesamos este id de mensaje recientemente, lo ignoramos
+            # para no duplicar capturas, búsquedas ni llamadas a IA (costos).
+            message_id = message_data.get('id', '')
+            if self._es_mensaje_duplicado(message_id):
+                print(f"[WEBHOOK] Duplicado ignorado: id={message_id}")
+                return {'status': 'ignored', 'reason': 'duplicate'}
 
             # Detectar si es mensaje de grupo
             is_group_message = '@g.us' in sender or '@g.us' in to
