@@ -85,6 +85,17 @@ class DatabaseManager:
             int: ID de la propiedad insertada o None si hubo error
         """
         try:
+            # Anonimizar titulo/descripcion ANTES de guardar para que el texto
+            # no coincida con el del portal de origen (evita que se rastree la
+            # propiedad en otros portales). Defensivo: si falla, guarda el texto
+            # original sin marcar y la migracion masiva lo corrige luego.
+            if not property_data.get('anonimizado_version'):
+                try:
+                    from src.core.listing_anonymizer import apply_anonymization
+                    apply_anonymization(property_data)
+                except Exception as _e:
+                    print(f"[insert_property] anonimizacion omitida: {_e}")
+
             # Campos básicos (siempre presentes)
             basic_fields = [
                 'codigo_propiedad', 'fuente', 'url',
@@ -99,6 +110,9 @@ class DatabaseManager:
                 'imagenes_urls', 'total_imagenes', 'imagen_principal',
                 'imagenes_hd_count', 'imagenes_thumb_count',
                 'descripcion', 'descripcion_length',
+                # Anonimizacion (respaldo del texto crudo + trazabilidad)
+                'titulo_original', 'descripcion_original',
+                'anonimizado_at', 'anonimizado_version',
                 'fecha_extraccion',
                 # Campos de captación (quién envió la propiedad)
                 'origen', 'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo',

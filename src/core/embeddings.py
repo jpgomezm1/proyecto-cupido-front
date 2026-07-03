@@ -21,7 +21,15 @@ class EmbeddingsManager:
     """
 
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # http_client con verificacion SSL contra el almacen del SO: necesario
+        # cuando un proxy corporativo intercepta TLS y su CA raiz no esta en
+        # certifi (mismo fix que el cliente Anthropic). Ver listing_anonymizer.
+        import httpx
+        from src.core.listing_anonymizer import _build_ssl_context
+        self.client = OpenAI(
+            api_key=os.getenv('OPENAI_API_KEY'),
+            http_client=httpx.Client(verify=_build_ssl_context()),
+        )
         self.model = "text-embedding-3-small"
         self.dimensions = 1536
 

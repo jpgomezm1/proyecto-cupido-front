@@ -7,7 +7,7 @@
 Fynder es una plataforma inmobiliaria colombiana compuesta por dos aplicaciones:
 
 1. **proyecto-cupido-front** (Backend) - Python/Flask API + WhatsApp Bot con búsqueda AI de propiedades
-2. **mvp-tu360** (Frontend) - React/TypeScript portal web para administración, analytics y búsqueda AI
+2. **frontend** (Frontend) - React/TypeScript portal web para administración, analytics y búsqueda AI
 
 Ambas comparten una base de datos PostgreSQL (Neon).
 
@@ -18,7 +18,7 @@ Ambas comparten una base de datos PostgreSQL (Neon).
 ```
 USUARIOS                              ADMIN
 ────────                              ─────
-WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
+WhatsApp → UltraMSG → /webhook        Browser → frontend (React)
                           ↓                          ↓
                     WhatsAppBot              REST API calls
                           ↓                          ↓
@@ -37,7 +37,7 @@ WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
 ### Properties & Search
 | Blueprint | Prefix | Key Endpoints |
 |-----------|--------|---------------|
-| `properties` | `/api` | GET/PUT properties, POST scrape-wasi/tu360/lobbie, GET filter-options, POST improve-description |
+| `properties` | `/api` | GET/PUT properties, POST scrape-wasi/lobbie, GET filter-options, POST improve-description |
 | `search` | `/api` | POST /search/ai (Claude-powered), GET suggestions, GET history |
 | `property_chat` | `/api` | POST /properties/:id/chat (chat about a property) |
 
@@ -90,7 +90,7 @@ WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
 - Manages user sessions and active groups cache
 
 ### CupidoManager (`src/core/cupido_manager.py`)
-- Detects message type: solicitud_mercado, captacion_wasi/tu360/lobbie, chat_normal, comando
+- Detects message type: solicitud_mercado, captacion_wasi/lobbie, chat_normal, comando
 - Orchestrates property capture from shared links
 - Manages agent sessions and property selections
 
@@ -123,7 +123,6 @@ WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
 
 ### Scrapers (`src/scrapers/`)
 - `wasi.py` - Wasi.co property scraper
-- `tu360.py` - Tu360Inmobiliario scraper
 - `lobbie.py` - Lobbie scraper
 - `utils.py` - PropertyNormalizer (common schema)
 
@@ -137,7 +136,7 @@ WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
 | `/` | Dashboard | System metrics, recent activity, real-time stats |
 | `/propiedades` | Properties | Property listing with grid/list view, filters, pagination |
 | `/propiedad/:slug` | PropertyDetail | Image carousel, specs, owner info, share links |
-| `/capturar` | CaptureProperty | Scrape from Wasi/Tu360/Lobbie + bulk Excel upload |
+| `/capturar` | CaptureProperty | Scrape from Wasi/Lobbie + bulk Excel upload |
 | `/analytics` | MarketIntelligence | Supply/demand analysis, price trends, zone maps |
 | `/actividad` | Activity | System activity (captures, chat, agents, hourly) |
 | `/agentes` | Agents | Agent grid with performance stats |
@@ -191,7 +190,7 @@ WhatsApp → UltraMSG → /webhook        Browser → mvp-tu360 (React)
 ## Frontend - API Client (`src/integrations/api/client.ts`)
 
 Singleton `apiClient` with methods for all API interactions:
-- **Properties**: getProperties, getPropertyBySlug, updatePropertyStatus, scrapeWasi/Tu360/Lobbie
+- **Properties**: getProperties, getPropertyBySlug, updatePropertyStatus, scrapeWasi/Lobbie
 - **Analytics**: getAnalyticsOverview, getSearchStats, getCaptureStats
 - **Deals**: getDeals, getDealsPipeline, createDeal, updateDealState, addDealActivity
 - **Auth**: login, verifyToken, getCurrentUser

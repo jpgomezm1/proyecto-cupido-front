@@ -97,13 +97,19 @@ search_log = get_search_logger()
 
 # Configuración
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
-MODEL = "claude-sonnet-4-20250514"  # Modelo por defecto (Claude Sonnet 4)
+# Modelo por defecto: Claude Sonnet 4.6 (migración de claude-sonnet-4-20250514,
+# que devolvía 404 para este API key). Se usan los alias sin sufijo de fecha.
+MODEL = "claude-sonnet-4-6"
 
-# Modelos alternativos en orden de preferencia (solo modelos activos)
+# Modelos alternativos en orden de preferencia (IDs actuales y vigentes).
+# El fallback en tiempo de llamada (_messages_create_with_fallback) recorre esta
+# lista si el modelo actual devuelve 404, así que basta con que UNO esté
+# habilitado para el API key de producción. NO usar modelos retirados
+# (ej: claude-3-5-sonnet-20241022 quedó retirado el 2025-10-28 → 404).
 FALLBACK_MODELS = [
-    "claude-sonnet-4-20250514",     # Claude Sonnet 4 (más reciente)
-    "claude-3-5-sonnet-20241022",   # Claude 3.5 Sonnet v2
-    "claude-haiku-4-5-20251001",    # Claude 3.5 Haiku (más económico)
+    "claude-sonnet-4-6",   # Sonnet 4.6 (preferido: balance calidad/costo)
+    "claude-haiku-4-5",    # Haiku 4.5 (más económico, alta disponibilidad)
+    "claude-opus-4-8",     # Opus 4.8 (último recurso, más capaz)
 ]
 
 
@@ -153,6 +159,32 @@ class PropertySearchAgent:
         # Si ninguno funciona, usar el primero como fallback
         print(f"[WARN] No se pudo detectar modelo, usando: {FALLBACK_MODELS[0]}")
         return FALLBACK_MODELS[0]
+
+    def _messages_create_with_fallback(self, **kwargs):
+        """
+        Llama a Claude con fallback de modelo en tiempo de ejecución.
+
+        Si el modelo actual devuelve 404 (modelo no disponible para esta cuenta,
+        ej: deprecado o sin acceso), prueba el siguiente de FALLBACK_MODELS y se
+        queda con el que funcione. Esto evita que un modelo caído deje el buscador
+        en 0 hasta un reinicio manual (bug visto en prod con claude-sonnet-4).
+        Los demás errores (cuota, rate-limit, red) se propagan tal cual.
+        """
+        models_to_try = [self.model] + [m for m in FALLBACK_MODELS if m != self.model]
+        last_not_found = None
+        for m in models_to_try:
+            try:
+                resp = self.client.messages.create(model=m, **kwargs)
+                if m != self.model:
+                    print(f"[MODEL] Modelo '{self.model}' no disponible; usando '{m}' de aquí en adelante")
+                    self.model = m  # recordar para próximas llamadas (singleton)
+                return resp
+            except anthropic.NotFoundError as e:
+                last_not_found = e
+                print(f"[MODEL] '{m}' devolvió 404 (no disponible); probando siguiente...")
+                continue
+        # Ningún modelo de la lista está disponible
+        raise last_not_found
 
     def _extract_search_criteria(self, query: str, previous_criteria: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -401,8 +433,7 @@ Responde SOLO con el JSON de criterios."""
         try:
             start_time = time.time()
 
-            message = self.client.messages.create(
-                model=self.model,
+            message = self._messages_create_with_fallback(
                 max_tokens=1024,
                 system=system_prompt,
                 messages=[
@@ -608,11 +639,111 @@ Responde SOLO con el JSON de criterios."""
             search_log.log_error(f"Error al parsear JSON: {e}", "criteria_extraction")
             print(f"⚠️  Error al parsear JSON: {e}")
             print(f"Respuesta: {response_text}")
-            return {}
+            # Claude respondió pero con formato inválido: intentar respaldo heurístico
+            return self._fallback_criteria(query, reason='json_parse')
+        except anthropic.APIError as e:
+            # Falla de la API de Claude (cuota agotada, rate limit, conexión, 4xx/5xx).
+            # No es lo mismo que "no hay resultados": activamos modo degradado.
+            search_log.log_error(f"API Claude no disponible: {e}", "criteria_extraction")
+            print(f"❌ API de Claude no disponible: {e}")
+            return self._fallback_criteria(query, reason='ai_unavailable')
         except Exception as e:
             search_log.log_error(str(e), "criteria_extraction")
             print(f"❌ Error al extraer criterios: {e}")
+            return self._fallback_criteria(query, reason='unknown')
+
+    def _extract_criteria_regex(self, query: str) -> Dict[str, Any]:
+        """
+        Extracción heurística de respaldo (sin IA) para cuando Claude no está
+        disponible (cuota agotada, rate limit, caída de red). Cubre los filtros
+        de mayor impacto: precio, área, habitaciones, baños, tipo y zona.
+
+        No pretende igualar a Claude; su objetivo es que el buscador siga
+        funcionando en modo degradado en vez de devolver 0 resultados.
+        """
+        from src.core.search_context import extract_all_explicit_criteria
+
+        q = normalizar_texto_busqueda(query or '')
+        ql = quitar_acentos(q.lower())
+        criteria: Dict[str, Any] = {}
+
+        # Precio / área / habitaciones / baños (regex ya probado en search_context)
+        try:
+            extracted = extract_all_explicit_criteria(q) or {}
+            # El extractor de área puede confundir un número de precio ("3500 millones")
+            # con área. Solo conservamos área si el texto menciona una unidad de área.
+            if not re.search(r'\d+\s*(?:m2|m²|metros?|mts?)\b', ql):
+                extracted.pop('area_min', None)
+                extracted.pop('area_max', None)
+                extracted.pop('area_min_ajustado', None)
+                extracted.pop('area_max_ajustado', None)
+            criteria.update(extracted)
+        except Exception as _e:
+            print(f"[FALLBACK] extract_all_explicit_criteria falló: {_e}")
+
+        # Tipo de propiedad (primer match gana; 'apartament' antes que 'apto')
+        for needle, tipo in [
+            ('apartaestudio', 'Apartaestudio'), ('penthouse', 'Penthouse'),
+            ('duplex', 'Duplex'), ('apartament', 'Apartamento'), ('apto', 'Apartamento'),
+            ('casa', 'Casa'), ('oficina', 'Oficina'), ('local', 'Local'),
+            ('bodega', 'Bodega'), ('finca', 'Finca'), ('lote', 'Lote'),
+        ]:
+            if needle in ql:
+                criteria['tipo_propiedad'] = tipo
+                break
+
+        # Ubicaciones: buscar nombres de zona/ciudad conocidos dentro del texto
+        candidatos = list(ZONA_A_CIUDAD.keys()) + [
+            'Medellín', 'Envigado', 'Sabaneta', 'Itagüí', 'Bello', 'Rionegro',
+            'La Estrella', 'El Retiro', 'La Ceja', 'Copacabana', 'Caldas',
+        ]
+        ubic: List[str] = []
+        for nombre in candidatos:
+            n = quitar_acentos(nombre.lower())
+            if len(n) >= 4 and re.search(r'\b' + re.escape(n), ql):
+                z = normalizar_zona(nombre)
+                if z not in ubic:
+                    ubic.append(z)
+        if ubic:
+            criteria['ubicaciones'] = ubic
+            expandidas: List[str] = []
+            for z in ubic:
+                for e in get_zonas_expandidas(z):
+                    if e not in expandidas:
+                        expandidas.append(e)
+            criteria['zonas_expandidas'] = expandidas
+
+        if not criteria:
             return {}
+
+        # Flexibilidad de precio (afecta el rango calculado en SQL)
+        if re.search(r'\b(hasta|maximo|max|no\s+mas\s+de)\b', ql):
+            criteria['flexibilidad_precio'] = 'estricto'
+
+        # Perfil de comprador (heurística existente)
+        try:
+            criteria['perfil_comprador'] = detectar_perfil_comprador(query, criteria)
+        except Exception:
+            criteria['perfil_comprador'] = 'general'
+
+        return criteria
+
+    def _fallback_criteria(self, query: str, reason: str) -> Dict[str, Any]:
+        """
+        Intenta una extracción heurística cuando Claude falla. Si logra extraer
+        algún criterio útil devuelve criterios marcados como degradados; si no,
+        devuelve un marcador de fallo para que search() responda con un mensaje
+        claro en vez de 'no encontré propiedades'.
+        """
+        raw = self._extract_criteria_regex(query)
+        if raw:
+            raw['_degraded'] = True
+            raw['_extraction_reason'] = reason
+            search_log.info(f"[FALLBACK] Extracción heurística activa ({reason}): {list(raw.keys())}")
+            print(f"⚙️  Modo degradado ({reason}); criterios heurísticos: {raw}")
+            return raw
+        print(f"❌ Sin criterios tras fallback heurístico ({reason})")
+        return {'_extraction_failed': True, '_extraction_reason': reason}
 
     def _build_relaxed_criteria(self, criteria: Dict[str, Any], level: int) -> Dict[str, Any]:
         """
@@ -1237,15 +1368,17 @@ Responde SOLO con el JSON de criterios."""
             params['precio_max_duro'] = precio_max_duro
             _filters_log.append(f"precio <= ${precio_max_duro/1_000_000:.0f}M")
 
-            # v2.14: Aplicar precio_min como filtro SQL duro
-            # Usar precio_min explícito si existe, sino precio_min_implicito (±10%)
-            precio_min_duro = criteria.get('precio_min') or criteria.get('precio_min_implicito')
+            # v2.16: El piso de precio SOLO se aplica como filtro duro cuando el
+            # usuario dio un precio_min EXPLÍCITO (un rango real, ej: "entre 400 y 600").
+            # Para "hasta $X" NO se aplica piso implícito: "hasta 3500M" debe traer
+            # todo lo que cueste ≤ 3500M, no solo la banda 3150M-3850M (bug v2.14).
+            # El precio_min_implicito se conserva en criteria solo para el scoring.
+            precio_min_duro = criteria.get('precio_min')
             if precio_min_duro:
                 conditions.append("precio >= %(precio_min_duro)s")
                 params['precio_min_duro'] = precio_min_duro
-                source = "explícito" if criteria.get('precio_min') else "implícito ±10%"
-                _filters_log.append(f"precio >= ${precio_min_duro/1_000_000:.0f}M ({source})")
-                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M ({source})")
+                _filters_log.append(f"precio >= ${precio_min_duro/1_000_000:.0f}M (explícito)")
+                search_log.info(f"[{search_log.current_search_id}] [SQL-BUILD] Filtro precio: ${precio_min_duro/1_000_000:.0f}M - ${precio_max_duro/1_000_000:.0f}M (explícito)")
 
         # FILTRO DURO #2: Tipo de propiedad (puede ser string o lista)
         if criteria.get('tipo_propiedad'):
@@ -1474,9 +1607,17 @@ Responde SOLO con el JSON de criterios."""
             f"{len(conditions)} filtros: {' | '.join(_filters_log)}"
         )
 
-        # v2.5: Ordenar por precio primero (propiedades dentro del presupuesto primero)
-        # Amenidades como desempate secundario
-        base_query += " ORDER BY precio ASC, total_amenidades DESC"
+        # v2.16: Ordenar el pool de candidatos según el tipo de búsqueda.
+        # En "hasta $X" (tope sin precio_min explícito) ahora NO hay piso de precio,
+        # así que ordenar por precio ASC llenaría el LIMIT con las propiedades más
+        # baratas y dejaría fuera las cercanas al presupuesto. Para esos casos
+        # ordenamos por precio DESC (mejor aprovechamiento del presupuesto primero);
+        # el ranking posterior afina la relevancia. Para rangos explícitos o
+        # búsquedas sin precio se mantiene precio ASC.
+        if criteria.get('precio_max') and not criteria.get('precio_min'):
+            base_query += " ORDER BY precio DESC, total_amenidades DESC"
+        else:
+            base_query += " ORDER BY precio ASC, total_amenidades DESC"
 
         # Limitar resultados (más para ranking posterior)
         base_query += " LIMIT 50"
@@ -2278,14 +2419,40 @@ Responde SOLO con el JSON de criterios."""
                     criteria['habitaciones_max_filtro'] = hab_max_f
                 print(f"   [v2.10] Recalculated room filter: {hab_min_f}-{hab_max_f} (habitaciones changed)")
 
-        if not criteria:
+        # Si la extracción IA falló pero la conversación ya tiene criterios usables,
+        # reutilizarlos para seguir respondiendo en modo degradado en vez de cortar.
+        extraction_failed = (not criteria) or criteria.get('_extraction_failed')
+        if extraction_failed and previous_criteria:
+            BASE_FILTERS = ('precio_max', 'ubicaciones', 'habitaciones_min',
+                            'habitaciones_max', 'tipo_propiedad', 'area_min', 'area_max')
+            if any(previous_criteria.get(f) for f in BASE_FILTERS):
+                reason = (criteria or {}).get('_extraction_reason', 'ai_unavailable')
+                print("⚠️  Extracción IA falló; reutilizando criterios previos (modo degradado)")
+                criteria = {**previous_criteria}
+                criteria['_degraded'] = True
+                criteria['_extraction_reason'] = reason
+                extraction_failed = False
+
+        if extraction_failed:
+            reason = (criteria or {}).get('_extraction_reason', 'unknown')
+            ai_down = reason == 'ai_unavailable'
             search_log.log_error('No se pudieron extraer criterios de búsqueda', 'criteria_extraction')
             return {
                 'success': False,
-                'error': 'No se pudieron extraer criterios de búsqueda',
+                'error': (
+                    'El buscador con IA está temporalmente no disponible. '
+                    'Por favor intenta de nuevo en unos minutos.'
+                    if ai_down else
+                    'No pude entender tu búsqueda. Cuéntame zona, presupuesto y número de habitaciones.'
+                ),
+                'error_type': 'ai_unavailable' if ai_down else 'no_criteria',
                 'criteria': {},
                 'results': []
             }
+
+        if criteria.get('_degraded'):
+            search_log.info(f"[{search_log.current_search_id}] [DEGRADED] Búsqueda en modo degradado (sin IA)")
+            print("⚠️  Búsqueda en modo degradado (Claude no disponible): usando criterios heurísticos")
 
         # Diagnostic: log criteria summary for funnel
         search_log.log_criteria_summary(criteria)

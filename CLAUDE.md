@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Proyecto Cupido** is an intelligent WhatsApp-based real estate matching system for Bancolombia real estate agents. It automates property search, captures properties from Wasi/Tu360 links, matches buyers with sellers, and provides complete traceability.
+**Proyecto Cupido** is an intelligent WhatsApp-based real estate matching system for Bancolombia real estate agents. It automates property search, captures properties from Wasi links, matches buyers with sellers, and provides complete traceability.
 
 ## Quick Start - WhatsApp Bot System
 
@@ -46,7 +46,7 @@ Send a WhatsApp message to your UltraMSG number:
 - **"hola"** - Get welcome message
 - **"ayuda"** - Get help menu
 - **"Busco apto en Laureles, 2 habitaciones, hasta 500 millones"** - Search properties
-- Share a Wasi/Tu360 link - Capture property
+- Share a Wasi link - Capture property
 
 ### System Flow
 
@@ -57,7 +57,7 @@ WhatsApp Message → UltraMSG → ngrok → /webhook (Flask)
                                           ↓
                                    CupidoManager.detectar_tipo_mensaje()
                                     ↓                    ↓
-                            [Wasi/Tu360 Link]      [Search Query]
+                            [Wasi Link]            [Search Query]
                                     ↓                    ↓
                             WasiScraper         PropertySearchAgent
                                     ↓                    ↓
@@ -91,7 +91,6 @@ proyecto-cupido-front/
 │   │   └── database.py           # PostgreSQL operations
 │   └── scrapers/                 # Web scrapers
 │       ├── wasi.py               # Wasi.co scraper
-│       ├── tu360.py              # Tu360 scraper
 │       └── utils.py              # Scraper utilities
 ├── db/                           # Database schemas
 │   ├── schema.sql                # Base property schema
@@ -153,7 +152,6 @@ ngrok http 5050
 - `GET /api/property-images/<id>` - Get property images
 - `GET /api/filter-options` - Get filter options with counts
 - `POST /api/scrape-wasi` - Scrape property from Wasi URL
-- `POST /api/scrape-tu360` - Scrape property from Tu360 URL
 
 ### Analytics API (`/api/analytics`)
 - `GET /api/analytics/overview` - System metrics
@@ -209,7 +207,7 @@ WhatsApp (UltraMSG) → webhook → src/main.py
 - Ranks results by relevance
 
 ### Scrapers (`src/scrapers/`)
-- Extract property data from Wasi.co and Tu360
+- Extract property data from Wasi.co
 - Normalize data to common schema
 - Save to database with source tracking
 

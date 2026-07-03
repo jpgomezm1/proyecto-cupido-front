@@ -1220,7 +1220,21 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
     if 'search_state' in accumulated_criteria:
         accumulated_criteria['search_state']['phase'] = SearchPhase.READY_TO_SEARCH.value
 
-    if total_found > 0:
+    # Distinguir un fallo del buscador (ej: cuota de IA agotada) de "0 resultados".
+    search_failed = not search_response.get('success', True)
+    error_type = search_response.get('error_type')
+
+    if search_failed:
+        if error_type == 'ai_unavailable':
+            assistant_content = (
+                "⚠️ El buscador con IA está temporalmente no disponible. "
+                "Por favor intenta de nuevo en unos minutos."
+            )
+        else:
+            assistant_content = search_response.get('error') or (
+                "No pude procesar tu búsqueda en este momento. Intenta de nuevo."
+            )
+    elif total_found > 0:
         # v2.11: Mensaje diferenciado para búsquedas relajadas
         if search_response.get('relaxation_applied'):
             assistant_content = f"No encontré exactamente lo que buscas, pero encontré {total_found} opciones cercanas."
@@ -1257,6 +1271,7 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
         'search_type': search_response.get('search_type', 'exacta'),
         'relaxation_applied': search_response.get('relaxation_applied'),
         'alignment_info': search_response.get('alignment_info'),
+        'error_type': error_type,
     }, default=str)
 
     propiedades_ids = [r.get('id') for r in results if r.get('id')]
@@ -1321,6 +1336,7 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
         'search_type': search_response.get('search_type', 'exacta'),
         'relaxation_applied': search_response.get('relaxation_applied'),
         'alignment_info': search_response.get('alignment_info'),
+        'error_type': error_type,
     }
 
     if isinstance(asst_msg_row, dict):

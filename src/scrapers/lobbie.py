@@ -67,8 +67,10 @@ class LobbieScraper:
             True si es válida
         """
         patrones = [
-            r'app\.lobbieapp\.com/sp/',
+            r'app\.lobbieapp\.com/sp/',       # formato antiguo
+            r'app\.lobbieapp\.com/inmueble/',  # formato nuevo (Next.js) 2026+
             r'lobbieapp\.com/sp/',
+            r'lobbieapp\.com/inmueble/',
         ]
         return any(re.search(patron, url) for patron in patrones)
 
@@ -547,6 +549,124 @@ class LobbieScraper:
 
         return data
 
+    def _extraer_datos_ssr(self, soup: BeautifulSoup, html: str) -> Dict:
+        """
+        Extrae datos del formato NUEVO de Lobbie (app Next.js / server-side render,
+        rutas /inmueble/...). El contenido ya NO usa <h4>/<pre>/orbit-holder; los
+        datos vienen renderizados como texto etiquetado en una tabla
+        "Datos principales" y las imágenes como URLs de CloudFront en <link preload>.
+
+        Args:
+            soup: BeautifulSoup del HTML
+            html: HTML crudo (para extraer URLs de imágenes)
+
+        Returns:
+            Dict con los campos de la propiedad
+        """
+        data: Dict = {}
+
+        # Texto visible normalizado (todo el DOM renderizado)
+        txt = re.sub(r'\s+', ' ', soup.get_text(' ', strip=True))
+
+        # Acotar los campos numéricos a la tabla "Datos principales" para evitar
+        # colisiones con el encabezado (que usa "N baños" en vez de "Baños N").
+        m_tabla = re.search(r'Datos principales(.+?)(?:Descripci[oó]n|Esta p[aá]gina)', txt, re.I)
+        tabla = m_tabla.group(1) if m_tabla else txt
+
+        def _buscar(patron: str, fuente: str, cast=None):
+            m = re.search(patron, fuente, re.I)
+            if not m:
+                return None
+            valor = m.group(1).strip()
+            if cast is None:
+                return valor
+            try:
+                return cast(valor)
+            except (ValueError, TypeError):
+                return None
+
+        def _int_puntos(v: str) -> int:
+            return int(v.replace('.', '').replace(',', ''))
+
+        # --- Código de propiedad ---
+        data['codigo_propiedad'] = _buscar(r'C[oó]digo\s*(\d+)', tabla) \
+            or _buscar(r'C[oó]digo:?\s*(\d+)', txt)
+
+        # --- Precio y tipo de negocio ---
+        precio = _buscar(r'Precio\s*COP\s*([\d.]+)', tabla, _int_puntos) \
+            or _buscar(r'COP\s*([\d.]+)', txt, _int_puntos)
+        data['precio'] = precio
+        es_arriendo = bool(re.search(r'\ben\s+arriendo\b|arrendamiento|renta\b|canon', txt, re.I))
+        data['tipo_negocio'] = 'Arriendo' if es_arriendo else 'Venta'
+        if precio:
+            etiqueta = 'Arriendo' if es_arriendo else 'Venta'
+            data['precio_texto'] = f"Precio {etiqueta}: COP {precio:,.0f}".replace(',', '.')
+
+        # --- Características físicas (desde la tabla) ---
+        data['area_construida'] = _buscar(r'[ÁA]rea\s*(\d+(?:[.,]\d+)?)', tabla,
+                                           lambda v: float(v.replace(',', '.')))
+        data['habitaciones'] = _buscar(r'Habitaciones\s*(\d+)', tabla, int)
+        data['banos'] = _buscar(r'Ba[ñn]os\s*(\d+)', tabla, int)
+        data['parqueaderos'] = _buscar(r'Parqueaderos\s*(\d+)', tabla, int)
+        estrato = _buscar(r'Estrato\s*(\d+)', tabla, int)
+        data['estrato'] = estrato if estrato else None  # 0 = no especificado
+        data['ano_construccion'] = _buscar(r'A[ñn]o construido\s*(\d{4})', tabla, int)
+        data['piso'] = None
+
+        admin = _buscar(r'Administraci[oó]n\s*([\d.]+)', tabla)
+        data['administracion'] = _int_puntos(admin) if admin else None
+        predial = _buscar(r'Predial\s*([\d.]+)', tabla)
+        data['predial'] = _int_puntos(predial) if predial else None
+
+        # --- Tipo de propiedad y ubicación (desde el encabezado) ---
+        m_header = re.search(r'compartido\s+(.+?)\s+C[oó]digo:', txt, re.I)
+        header = m_header.group(1).strip() if m_header else ''
+
+        m_tipo = re.search(
+            r'\b(Apartaestudio|Apartamento|Casa|Penthouse|Duplex|Local|Oficina|Bodega|Finca|Lote)\b',
+            header, re.I)
+        data['tipo_propiedad'] = PropertyNormalizer.normalizar_tipo_propiedad(
+            m_tipo.group(1)) if m_tipo else None
+
+        # Quitar el prefijo "{Tipo} en {arriendo|venta}" para dejar "ZONA, Ciudad, Depto"
+        loc = re.sub(r'^.*?\ben\s+(?:arriendo|arrendamiento|renta|venta)\s+', '',
+                     header, flags=re.I).strip()
+        partes = [p.strip() for p in loc.split(',') if p.strip()]
+        data['pais'] = 'Colombia'
+        data['zona'] = PropertyNormalizer.normalizar_barrio(partes[0]) if len(partes) >= 1 else None
+        data['ciudad'] = PropertyNormalizer.normalizar_ciudad(partes[1]) if len(partes) >= 2 else None
+        data['departamento'] = PropertyNormalizer.normalizar_departamento(partes[2]) if len(partes) >= 3 else None
+        data['direccion_completa'] = loc or None
+
+        # --- Descripción ---
+        m_desc = re.search(r'Descripci[oó]n\s+(.+?)\s+Esta p[aá]gina fue creada', txt, re.I)
+        data['descripcion'] = m_desc.group(1).strip() if m_desc else None
+
+        # --- Título ---
+        if data.get('tipo_propiedad') and data.get('zona'):
+            data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(
+                f"{data['tipo_propiedad']} en {data['zona']}")
+
+        # --- Imágenes (CloudFront, en <link rel=preload> y <img>) ---
+        imgs = sorted(set(re.findall(
+            r'https://[a-z0-9.]*cloudfront\.net/properties/\d+/photos/\d+/[^"&\\ ]+\.(?:jpg|jpeg|png|webp)',
+            html, re.I)))
+        # Respaldo: og:image (proxy de Lobbie) si no hubo CloudFront
+        if not imgs:
+            meta = self._extraer_meta_tags(soup)
+            if meta.get('og_image'):
+                imgs = [meta['og_image']]
+        data['imagenes_urls'] = ' | '.join(imgs) if imgs else None
+        data['imagen_principal'] = imgs[0] if imgs else None
+        data['total_imagenes'] = len(imgs)
+
+        # --- Amenidades: el formato nuevo no las lista en el HTML renderizado ---
+        data['amenidades_internas'] = None
+        data['amenidades_externas'] = None
+        data['total_amenidades'] = 0
+
+        return data
+
     def extract_property_data(self, url: str) -> Optional[Dict]:
         """
         Extrae todos los datos de una propiedad de Lobbie
@@ -601,58 +721,76 @@ class LobbieScraper:
                 'estado': 'Disponible'
             }
 
-            # Código de propiedad
-            codigo = self._extraer_codigo_propiedad(soup, url)
-            data['codigo_propiedad'] = codigo
-            if scraper_log:
-                scraper_log.log_data_extraction('codigo_propiedad', codigo, bool(codigo))
+            # Detectar formato: el formato nuevo (Next.js, rutas /inmueble/) NO
+            # tiene <h4>; los datos van en una tabla "Datos principales".
+            usa_formato_legacy = bool(soup.find_all('h4'))
 
-            # Precio
-            precio_data = self._extraer_precio(soup)
-            data.update(precio_data)
-            if scraper_log:
-                scraper_log.log_data_extraction('precio', precio_data.get('precio'), bool(precio_data.get('precio')))
+            if not usa_formato_legacy:
+                # ===== FORMATO NUEVO (SSR /inmueble/) =====
+                self._log("   Formato detectado: nuevo (Next.js SSR)")
+                data.update(self._extraer_datos_ssr(soup, html))
+                if scraper_log:
+                    scraper_log.log_data_extraction('codigo_propiedad', data.get('codigo_propiedad'), bool(data.get('codigo_propiedad')))
+                    scraper_log.log_data_extraction('precio', data.get('precio'), bool(data.get('precio')))
+                    scraper_log.log_data_extraction('ciudad', data.get('ciudad'), bool(data.get('ciudad')))
+                    scraper_log.log_data_extraction('zona', data.get('zona'), bool(data.get('zona')))
+                    scraper_log.log_data_extraction('habitaciones', data.get('habitaciones'), data.get('habitaciones') is not None)
+                    scraper_log.log_images_extracted(data.get('total_imagenes', 0), data.get('total_imagenes', 0))
+            else:
+                # ===== FORMATO LEGACY (/sp/) =====
+                self._log("   Formato detectado: legacy (/sp/)")
+                # Código de propiedad
+                codigo = self._extraer_codigo_propiedad(soup, url)
+                data['codigo_propiedad'] = codigo
+                if scraper_log:
+                    scraper_log.log_data_extraction('codigo_propiedad', codigo, bool(codigo))
 
-            # Ubicación
-            ubicacion_data = self._extraer_ubicacion(soup)
-            data.update(ubicacion_data)
-            if scraper_log:
-                scraper_log.log_data_extraction('ciudad', ubicacion_data.get('ciudad'), bool(ubicacion_data.get('ciudad')))
-                scraper_log.log_data_extraction('zona', ubicacion_data.get('zona'), bool(ubicacion_data.get('zona')))
+                # Precio
+                precio_data = self._extraer_precio(soup)
+                data.update(precio_data)
+                if scraper_log:
+                    scraper_log.log_data_extraction('precio', precio_data.get('precio'), bool(precio_data.get('precio')))
 
-            # Características físicas
-            caracteristicas_data = self._extraer_caracteristicas(soup)
-            data.update(caracteristicas_data)
-            if scraper_log:
-                scraper_log.log_data_extraction('habitaciones', caracteristicas_data.get('habitaciones'),
-                                                caracteristicas_data.get('habitaciones') is not None)
-                scraper_log.log_data_extraction('area_construida', caracteristicas_data.get('area_construida'),
-                                                caracteristicas_data.get('area_construida') is not None)
+                # Ubicación
+                ubicacion_data = self._extraer_ubicacion(soup)
+                data.update(ubicacion_data)
+                if scraper_log:
+                    scraper_log.log_data_extraction('ciudad', ubicacion_data.get('ciudad'), bool(ubicacion_data.get('ciudad')))
+                    scraper_log.log_data_extraction('zona', ubicacion_data.get('zona'), bool(ubicacion_data.get('zona')))
 
-            # Costos adicionales
-            costos_data = self._extraer_costos(soup)
-            data.update(costos_data)
-            if scraper_log:
-                scraper_log.log_data_extraction('administracion', costos_data.get('administracion'),
-                                                costos_data.get('administracion') is not None)
+                # Características físicas
+                caracteristicas_data = self._extraer_caracteristicas(soup)
+                data.update(caracteristicas_data)
+                if scraper_log:
+                    scraper_log.log_data_extraction('habitaciones', caracteristicas_data.get('habitaciones'),
+                                                    caracteristicas_data.get('habitaciones') is not None)
+                    scraper_log.log_data_extraction('area_construida', caracteristicas_data.get('area_construida'),
+                                                    caracteristicas_data.get('area_construida') is not None)
 
-            # Amenidades
-            amenidades_data = self._extraer_amenidades(soup)
-            data.update(amenidades_data)
-            if scraper_log:
-                scraper_log.log_data_extraction('amenidades', amenidades_data.get('total_amenidades'),
-                                                amenidades_data.get('total_amenidades', 0) > 0)
+                # Costos adicionales
+                costos_data = self._extraer_costos(soup)
+                data.update(costos_data)
+                if scraper_log:
+                    scraper_log.log_data_extraction('administracion', costos_data.get('administracion'),
+                                                    costos_data.get('administracion') is not None)
 
-            # Imágenes
-            imagenes_data = self._extraer_imagenes(soup)
-            data.update(imagenes_data)
-            if scraper_log:
-                scraper_log.log_images_extracted(imagenes_data.get('total_imagenes', 0),
-                                                 imagenes_data.get('total_imagenes', 0))
+                # Amenidades
+                amenidades_data = self._extraer_amenidades(soup)
+                data.update(amenidades_data)
+                if scraper_log:
+                    scraper_log.log_data_extraction('amenidades', amenidades_data.get('total_amenidades'),
+                                                    amenidades_data.get('total_amenidades', 0) > 0)
 
-            # Descripción y título
-            descripcion_data = self._extraer_descripcion(soup)
-            data.update(descripcion_data)
+                # Imágenes
+                imagenes_data = self._extraer_imagenes(soup)
+                data.update(imagenes_data)
+                if scraper_log:
+                    scraper_log.log_images_extracted(imagenes_data.get('total_imagenes', 0),
+                                                     imagenes_data.get('total_imagenes', 0))
+
+                # Descripción y título
+                descripcion_data = self._extraer_descripcion(soup)
+                data.update(descripcion_data)
 
             # Generar título si no existe
             if not data.get('titulo'):
@@ -717,8 +855,8 @@ def main():
 ╚════════════════════════════════════════════════════════════╝
     """)
 
-    # URL de prueba
-    test_url = "https://app.lobbieapp.com/sp/1gv6/GQ/1/1"
+    # URL de prueba (formato nuevo /inmueble/)
+    test_url = "https://app.lobbieapp.com/inmueble/1i4W?a=1&s=0&u=e944f387-e9ac-4ac0-b121-39eae55030cb"
 
     # Crear scraper
     scraper = LobbieScraper(verbose=True)
