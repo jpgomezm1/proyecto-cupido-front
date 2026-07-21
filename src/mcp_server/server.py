@@ -12,10 +12,13 @@ CUÁNDO usarla.
 
 from typing import Any, Dict, List, Optional
 
+from urllib.parse import urlparse
+
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.settings import (
     AuthSettings, ClientRegistrationOptions, RevocationOptions,
 )
+from mcp.server.transport_security import TransportSecuritySettings
 
 from src.mcp_server.identity_context import require_agent, current_agent, AuthError
 from src.mcp_server.oauth_provider import FynderOAuthProvider, public_base_url, DEFAULT_SCOPES
@@ -36,9 +39,25 @@ _INSTRUCTIONS = (
 )
 
 _base = public_base_url()
+
+# Protección anti-DNS-rebinding: por defecto FastMCP solo permite localhost, lo
+# que rechaza el host real de Heroku (421 Invalid Host header). Autorizamos el
+# host público (derivado de MCP_PUBLIC_URL) + localhost para dev.
+_netloc = urlparse(_base).netloc or "localhost:8767"
+_bare = _netloc.split(":")[0]
+_allowed_hosts = list({
+    _netloc, _bare, f"{_bare}:*",
+    "localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]:*",
+})
+
 mcp = FastMCP(
     name="Fynder",
     instructions=_INSTRUCTIONS,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=["https://claude.ai", "https://claude.com", _base],
+    ),
     # OAuth 2.1: el MCP es su propio Authorization Server, autenticando contra
     # los chat_users de Fynder. El SDK expone metadata/authorize/token/register.
     auth_server_provider=FynderOAuthProvider(),
