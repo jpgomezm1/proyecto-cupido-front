@@ -53,6 +53,11 @@ _allowed_hosts = list({
 mcp = FastMCP(
     name="Fynder",
     instructions=_INSTRUCTIONS,
+    # Streamable HTTP sin estado en memoria: cada request es independiente, así
+    # funciona con múltiples workers/dynos (Heroku corre 2 workers por defecto).
+    # Sin esto, la sesión creada en un worker no la encuentra otro -> 404
+    # "Session terminated" al pedir la lista de tools.
+    stateless_http=True,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=_allowed_hosts,
