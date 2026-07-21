@@ -15,10 +15,14 @@ pasos cortos, botones de copiar. Diseño alineado a la identidad de Fynder
 import os
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 from src.services.mcp_signup_service import self_register, SignupError
+
+# Ícono del servidor/conector: Claude busca el favicon en la raíz al agregar el
+# MCP. Se sirve el logo de Findy para que el conector muestre esa imagen.
+FINDY_ICON = "https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png"
 
 
 def _public_url(request: Request) -> str:
@@ -60,6 +64,11 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "fynder-mcp"})
 
 
+async def favicon(request: Request) -> RedirectResponse:
+    """Ícono del conector/servidor: redirige al logo de Findy."""
+    return RedirectResponse(url=FINDY_ICON, status_code=302)
+
+
 async def home(request: Request) -> HTMLResponse:
     require_code = bool(os.getenv("MCP_SIGNUP_CODE"))
     return HTMLResponse(_PAGE.replace("__REQUIRE_CODE__", "true" if require_code else "false"))
@@ -71,6 +80,8 @@ def onboarding_routes():
         Route("/connect", home, methods=["GET"]),
         Route("/connect/token", token_endpoint, methods=["POST"]),
         Route("/salud", health, methods=["GET"]),
+        Route("/favicon.ico", favicon, methods=["GET"]),
+        Route("/icon.png", favicon, methods=["GET"]),
     ]
 
 

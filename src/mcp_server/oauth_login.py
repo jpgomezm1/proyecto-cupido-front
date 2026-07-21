@@ -65,6 +65,10 @@ def oauth_login_routes():
 # HTML (identidad Fynder: negro / verde / Inter).
 # ---------------------------------------------------------------------------
 
+FYNDER_LOGO = "https://storage.googleapis.com/cluvi/FYNDER/logo_blanco_fynder_final.png"
+FINDY_AVATAR = "https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png"
+IRRELEVANT_LOGO = "https://storage.googleapis.com/cluvi/nuevo_irre-removebg-preview.png"
+
 _BASE_STYLE = """
   :root{ --bg:#0A0A0A; --bg-2:#141414; --border:#2A2A2A; --white:#FAFAFA;
          --text:#E5E5E5; --text-2:#A3A3A3; --text-3:#6B6B6B; --green:#2AE38C; --green-d:#1FC97A; }
@@ -72,15 +76,16 @@ _BASE_STYLE = """
   body{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
         background:var(--bg); color:var(--text); min-height:100vh; display:grid; place-items:center; padding:20px;
         background-image:radial-gradient(ellipse 900px 600px at 50% -10%, rgba(42,227,140,.07), transparent 60%); }
-  .card{ width:100%; max-width:400px; background:linear-gradient(180deg,#0F0F0F,#0A0A0A);
-         border:1px solid #1F1F1F; border-radius:22px; padding:34px 30px; }
-  .brand{ display:flex; align-items:center; gap:10px; justify-content:center; margin-bottom:6px; }
-  .mark{ width:34px; height:34px; border-radius:9px; display:grid; place-items:center;
-         background:linear-gradient(150deg,var(--green),var(--green-d)); }
-  .mark svg{ width:19px; height:19px; }
-  .brand b{ font-weight:800; font-size:19px; color:var(--white); letter-spacing:-.02em; }
-  .brand b span{ color:var(--green); }
-  h1{ text-align:center; font-size:20px; color:var(--white); margin-top:16px; font-weight:700; }
+  .card{ width:100%; max-width:410px; background:linear-gradient(180deg,#0F0F0F,#0A0A0A);
+         border:1px solid #1F1F1F; border-radius:22px; padding:34px 30px 26px; }
+  .logo{ display:flex; justify-content:center; margin-bottom:22px; }
+  .logo img{ height:30px; width:auto; }
+  .findy{ display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:4px; }
+  .findy-badge{ position:relative; }
+  .findy-badge img{ height:56px; width:56px; object-fit:contain; }
+  .findy-badge .dot{ position:absolute; bottom:2px; right:2px; width:12px; height:12px; border-radius:50%;
+         background:var(--green); border:2px solid #0A0A0A; }
+  h1{ text-align:center; font-size:20px; color:var(--white); margin-top:14px; font-weight:700; }
   p.sub{ text-align:center; color:var(--text-2); font-size:14px; margin-top:6px; margin-bottom:22px; }
   label{ display:block; font-size:13px; color:var(--text-2); margin:14px 0 7px; font-weight:600; }
   input{ width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--border);
@@ -91,26 +96,34 @@ _BASE_STYLE = """
           background:linear-gradient(150deg,#5DFAAB,var(--green)); box-shadow:0 10px 30px rgba(42,227,140,.25); }
   .error{ background:rgba(255,92,92,.08); border:1px solid rgba(255,92,92,.35); color:#ffb4bd;
           padding:11px 14px; border-radius:11px; font-size:14px; margin-top:16px; text-align:center; }
-  .foot{ text-align:center; color:var(--text-3); font-size:12.5px; margin-top:20px; line-height:1.6; }
+  .foot{ text-align:center; color:var(--text-3); font-size:12.5px; margin-top:18px; line-height:1.6; }
   .lock{ display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:12px; font-weight:600;
          justify-content:center; width:100%; margin-top:4px; }
+  .dev{ display:flex; align-items:center; justify-content:center; gap:8px; margin-top:24px;
+        padding-top:20px; border-top:1px solid #1A1A1A; }
+  .dev span{ color:var(--text-4,#4A4A4A); font-size:12px; }
+  .dev img{ height:18px; width:auto; opacity:.6; transition:opacity .2s; }
+  .dev:hover img{ opacity:1; }
 """
 
-_MARK_SVG = ('<div class="mark"><svg viewBox="0 0 24 24" fill="none">'
-             '<path d="M12 2C7.9 2 4.5 5.4 4.5 9.5c0 5 7.5 12.5 7.5 12.5s7.5-7.5 7.5-12.5C19.5 5.4 16.1 2 12 2z" fill="#04120a"/>'
-             '<circle cx="12" cy="9.5" r="3" fill="#2AE38C"/></svg></div>')
+_DEV_BY = (f'<div class="dev"><span>Developed by</span>'
+           f'<img src="{IRRELEVANT_LOGO}" alt="irrelevant"></div>')
 
 _LOGIN_HTML = f"""<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Iniciar sesión · Fynder</title>
+<link rel="icon" type="image/png" href="{FINDY_AVATAR}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>{_BASE_STYLE}</style></head>
 <body>
   <form class="card" method="post" action="/oauth/login">
-    <div class="brand">{_MARK_SVG}<b>Fy<span>nder</span></b></div>
-    <h1>Conecta tu IA con Fynder</h1>
+    <div class="logo"><img src="{FYNDER_LOGO}" alt="Fynder"></div>
+    <div class="findy">
+      <div class="findy-badge"><img src="{FINDY_AVATAR}" alt="Findy"><span class="dot"></span></div>
+    </div>
+    <h1>Conecta a Findy con tu IA</h1>
     <p class="sub">Inicia sesión con tu cuenta de Fynder para autorizar la conexión.</p>
     __ERROR__
     <input type="hidden" name="rid" value="__RID__">
@@ -121,6 +134,7 @@ _LOGIN_HTML = f"""<!doctype html>
     <button type="submit">Iniciar sesión y autorizar</button>
     <div class="lock">🔒 Conexión segura · solo autorizas el acceso a tus datos</div>
     <div class="foot">Al autorizar, tu asistente de IA podrá consultar Fynder en tu nombre.<br>Puedes revocar el acceso cuando quieras.</div>
+    {_DEV_BY}
   </form>
 </body></html>"""
 
@@ -128,10 +142,12 @@ _EXPIRED_HTML = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Enlace expirado · Fynder</title>
+<link rel="icon" type="image/png" href="{FINDY_AVATAR}">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <style>{_BASE_STYLE}</style></head>
 <body><div class="card" style="text-align:center">
-  <div class="brand">{_MARK_SVG}<b>Fy<span>nder</span></b></div>
+  <div class="logo"><img src="{FYNDER_LOGO}" alt="Fynder"></div>
   <h1>El enlace de conexión expiró</h1>
   <p class="sub">Vuelve a tu asistente de IA e intenta agregar el conector de Fynder de nuevo.</p>
+  {_DEV_BY}
 </div></body></html>"""
