@@ -77,15 +77,30 @@ def split_image_urls(raw: Optional[str]) -> List[str]:
 
 
 def format_cop(value: Optional[float]) -> str:
-    """Formatea un monto en pesos colombianos de forma legible (para humanos)."""
+    """
+    Formatea un monto en pesos colombianos como lo diría un agente.
+
+    IMPORTANTE: en español "billón" = 10^12, NO mil millones. Nunca se usa "B".
+    Todo se expresa en MILLONES con separador de miles de punto (formato CO):
+      650.000.000    -> "$650 millones"
+      1.290.000.000  -> "$1.290 millones"
+      8.770.000      -> "$8,8 millones"   (precio/m²)
+      950.000        -> "$950.000"
+    """
     if value is None:
         return "N/D"
     try:
         v = float(value)
     except (TypeError, ValueError):
         return "N/D"
-    if v >= 1_000_000_000:
-        return f"${v / 1_000_000_000:.2f}B".replace(".00B", "B")
     if v >= 1_000_000:
-        return f"${v / 1_000_000:.0f}M"
-    return f"${v:,.0f}"
+        millones = v / 1_000_000
+        if millones >= 100:
+            # Entero con separador de miles de punto (1290 -> "1.290").
+            num = f"{millones:,.0f}".replace(",", ".")
+        else:
+            # Un decimal con coma decimal (8.77 -> "8,8").
+            num = f"{millones:.1f}".replace(".", ",")
+        return f"${num} millones"
+    # Menos de un millón: monto completo con separador de miles de punto.
+    return "$" + f"{v:,.0f}".replace(",", ".")

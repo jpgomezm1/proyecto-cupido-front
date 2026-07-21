@@ -28,9 +28,14 @@ def test_like_param_normalizes():
 
 
 def test_format_cop():
-    assert format_cop(1_290_000_000) == "$1.29B"
-    assert format_cop(650_000_000) == "$650M"
+    # Formato colombiano: millones, separador de miles de punto, NUNCA "B".
+    assert format_cop(1_290_000_000) == "$1.290 millones"
+    assert format_cop(650_000_000) == "$650 millones"
+    assert format_cop(2_600_000_000) == "$2.600 millones"
+    assert format_cop(8_770_000) == "$8,8 millones"
+    assert format_cop(950_000) == "$950.000"
     assert format_cop(None) == "N/D"
+    assert "B" not in format_cop(1_290_000_000)
 
 
 def test_split_image_urls():

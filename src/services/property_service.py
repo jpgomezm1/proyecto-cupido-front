@@ -358,11 +358,15 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None) -> Dict[
     agent = _get_search_agent()
     resp = agent.search(query=query, limit=limit, sender=telefono) or {}
 
-    resultados = resp.get("resultados") or resp.get("properties") or []
+    # PropertySearchAgent.search devuelve las filas bajo la clave 'results'
+    # (con 'total_found' y 'criteria'). Antes se leía 'resultados'/'properties'
+    # (claves inexistentes) => siempre 0 resultados.
+    resultados = resp.get("results") or []
     propiedades = []
     for r in resultados:
-        # El agente puede devolver filas crudas o ya normalizadas; se toma lo común.
         precio = r.get("precio")
+        area = r.get("area_construida")
+        precio_m2 = (float(precio) / float(area)) if precio and area else None
         propiedades.append({
             "id": r.get("id"),
             "slug": r.get("codigo_propiedad") or r.get("slug"),
@@ -374,16 +378,22 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None) -> Dict[
             "zona": r.get("zona"),
             "habitaciones": r.get("habitaciones"),
             "banos": r.get("banos"),
-            "area_construida": float(r["area_construida"]) if r.get("area_construida") else None,
+            "area_construida": float(area) if area else None,
+            "precio_m2": precio_m2,
             "url": r.get("url"),
-            "score": r.get("score") or r.get("_score"),
+            "score": r.get("match_score") or r.get("alignment_score"),
         })
 
     return {
         "query": query,
-        "criterios_extraidos": resp.get("criterios") or resp.get("criteria"),
-        "total": len(propiedades),
+        "criterios_extraidos": resp.get("criteria"),
+        "total": resp.get("total_found", len(propiedades)),
         "propiedades": propiedades,
+        # Si el buscador no encontró nada, pasa el motivo/sugerencias para que
+        # Claude lo comunique como "sin coincidencias", no como un error.
+        "sin_resultados": len(propiedades) == 0,
+        "mensaje": resp.get("mensaje_usuario"),
+        "sugerencias": resp.get("sugerencias"),
     }
 
 
