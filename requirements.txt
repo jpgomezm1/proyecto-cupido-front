@@ -55,3 +55,7 @@ bcrypt>=4.0.0
 flask-limiter>=3.0.0
 reportlab>=4.0.0
 resend==2.26.0
+# MCP server (Fynder MCP). Requiere Python >= 3.10; el marcador evita que se
+# intente instalar en el venv local 3.9 del backend. En Heroku corre 3.11.
+mcp>=1.2.0; python_version >= "3.10"
+uvicorn>=0.30.0; python_version >= "3.10"

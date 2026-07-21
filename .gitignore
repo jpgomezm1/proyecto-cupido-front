@@ -18,6 +18,7 @@ secrets.json
 # ========================================
 # Virtual environments
 venv/
+venv-mcp/
 env/
 ENV/
 .venv/

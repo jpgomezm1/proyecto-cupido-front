@@ -261,6 +261,48 @@ def logout():
         }), 500
 
 
+@chat_auth_bp.route('/mcp-info', methods=['GET'])
+@require_chat_auth
+def mcp_info():
+    """Devuelve la dirección pública del MCP de Fynder para conectar la IA (OAuth)."""
+    import os
+    base = os.getenv('MCP_PUBLIC_URL', 'http://localhost:8767').rstrip('/')
+    return jsonify({'success': True, 'data': {'mcp_url': base + '/mcp'}})
+
+
+@chat_auth_bp.route('/mcp-token', methods=['POST'])
+@require_chat_auth
+def crear_mcp_token():
+    """
+    Emite un código de acceso (bearer token) para conectar el MCP de Fynder a la
+    IA del agente. El agente ya está autenticado en el portal, así que solo
+    generamos el token para su cuenta.
+
+    Returns:
+    {
+        "success": true,
+        "data": { "token": "...", "mcp_url": "https://.../mcp" }
+    }
+    """
+    import os
+    try:
+        user = request.chat_user
+        from src.services.mcp_signup_service import issue_token_for_user
+        token = issue_token_for_user(user['id'], label='Portal Fynder')
+        mcp_base = os.getenv('MCP_PUBLIC_URL', 'http://localhost:8767').rstrip('/')
+        return jsonify({
+            'success': True,
+            'data': {
+                'token': token,
+                'mcp_url': mcp_base + '/mcp',
+                'nombre': user.get('nombre'),
+            }
+        })
+    except Exception as e:
+        print(f"Error creando token MCP: {e}")
+        return jsonify({'success': False, 'error': 'No se pudo generar el código de acceso'}), 500
+
+
 @chat_auth_bp.route('/me', methods=['GET'])
 @require_chat_auth
 def get_me():

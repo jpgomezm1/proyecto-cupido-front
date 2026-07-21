@@ -282,14 +282,9 @@ class DatabaseManager:
             print(f"❌ Error al obtener estadísticas: {e}")
             return {}
 
-    def __enter__(self):
-        """Context manager entry"""
-        self.connect()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.disconnect()
+    # NOTA: __enter__/__exit__ se definen una sola vez arriba (con rollback
+    # on-exception). La segunda definición previa se eliminó porque pisaba la
+    # primera y anulaba el rollback ante excepciones dentro del 'with'.
 
     # =========================================================================
     # MÉTODOS ESPECÍFICOS DEL PROYECTO CUPIDO

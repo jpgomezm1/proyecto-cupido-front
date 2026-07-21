@@ -24,7 +24,11 @@ class ImageAnalyzer:
 
     def __init__(self):
         self.client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
-        self.model = "claude-sonnet-4-20250514"  # Modelo con visión
+        # El ID con fecha "claude-sonnet-4-20250514" devolvía 404 para este API
+        # key (mismo incidente documentado en search_agent.py). Se usa el alias
+        # vigente sin sufijo de fecha; todos los Sonnet/Haiku/Opus 4.x tienen
+        # visión, así que sirve para analisis de imagenes.
+        self.model = "claude-sonnet-4-6"  # Modelo con visión (alias vigente)
         self.max_tokens = 1500
 
     def analyze_image(self, image_url: str, property_context: Optional[Dict] = None) -> Dict[str, Any]:
