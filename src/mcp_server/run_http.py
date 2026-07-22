@@ -18,6 +18,7 @@ MCP_PUBLIC_URL apuntando a la URL pública (para que las URLs OAuth sean válida
 from src.mcp_server.server import mcp
 from src.mcp_server.onboarding import onboarding_routes
 from src.mcp_server.oauth_login import oauth_login_routes
+from src.mcp_server.listing_upload import listing_upload_routes
 
 
 def build_app():
@@ -27,6 +28,7 @@ def build_app():
     app = mcp.streamable_http_app()
     app.router.routes.extend(oauth_login_routes())
     app.router.routes.extend(onboarding_routes())
+    app.router.routes.extend(listing_upload_routes())
     return app
 
 

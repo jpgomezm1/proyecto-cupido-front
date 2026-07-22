@@ -21,6 +21,8 @@ EXPECTED_TOOLS = {
     "costo_total_mensual", "match_comprador",
     # Lote 3: inteligencia de ubicación
     "que_hay_cerca",
+    # Crear listing nativo
+    "crear_listing",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "register_buyer_match_tool", "apply_change",

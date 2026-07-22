@@ -28,6 +28,7 @@ from src.services import diagnosis_service as ds
 from src.services import write_service as ws
 from src.services import engagement_service as es
 from src.services import location_service as ls
+from src.services import listing_service as lst
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -483,6 +484,63 @@ def que_hay_cerca(property_id: str) -> Dict[str, Any]:
     if err:
         return err
     return ls.que_hay_cerca_public(property_id)
+
+
+# =========================================================================
+# CREAR LISTING (publicar propiedad nativa en Fynder)
+# =========================================================================
+
+@mcp.tool()
+def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
+                  ciudad: Optional[str] = None, zona: Optional[str] = None,
+                  habitaciones: Optional[int] = None, banos: Optional[int] = None,
+                  parqueaderos: Optional[int] = None, estrato: Optional[int] = None,
+                  titulo: Optional[str] = None, descripcion: Optional[str] = None,
+                  amenidades_internas: Optional[str] = None,
+                  amenidades_externas: Optional[str] = None,
+                  direccion_completa: Optional[str] = None,
+                  administracion: Optional[int] = None,
+                  piso: Optional[int] = None, ano_construccion: Optional[int] = None,
+                  tipo_negocio: str = "Venta",
+                  imagenes_urls: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Publica una propiedad NUEVA en Fynder (listing nativo del agente autenticado).
+
+    IMPORTANTE: TÚ (el asistente) redactas el `titulo` y la `descripcion`
+    atractivos, y armas las amenidades a partir de lo que el agente te cuente y
+    de las fotos que te describa — no hay que llamar a otra IA. Separa varias
+    amenidades con '|' (ej. "Piscina|Gimnasio|Zona infantil").
+
+    El agente DEBE dar los datos que no se pueden inventar: precio (en pesos, ej.
+    600000000), area_construida (m²), tipo_propiedad, y la ubicación (ciudad o
+    zona). Habitaciones, baños, parqueaderos y estrato si los sabe.
+
+    Las FOTOS no se suben por aquí: la respuesta trae un `link_subir_fotos` que
+    el agente abre en el celular para arrastrar las fotos. Dáselo siempre.
+
+    Úsala cuando el agente diga "publica/crea/sube una propiedad/listing".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    if not agent.has_inventory_scope:
+        return {"error": "sin_telefono",
+                "mensaje": "Tu usuario no tiene teléfono asociado; no puedo asignarte la propiedad."}
+    try:
+        data = {
+            "precio": precio, "area_construida": area_construida, "tipo_propiedad": tipo_propiedad,
+            "ciudad": ciudad, "zona": zona, "habitaciones": habitaciones, "banos": banos,
+            "parqueaderos": parqueaderos, "estrato": estrato, "titulo": titulo,
+            "descripcion": descripcion, "amenidades_internas": amenidades_internas,
+            "amenidades_externas": amenidades_externas, "direccion_completa": direccion_completa,
+            "administracion": administracion, "piso": piso, "ano_construccion": ano_construccion,
+            "tipo_negocio": tipo_negocio, "imagenes_urls": imagenes_urls,
+        }
+        return lst.crear_listing(agent.telefono, data,
+                                 agente_nombre=agent.nombre, agente_user_id=agent.user_id)
+    except lst.ListingError as e:
+        return {"error": "datos_incompletos", "mensaje": str(e)}
 
 
 # =========================================================================
