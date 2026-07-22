@@ -1809,23 +1809,38 @@ def improve_description():
         property_info = data.get('property_info', {})
         property_id = data.get('property_id')
 
-        # === PASO 1: Verificar cache en DB si tenemos property_id ===
+        # === PASO 1: Verificar fuente + cache en DB si tenemos property_id ===
         if property_id:
             try:
                 with DatabaseManager() as db:
                     db.cursor.execute("""
-                        SELECT descripcion_ai, highlights_ai
+                        SELECT fuente, descripcion, descripcion_ai, highlights_ai
                         FROM propiedades
-                        WHERE id = %s AND descripcion_ai IS NOT NULL
+                        WHERE id = %s
                     """, (property_id,))
-                    cached = db.cursor.fetchone()
+                    row = db.cursor.fetchone()
 
-                    if cached and cached.get('descripcion_ai'):
-                        # Retornar descripción cacheada
+                    # Listing NATIVO de Fynder: la descripción ya la redactó el LLM
+                    # al crear el listing. NUNCA se llama a Claude para estas — sería
+                    # gastar tokens en algo ya bueno. Se devuelve tal cual.
+                    if row and row.get('fuente') == 'Fynder':
+                        print(f"[API] improve-description: fuente Fynder, sin AI (propiedad {property_id})")
+                        return jsonify({
+                            'success': True,
+                            'data': {
+                                'improved_description': row.get('descripcion') or original_description,
+                                'highlights': [],
+                                'cached': True,
+                                'skip_ai': True,
+                            }
+                        }), 200
+
+                    # Cache: solo se genera UNA vez por propiedad captada.
+                    if row and row.get('descripcion_ai'):
                         highlights = []
-                        if cached.get('highlights_ai'):
+                        if row.get('highlights_ai'):
                             try:
-                                highlights = json.loads(cached['highlights_ai'])
+                                highlights = json.loads(row['highlights_ai'])
                             except json.JSONDecodeError:
                                 highlights = []
 
@@ -1833,7 +1848,7 @@ def improve_description():
                         return jsonify({
                             'success': True,
                             'data': {
-                                'improved_description': cached['descripcion_ai'],
+                                'improved_description': row['descripcion_ai'],
                                 'highlights': highlights,
                                 'cached': True
                             }
