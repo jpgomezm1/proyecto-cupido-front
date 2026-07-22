@@ -19,6 +19,7 @@ from src.mcp_server.server import mcp
 from src.mcp_server.onboarding import onboarding_routes
 from src.mcp_server.oauth_login import oauth_login_routes
 from src.mcp_server.listing_upload import listing_upload_routes
+from src.mcp_server.share_pages import share_pages_routes
 
 
 def build_app():
@@ -29,6 +30,7 @@ def build_app():
     app.router.routes.extend(oauth_login_routes())
     app.router.routes.extend(onboarding_routes())
     app.router.routes.extend(listing_upload_routes())
+    app.router.routes.extend(share_pages_routes())
     return app
 
 

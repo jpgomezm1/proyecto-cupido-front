@@ -32,6 +32,7 @@ from src.services import write_service as ws
 from src.services import engagement_service as es
 from src.services import location_service as ls
 from src.services import listing_service as lst
+from src.services import share_service as sh
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -596,6 +597,64 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
                                  agente_nombre=agent.nombre, agente_user_id=agent.user_id)
     except lst.ListingError as e:
         return {"error": "datos_incompletos", "mensaje": str(e)}
+
+
+# =========================================================================
+# PIEZAS PARA EL CLIENTE FINAL: comparativa y brochure
+# =========================================================================
+
+@mcp.tool()
+def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
+    """
+    Genera una COMPARATIVA visual de 2 o más inmuebles para enviarle al CLIENTE
+    final por WhatsApp: una página web bonita (con branding Fynder) que muestra
+    las propiedades lado a lado con fotos, precios, specs y un veredicto de mejor
+    valor. Devuelve un `link` listo para compartir.
+
+    Úsala cuando el agente diga "arma/mándame una comparativa de X, Y, Z para mi
+    cliente". Requiere al menos 2 propiedades.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    ids = []
+    for x in property_ids:
+        p = ps.get_property_public(x)
+        if p:
+            ids.append(p["id"])
+    if len(ids) < 2:
+        return {"error": "faltan_propiedades",
+                "mensaje": "Necesito al menos 2 propiedades válidas para comparar."}
+    return {
+        "ok": True,
+        "total": len(ids),
+        "link": sh.link_comparativa(ids),
+        "mensaje": "Comparativa lista. Envíale este link al cliente por WhatsApp; se ve bonita en el celular.",
+    }
+
+
+@mcp.tool()
+def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
+    """
+    Genera una FICHA/BROCHURE visual de UN inmueble para enviarle al CLIENTE
+    final: una página web elegante (branding Fynder) con foto grande, precio,
+    specs, descripción, amenidades y galería. Devuelve un `link` para compartir.
+
+    Úsala cuando el agente quiera "mandarle la ficha/el brochure de esta
+    propiedad a un cliente". (Distinta de `ficha_venta`, que arma el pitch de
+    texto para el agente; esta es la página visual para el cliente.)
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    p = ps.get_property_public(property_id)
+    if not p:
+        return {"error": "no_encontrada"}
+    return {
+        "ok": True,
+        "link": sh.link_brochure(p["id"]),
+        "mensaje": "Ficha lista. Envíale este link al cliente por WhatsApp.",
+    }
 
 
 # =========================================================================
