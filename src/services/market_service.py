@@ -224,6 +224,96 @@ def supply_demand_balance(cur, ciudad: Optional[str] = None, zona: Optional[str]
     }
 
 
+def donde_captar(cur, ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
+                 dias: int = 90, top: int = 8) -> Dict[str, Any]:
+    """
+    Mapa de oportunidad de CAPTACIÓN: cruza oferta activa vs demanda reciente por
+    LUGAR (municipio o barrio) y devuelve dónde hay más compradores que
+    inventario. Pensado para "¿dónde capto?".
+
+    Nota de datos: en la base, municipios como Envigado/Sabaneta viven en
+    `ciudad` y barrios como El Poblado/Laureles en `zona`. Por eso el "lugar" se
+    mide contra AMBAS columnas, y la demanda (texto libre de pedidos) contra ese
+    mismo término, para que oferta y demanda sean comparables.
+    """
+    ciudadn = accent_insensitive_expr("p.ciudad")
+    zonan = accent_insensitive_expr("p.zona")
+
+    # Candidatos: municipios (ciudad) y barrios (zona) con inventario relevante.
+    lugares = fetch_all(cur, f"""
+        SELECT key, MODE() WITHIN GROUP (ORDER BY label) AS label, SUM(c) AS c
+        FROM (
+            SELECT {ciudadn} AS key, p.ciudad AS label, COUNT(*) AS c
+            FROM propiedades p
+            WHERE p.activa AND p.tipo_negocio='Venta' AND p.ciudad IS NOT NULL AND p.ciudad<>''
+              AND {accent_insensitive_expr('p.tipo_propiedad')} LIKE %s
+            GROUP BY {ciudadn}, p.ciudad
+            UNION ALL
+            SELECT {zonan} AS key, p.zona AS label, COUNT(*) AS c
+            FROM propiedades p
+            WHERE p.activa AND p.tipo_negocio='Venta' AND p.zona IS NOT NULL AND p.zona<>''
+              AND {accent_insensitive_expr('p.tipo_propiedad')} LIKE %s
+            GROUP BY {zonan}, p.zona
+        ) u
+        GROUP BY key
+        HAVING SUM(c) >= 10
+        ORDER BY SUM(c) DESC
+        LIMIT 25
+    """, (like_param(tipo_propiedad), like_param(tipo_propiedad)))
+
+    # Palabras que delatan una `zona` mal cargada (ej. "apartamento en el poblado").
+    _BASURA = ("apartamento", "apartaestudio", "casa", "apto", "venta", "arriendo", "local", "oficina")
+
+    tipo_like = like_param(tipo_propiedad)
+    oportunidades = []
+    for lg in lugares:
+        key = (lg["key"] or "").strip()
+        if not key or len(key) < 3:
+            continue
+        if any(b in key for b in _BASURA):
+            continue
+        term = f"%{key}%"
+        # Oferta: propiedades cuyo barrio O municipio coincide con el lugar.
+        of = fetch_one(cur, f"""
+            SELECT COUNT(*) AS n FROM propiedades p
+            WHERE p.activa AND p.tipo_negocio='Venta'
+              AND {accent_insensitive_expr('p.tipo_propiedad')} LIKE %s
+              AND ({ciudadn} LIKE %s OR {zonan} LIKE %s)
+        """, (tipo_like, term, term)) or {}
+        oferta = int(of.get("n") or 0)
+        dem = fetch_one(cur, f"""
+            SELECT COUNT(*) AS n FROM pedidos
+            WHERE fecha_captura > NOW() - make_interval(days => %s)
+              AND {accent_lower_raw('texto_pedido')} LIKE %s
+        """, (dias, term)) or {}
+        demanda = int(dem.get("n") or 0)
+        if demanda == 0 or oferta == 0:
+            continue
+        ratio = demanda / oferta
+        oportunidades.append({
+            "lugar": (lg.get("label") or key).strip().title(),
+            "oferta_activa": oferta, "demanda_90d": demanda,
+            "compradores_por_inmueble": round(ratio, 1),
+        })
+
+    oportunidades.sort(key=lambda o: o["compradores_por_inmueble"], reverse=True)
+    top_ops = oportunidades[:top]
+    for o in top_ops:
+        r = o["compradores_por_inmueble"]
+        if r >= 3:
+            o["lectura"] = f"Hueco fuerte: ~{r} compradores por cada inmueble en venta. Muy buena zona para captar."
+        elif r >= 1:
+            o["lectura"] = f"A favor del vendedor: más demanda que oferta (~{r} compradores por inmueble)."
+        else:
+            o["lectura"] = f"Saturado: sobra oferta ({o['oferta_activa']} activos, {o['demanda_90d']} buscando)."
+
+    return {
+        "filtro": {"tipo_propiedad": tipo_propiedad, "ventana_dias": dias},
+        "nota": "La demanda son pedidos de compradores de los últimos %d días; la oferta es inventario activo hoy." % dias,
+        "oportunidades": top_ops,
+    }
+
+
 # --------------------------------------------------------------------------
 # Wrappers públicos (abren su propia conexión). Los usa el MCP directamente.
 # --------------------------------------------------------------------------
@@ -242,3 +332,8 @@ def get_supply_demand_balance(ciudad=None, zona=None, tipo_propiedad=None,
                               tipo_negocio="Venta", dias=90):
     with get_db() as db:
         return supply_demand_balance(db.cursor, ciudad, zona, tipo_propiedad, tipo_negocio, dias)
+
+
+def donde_captar_public(ciudad=None, tipo_propiedad="apartamento", dias=90, top=8):
+    with get_db() as db:
+        return donde_captar(db.cursor, ciudad, tipo_propiedad, dias, top)

@@ -26,6 +26,7 @@ from src.services import property_service as ps
 from src.services import market_service as ms
 from src.services import diagnosis_service as ds
 from src.services import write_service as ws
+from src.services import engagement_service as es
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -307,6 +308,107 @@ def find_buyers_for_property(property_id: str, dias: int = 120,
     if err:
         return err
     return ds.find_buyers_public(property_id, dias, limit)
+
+
+# =========================================================================
+# CAZADOR: DÓNDE CAPTAR
+# =========================================================================
+
+@mcp.tool()
+def donde_captar(ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
+                 dias: int = 90) -> Dict[str, Any]:
+    """
+    Mapa de oportunidad de CAPTACIÓN: por zona, cruza cuánta oferta activa hay
+    contra cuántos compradores están buscando, y devuelve dónde hay más demanda
+    que inventario (el hueco donde conviene captar).
+
+    Úsala para "¿dónde debería captar?" o "¿en qué zona hay demanda sin oferta?".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ms.donde_captar_public(ciudad, tipo_propiedad, dias)
+
+
+# =========================================================================
+# CALIFICADOR: CAPACIDAD DE COMPRA
+# =========================================================================
+
+@mcp.tool()
+def capacidad_de_compra(ingreso_mensual: float, cuota_inicial: float = 0,
+                        tasa_mensual: float = 0.011, plazo_anos: int = 20,
+                        ciudad: Optional[str] = None, zona: Optional[str] = None,
+                        tipo_propiedad: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Estima para cuánto le alcanza a un comprador con crédito hipotecario
+    (regla ~30% del ingreso para la cuota) y, si das zona/tipo, cuántas
+    propiedades entran en ese techo.
+
+    Úsala para pre-calificar: "gana $8 millones y tiene $150 millones de inicial,
+    ¿para cuánto le da y qué hay en Envigado?".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ps.capacidad_de_compra_public(
+        ingreso_mensual=ingreso_mensual, cuota_inicial=cuota_inicial,
+        tasa_mensual=tasa_mensual, plazo_anos=plazo_anos,
+        ciudad=ciudad, zona=zona, tipo_propiedad=tipo_propiedad,
+    )
+
+
+# =========================================================================
+# CERRADOR: FICHA / PITCH PARA WHATSAPP + INTERÉS REAL
+# =========================================================================
+
+@mcp.tool()
+def ficha_venta(property_id: str, perfil_comprador: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Devuelve los puntos de venta de una propiedad (precio, si está barato/caro
+    vs la zona, destacados, amenidades, gancho de precio/m²) para que redactes
+    una ficha o pitch de WhatsApp listo para enviar. Si pasas el perfil del
+    comprador, personaliza el mensaje a esa familia/persona.
+
+    Úsala para "hazme el mensaje de WhatsApp para venderle esta al cliente X".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ps.ficha_venta_public(property_id, perfil_comprador)
+
+
+@mcp.tool()
+def termometro_de_interes(property_id: str, dias: int = 30) -> Dict[str, Any]:
+    """
+    Muestra el interés REAL de una propiedad: cuántas veces la vieron, cuántos
+    clics, y cuántos la contactaron por WhatsApp/teléfono en los últimos `dias`.
+    Distingue "no la ven" (falta difusión) de "la ven pero no llaman" (precio o
+    presentación).
+
+    Úsala para "¿mi propiedad X está generando interés?" o "¿por qué no llaman?".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return es.termometro_public(property_id, dias)
+
+
+@mcp.tool()
+def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
+    """
+    Rankea TUS propiedades por interés real (vistas + contactos) en los últimos
+    `dias`: cuáles están jalando y cuáles están muertas sin una sola vista.
+
+    Úsala para "¿cuáles de mis propiedades están calientes?".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    if not agent.has_inventory_scope:
+        return {"total": 0, "listings": [],
+                "mensaje": "Tu usuario no tiene un teléfono asociado para identificar inventario propio."}
+    return es.mis_calientes_public(agent.telefono_10, dias)
 
 
 # =========================================================================

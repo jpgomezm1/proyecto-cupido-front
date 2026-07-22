@@ -397,6 +397,132 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None) -> Dict[
     }
 
 
+def capacidad_de_compra(cur, ingreso_mensual: float, cuota_inicial: float = 0,
+                        tasa_mensual: float = 0.011, plazo_anos: int = 20,
+                        max_cuota_pct: float = 0.30,
+                        ciudad: Optional[str] = None, zona: Optional[str] = None,
+                        tipo_propiedad: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Estima para cuánto le alcanza a un comprador (matemática de crédito
+    hipotecario colombiano) y, si se dan filtros de zona, cuántas propiedades
+    entran en ese techo.
+
+    - La cuota mensual máxima suele ser ~30% del ingreso.
+    - Tasa por defecto ~1.1% mensual (referencia; ajústala si el banco da otra).
+    - Con eso se despeja el monto máximo del crédito y se suma la cuota inicial.
+    """
+    ingreso_mensual = float(ingreso_mensual or 0)
+    cuota_inicial = float(cuota_inicial or 0)
+    if ingreso_mensual <= 0:
+        return {"error": "Ingresa el ingreso mensual del comprador"}
+
+    cuota_max = ingreso_mensual * max_cuota_pct
+    n = plazo_anos * 12
+    i = tasa_mensual
+    # Valor presente de una anualidad: credito = cuota * (1-(1+i)^-n)/i
+    if i > 0:
+        credito_max = cuota_max * (1 - (1 + i) ** (-n)) / i
+    else:
+        credito_max = cuota_max * n
+    precio_max = round(credito_max + cuota_inicial)
+
+    resultado = {
+        "supuestos": {
+            "ingreso_mensual": round(ingreso_mensual),
+            "cuota_inicial": round(cuota_inicial),
+            "cuota_mensual_max": round(cuota_max),
+            "tasa_mensual": tasa_mensual,
+            "plazo_anos": plazo_anos,
+            "regla_cuota": f"{int(max_cuota_pct*100)}% del ingreso",
+        },
+        "credito_max": round(credito_max),
+        "precio_max": precio_max,
+        "precio_max_legible": format_cop(precio_max),
+    }
+
+    # Si hay filtros, cuántas propiedades entran en el techo.
+    if any([ciudad, zona, tipo_propiedad]):
+        conditions = ["p.activa = TRUE", "p.precio > 0", "p.precio <= %s", "p.tipo_negocio = 'Venta'"]
+        params: List[Any] = [precio_max]
+        if ciudad:
+            conditions.append(f"{accent_insensitive_expr('p.ciudad')} LIKE %s"); params.append(like_param(ciudad))
+        if zona:
+            conditions.append(f"{accent_insensitive_expr('p.zona')} LIKE %s"); params.append(like_param(zona))
+        if tipo_propiedad:
+            conditions.append(f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s"); params.append(like_param(tipo_propiedad))
+        where = " AND ".join(conditions)
+        cnt = fetch_one(cur, f"SELECT COUNT(*) AS n FROM propiedades p WHERE {where}", params) or {}
+        resultado["opciones_dentro_del_techo"] = int(cnt.get("n") or 0)
+
+    return resultado
+
+
+def ficha_venta(cur, property_id, perfil: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Devuelve los puntos de venta estructurados de una propiedad para que Claude
+    redacte una ficha/pitch de WhatsApp: precio, posición de precio/m² vs la
+    zona (barato/caro), destacados y diferenciadores. Si se pasa un `perfil`
+    (texto libre del comprador), se incluye para que el pitch se personalice.
+    """
+    p = get_property(cur, property_id)
+    if not p:
+        return {"error": f"Propiedad {property_id} no encontrada"}
+
+    # Posición de precio/m² vs la mediana de su zona.
+    from src.services.market_service import zone_stats
+    z = zone_stats(cur, p.get("ciudad"), p.get("zona"), p.get("tipo_propiedad"),
+                   p.get("tipo_negocio") or "Venta")
+    m2 = p.get("precio_m2")
+    m2_zona = z.get("precio_m2_mediana")
+    posicion = None
+    if m2 and m2_zona:
+        dif = (m2 - m2_zona) / m2_zona
+        if dif <= -0.12:
+            posicion = "barato"
+        elif dif >= 0.12:
+            posicion = "caro"
+        else:
+            posicion = "en_precio"
+
+    destacados = []
+    if p.get("area_construida"):
+        destacados.append(f"{p['area_construida']:.0f} m²")
+    if p.get("habitaciones"):
+        destacados.append(f"{p['habitaciones']} habitaciones")
+    if p.get("banos"):
+        destacados.append(f"{p['banos']} baños")
+    if p.get("parqueaderos"):
+        destacados.append(f"{p['parqueaderos']} parqueaderos")
+    if p.get("estrato"):
+        destacados.append(f"estrato {p['estrato']}")
+    if p.get("total_amenidades"):
+        destacados.append(f"{p['total_amenidades']} amenidades")
+
+    gancho_m2 = None
+    if posicion == "barato" and m2 and m2_zona:
+        gancho_m2 = (f"{format_cop(m2)}/m² cuando la zona está en {format_cop(m2_zona)}/m²")
+
+    return {
+        "propiedad": {
+            "id": p["id"], "slug": p["slug"], "titulo": p["titulo"],
+            "precio_legible": p["precio_legible"], "ciudad": p["ciudad"], "zona": p["zona"],
+            "direccion": p.get("direccion"),
+            "url": p.get("url"), "imagen_principal": p.get("imagen_principal"),
+            "total_imagenes": p.get("total_imagenes"),
+        },
+        "posicion_precio": posicion,             # barato | en_precio | caro
+        "gancho_precio_m2": gancho_m2,           # frase lista si es barato
+        "destacados": destacados,
+        "amenidades_internas": p.get("amenidades_internas"),
+        "amenidades_externas": p.get("amenidades_externas"),
+        "descripcion_actual": p.get("descripcion_ai") or p.get("descripcion"),
+        "perfil_comprador": perfil,
+        "instruccion": ("Redacta un mensaje corto de WhatsApp, cálido y directo, para vender esta "
+                        "propiedad. Resalta el gancho de precio si existe y adapta al perfil del "
+                        "comprador si se dio. Cierra invitando a agendar visita."),
+    }
+
+
 # --------------------------------------------------------------------------
 # Wrappers públicos.
 # --------------------------------------------------------------------------
@@ -424,3 +550,13 @@ def estimate_price_public(**kwargs):
 def list_my_properties_public(telefono_10, limit=50):
     with get_db() as db:
         return list_my_properties(db.cursor, telefono_10, limit)
+
+
+def capacidad_de_compra_public(**kwargs):
+    with get_db() as db:
+        return capacidad_de_compra(db.cursor, **kwargs)
+
+
+def ficha_venta_public(property_id, perfil=None):
+    with get_db() as db:
+        return ficha_venta(db.cursor, property_id, perfil)
