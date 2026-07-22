@@ -27,6 +27,7 @@ from src.services import market_service as ms
 from src.services import diagnosis_service as ds
 from src.services import write_service as ws
 from src.services import engagement_service as es
+from src.services import location_service as ls
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -455,6 +456,26 @@ def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
         return {"total": 0, "listings": [],
                 "mensaje": "Tu usuario no tiene un teléfono asociado para identificar inventario propio."}
     return es.mis_calientes_public(agent.telefono_10, dias)
+
+
+# =========================================================================
+# UBICACIÓN: QUÉ HAY CERCA
+# =========================================================================
+
+@mcp.tool()
+def que_hay_cerca(property_id: str) -> Dict[str, Any]:
+    """
+    Dice qué hay ALREDEDOR de una propiedad: colegios, universidades, estaciones
+    de Metro, supermercados, centros comerciales, clínicas, parques y bancos,
+    con la distancia real a cada uno. Responde la pregunta #1 del comprador.
+
+    Úsala para "¿qué hay cerca del #X?", "¿tiene colegios cerca?", "¿queda cerca
+    del Metro?". (Requiere que la propiedad tenga ubicación cargada.)
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ls.que_hay_cerca_public(property_id)
 
 
 # =========================================================================
