@@ -96,7 +96,8 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
     from src.services.redact import redact_phones
     compradores = [{
         "pedido_id": r["id"],
-        "busca": redact_phones(r["texto_pedido"] or ""),
+        # cut_signatures corta el bloque de firma (nombre+tel del agente) + redacta.
+        "busca": redact_phones(r["texto_pedido"] or "", cut_signatures=True),
         "presupuesto_estimado": int(r["presupuesto_estimado"]) if r["presupuesto_estimado"] else None,
         "presupuesto_legible": format_cop(r["presupuesto_estimado"]) if r["presupuesto_estimado"] else None,
         "fecha": r["fecha_captura"].isoformat() if r.get("fecha_captura") else None,

@@ -334,11 +334,15 @@ def diagnose_property(property_id: str) -> Dict[str, Any]:
 def find_buyers_for_property(property_id: str, dias: int = 120,
                              limit: int = 15) -> Dict[str, Any]:
     """
-    Encuentra compradores activos (pedidos recientes) que podrían encajar con
-    una propiedad: matchea por zona y presupuesto. Devuelve el contacto del
-    agente que hizo cada pedido para poder cerrar el match.
+    Encuentra la DEMANDA activa (pedidos recientes) que podría encajar con una
+    propiedad: matchea por zona y presupuesto, y muestra qué buscan y su
+    presupuesto. Sirve para saber si hay mercado para el inmueble.
 
-    Úsala para "¿quién está buscando algo como esto?" tras un diagnóstico.
+    PRIVACIDAD: Fynder NUNCA comparte el contacto (teléfono/nombre) de otros
+    agentes. El match con el comprador se gestiona dentro de Fynder, no
+    entregando datos de contacto. No prometas ni pidas esos datos.
+
+    Úsala para "¿hay compradores buscando algo como esto?" tras un diagnóstico.
     """
     err = _agent_or_error()
     if err:
