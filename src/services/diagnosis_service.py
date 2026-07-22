@@ -48,25 +48,44 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
     term = base.get("zona") or base.get("ciudad") or ""
     like = like_param(term)
     precio = base.get("precio")
-    umbral = int(precio * 0.85) if precio else None
+    tipo = (base.get("tipo_propiedad") or "").lower()
+    es_apto = any(k in tipo for k in ("apart", "apto", "estudio"))
 
+    texto_norm = accent_lower_raw("texto_pedido")
     conditions = [
         "fecha_captura > NOW() - make_interval(days => %s)",
-        f"{accent_lower_raw('texto_pedido')} LIKE %s",
+        f"{texto_norm} LIKE %s",
     ]
     params: List[Any] = [dias, like]
-    if umbral is not None:
-        conditions.append("(presupuesto_estimado IS NULL OR presupuesto_estimado >= %s)")
-        params.append(umbral)
+
+    # Banda de presupuesto: descarta al comprador de $8.000 millones que no va a
+    # comprar un apto de $850 (antes solo había piso, sin techo).
+    if precio:
+        conditions.append("(presupuesto_estimado IS NULL OR presupuesto_estimado BETWEEN %s AND %s)")
+        params.extend([int(precio * 0.85), int(precio * 1.8)])
+
+    # Excluir tipos de inmueble claramente distintos (el pedido busca otra cosa).
+    tipos_excluir = ["lote", "finca", "bodega", "local comercial", "oficina", "penthouse"]
+    if es_apto:
+        tipos_excluir.append("casa campestre")
+    for t in tipos_excluir:
+        conditions.append(f"{texto_norm} NOT LIKE %s")
+        params.append(f"%{t}%")
 
     where = " AND ".join(conditions)
     params.append(limit)
+    # Ordenar por CERCANÍA de presupuesto al precio (los más relevantes primero),
+    # no por el presupuesto más alto.
+    orden = ("ABS(COALESCE(presupuesto_estimado, %s) - %s) ASC, fecha_captura DESC"
+             if precio else "fecha_captura DESC")
+    if precio:
+        params = params[:-1] + [int(precio), int(precio), limit]
     rows = fetch_all(cur, f"""
         SELECT id, agente_telefono, agente_nombre, texto_pedido,
                presupuesto_estimado, fecha_captura, grupo_id, canal
         FROM pedidos
         WHERE {where}
-        ORDER BY presupuesto_estimado DESC NULLS LAST, fecha_captura DESC
+        ORDER BY {orden}
         LIMIT %s
     """, params)
 

@@ -48,6 +48,25 @@ _cache_lock = threading.Lock()
 _CACHE_TTL = 60 * 60 * 24  # 24h
 
 
+# Bounding box aproximado de Colombia. Muchas propiedades traen lat/lon = 0,0
+# ("Null Island") o coordenadas fuera del país: son basura y no sirven.
+_CO_LAT = (1.0, 13.5)
+_CO_LON = (-80.0, -66.0)
+
+
+def _coords_validas(lat, lon) -> bool:
+    """True si la coordenada es usable (dentro de Colombia, no 0,0)."""
+    if lat is None or lon is None:
+        return False
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False
+    if abs(lat) < 0.01 and abs(lon) < 0.01:  # 0,0 = Null Island
+        return False
+    return _CO_LAT[0] <= lat <= _CO_LAT[1] and _CO_LON[0] <= lon <= _CO_LON[1]
+
+
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
     """Distancia en metros entre dos coordenadas."""
     R = 6371000.0
@@ -158,11 +177,13 @@ def que_hay_cerca(cur, property_id) -> Dict[str, Any]:
     p = get_property(cur, property_id)
     if not p:
         return {"error": f"Propiedad {property_id} no encontrada"}
-    if p.get("latitud") is None or p.get("longitud") is None:
+    if not _coords_validas(p.get("latitud"), p.get("longitud")):
         return {
             "propiedad": {"id": p["id"], "slug": p["slug"], "zona": p["zona"]},
             "sin_geolocalizacion": True,
-            "mensaje": "Esta propiedad no tiene ubicación exacta cargada, así que no puedo mirar qué hay alrededor.",
+            "mensaje": ("Esta propiedad no tiene una ubicación exacta válida cargada "
+                        "(coordenadas en 0,0 o fuera del país), así que no puedo mirar qué "
+                        "hay alrededor. Para aprovechar esto, hay que cargarle la dirección/mapa real."),
         }
 
     cercanos = _lugares_cercanos(float(p["latitud"]), float(p["longitud"]))
