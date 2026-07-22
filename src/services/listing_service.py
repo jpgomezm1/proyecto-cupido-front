@@ -185,6 +185,8 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
         "id": prop_id,
         "codigo_propiedad": codigo,
         "titulo": titulo,
+        "descripcion": descripcion,
+        "descripcion_length": len(descripcion) if descripcion else 0,
         "precio_legible": format_cop(precio),
         "total_imagenes": len(imgs),
         "estado_publicacion": "borrador_pendiente_fotos" if es_borrador else "publicado",
@@ -192,6 +194,10 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
         "link_compartir": build_share_link(prop_id, titulo, agente_user_id),
         "link_subir_fotos": link_subir_fotos(prop_id, tel10),
         "mensaje": mensaje,
+        # Recordatorio para el asistente: mostrar título+descripción y ofrecer ajustar.
+        "siguiente_paso": ("Muéstrale al agente el título y la descripción completos que "
+                           "generaste, y pregúntale si quiere ajustarlos antes de seguir. "
+                           "Si pide cambios, usa propose_description_update_tool + apply_change."),
     }
 
 

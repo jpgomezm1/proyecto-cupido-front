@@ -57,9 +57,11 @@ _INSTRUCTIONS = (
     "solo el 'link_compartir' que viene en los datos.\n\n"
     "PUBLICAR PROPIEDADES: para crear un listing, primero reúne los datos mínimos "
     "obligatorios (precio, área, tipo, ubicación) y adviértele al agente que "
-    "necesitará FOTOS. Sin fotos el listing queda como borrador y NO se publica; "
-    "entrégale siempre el 'link_subir_fotos' y explícale que se publica solo al "
-    "subir la primera foto.\n\n"
+    "necesitará FOTOS. Redacta una descripción VENDEDORA y COMPLETA (3-4 párrafos, "
+    "no corta). Tras crear, MUÉSTRALE SIEMPRE al agente el título y la descripción "
+    "completos para que los revise y ajuste; nunca los ocultes ni los resumas. "
+    "Sin fotos el listing queda como borrador y NO se publica; entrégale siempre "
+    "el 'link_subir_fotos' y explícale que se publica solo al subir la primera foto.\n\n"
     "Cuando el agente pregunte por 'mis propiedades' o quiera cambiar "
     "precio/descripción/estado, esas acciones solo aplican a los inmuebles que "
     "él mismo captó."
@@ -549,9 +551,21 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
       adviértele desde el principio que va a necesitar fotos y que se las pedirás
       con un link al final.
 
-    TÚ redactas el `titulo` y la `descripcion` atractivos y armas las amenidades
-    (separadas por '|', ej. "Piscina|Gimnasio|Zona infantil") con lo que el
-    agente te cuente y las fotos que te describa — sin llamar a otra IA.
+    TÚ redactas el `titulo` y la `descripcion` (sin llamar a otra IA):
+    - `titulo`: atractivo, corto, con el gancho principal (máx ~70 caracteres).
+    - `descripcion`: VENDEDORA y COMPLETA, de 3 a 4 párrafos (apunta a 700-1200
+      caracteres, NO la dejes corta). Cubre: (1) apertura con lo mejor del
+      inmueble y su ubicación; (2) distribución y espacios (habitaciones, cocina,
+      balcón, iluminación, acabados); (3) amenidades del edificio y del entorno
+      (colegios, transporte, comercio si aplica); (4) cierre que invite a la
+      visita. Español colombiano, cálido y profesional. No inventes datos que el
+      agente no dio.
+    - `amenidades`: separadas por '|' (ej. "Piscina|Gimnasio|Zona infantil").
+
+    SIEMPRE, después de crear, MUÉSTRALE al agente el TÍTULO y la DESCRIPCIÓN
+    completos que generaste (no un resumen) y pregúntale si quiere ajustarlos.
+    Si pide cambios (más largo, otro tono, resaltar algo), reescríbela y aplícala
+    con propose_description_update_tool + apply_change.
 
     CÓMO FUNCIONA LA PUBLICACIÓN: si creas el listing SIN fotos, queda como
     BORRADOR (no aparece en búsquedas). En la respuesta viene `link_subir_fotos`:
