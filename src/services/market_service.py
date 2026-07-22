@@ -224,6 +224,53 @@ def supply_demand_balance(cur, ciudad: Optional[str] = None, zona: Optional[str]
     }
 
 
+def segmentos_precio(cur, ciudad: Optional[str], zona: Optional[str],
+                     tipo_propiedad: str = "apartamento", dias: int = 120) -> List[Dict[str, Any]]:
+    """
+    Cruza OFERTA vs DEMANDA por rango de precio en una zona. Le dice al dueño en
+    qué rango hay más compradores que inventario (hueco) o sobreoferta.
+    """
+    bandas = [
+        ("Menos de $500M", 0, 500_000_000),
+        ("$500M a $800M", 500_000_000, 800_000_000),
+        ("$800M a $1.200M", 800_000_000, 1_200_000_000),
+        ("$1.200M a $1.800M", 1_200_000_000, 1_800_000_000),
+        ("$1.800M a $3.000M", 1_800_000_000, 3_000_000_000),
+        ("Más de $3.000M", 3_000_000_000, None),
+    ]
+    term = zona or ciudad or ""
+    like = like_param(term)
+    ciudadn = accent_insensitive_expr("p.ciudad")
+    zonan = accent_insensitive_expr("p.zona")
+    tipo_like = like_param(tipo_propiedad)
+
+    out = []
+    for etq, lo, hi in bandas:
+        of_cond = [f"p.activa", "p.tipo_negocio='Venta'", "p.precio > %s",
+                   f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s",
+                   f"({ciudadn} LIKE %s OR {zonan} LIKE %s)"]
+        of_params: List[Any] = [lo, tipo_like, like, like]
+        if hi is not None:
+            of_cond.append("p.precio <= %s"); of_params.append(hi)
+        oferta = fetch_one(cur, f"SELECT COUNT(*) n FROM propiedades p WHERE {' AND '.join(of_cond)}", of_params)
+        oferta = int((oferta or {}).get("n") or 0)
+
+        dem_cond = ["fecha_captura > NOW() - make_interval(days => %s)",
+                    f"{accent_lower_raw('texto_pedido')} LIKE %s",
+                    "presupuesto_estimado > %s"]
+        dem_params: List[Any] = [dias, like, lo]
+        if hi is not None:
+            dem_cond.append("presupuesto_estimado <= %s"); dem_params.append(hi)
+        demanda = fetch_one(cur, f"SELECT COUNT(*) n FROM pedidos WHERE {' AND '.join(dem_cond)}", dem_params)
+        demanda = int((demanda or {}).get("n") or 0)
+
+        if oferta == 0 and demanda == 0:
+            continue
+        out.append({"rango": etq, "oferta": oferta, "demanda": demanda,
+                    "hueco": demanda > oferta})
+    return out
+
+
 def donde_captar(cur, ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
                  dias: int = 90, top: int = 8) -> Dict[str, Any]:
     """

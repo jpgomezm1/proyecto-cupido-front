@@ -156,12 +156,13 @@ def datos_brochure(property_id: int) -> Dict[str, Any]:
 
 def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
     """
-    Reporte de mercado de una zona para MANDARLE A UN DUEÑO (captación).
+    Reporte de mercado COMPLETO de una zona para MANDARLE A UN DUEÑO (captación).
     Traducido a lenguaje de propietario, no de estadístico.
     """
-    from src.services.market_service import supply_demand_balance
+    from src.services.market_service import supply_demand_balance, segmentos_precio
     with get_db() as db:
         bal = supply_demand_balance(db.cursor, ciudad, zona, tipo, "Venta")
+        segmentos = segmentos_precio(db.cursor, ciudad, zona, tipo)
 
     of = bal.get("detalle_oferta", {})
     dem = bal.get("detalle_demanda", {})
@@ -170,8 +171,8 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
     demanda = bal.get("demanda_total", 0)
     dias = of.get("dias_inventario_promedio")
     clas = bal.get("clasificacion")
+    mix = of.get("mix_habitaciones", [])
 
-    # Lectura para el dueño.
     if clas == "caliente":
         lectura = ("Es momento de VENDEDOR: hay bastantes más compradores buscando que "
                    "propiedades en venta. Buen momento para poner tu inmueble en el mercado.")
@@ -186,6 +187,29 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
 
     lugar = " · ".join([x for x in [zona, ciudad] if x]) or (ciudad or "la zona")
 
+    # Recomendaciones accionables generadas con la data.
+    recos = []
+    huecos = [s for s in segmentos if s["hueco"] and s["oferta"] > 0]
+    if huecos:
+        h = max(huecos, key=lambda s: s["demanda"] - s["oferta"])
+        recos.append(f"En el rango {h['rango']} hay {h['demanda']} compradores buscando y solo "
+                     f"{h['oferta']} en venta: si tu propiedad entra ahí, tienes ventaja.")
+    if dias and dias > 100:
+        recos.append(f"El inventario tarda ~{round(dias)} días en venderse en promedio. Un precio bien "
+                     f"puesto desde el inicio acorta ese tiempo notablemente.")
+    fotos = of.get("fotos_promedio")
+    if fotos:
+        recos.append(f"Los avisos de la zona traen ~{round(fotos)} fotos. Una buena presentación "
+                     f"(fotos, video, descripción) hace que tu propiedad destaque.")
+    pres_med = dem.get("presupuesto_pedidos_mediana")
+    if pres_med:
+        recos.append(f"El comprador típico de la zona maneja un presupuesto cercano a "
+                     f"{format_cop(pres_med)}. Ubicar tu precio cerca de ahí amplía tu pool de compradores.")
+
+    hab_labels = {0: "Estudios", 1: "1 hab", 2: "2 hab", 3: "3 hab", 4: "4 hab", 5: "5+ hab"}
+    mix_out = [{"label": hab_labels.get(m["habitaciones"], f'{m["habitaciones"]} hab'),
+                "cantidad": m["cantidad"]} for m in mix if m.get("cantidad")]
+
     return {
         "lugar": lugar, "ciudad": ciudad, "zona": zona, "tipo": tipo or "propiedad",
         "resumen": {
@@ -197,8 +221,22 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
             "precio_max": format_cop(precio.get("p75")) if precio.get("p75") else None,
             "precio_m2": format_cop(of.get("precio_m2_mediana")) if of.get("precio_m2_mediana") else None,
             "dias_en_venta_promedio": round(dias) if dias else None,
-            "fotos_promedio": round(of.get("fotos_promedio")) if of.get("fotos_promedio") else None,
+            "fotos_promedio": round(fotos) if fotos else None,
+            "area_promedio": round(of.get("area_promedio")) if of.get("area_promedio") else None,
         },
+        "distribucion_precio": {
+            "min": format_cop(precio.get("min")), "p25": format_cop(precio.get("p25")),
+            "mediana": format_cop(precio.get("mediana")), "p75": format_cop(precio.get("p75")),
+            "max": format_cop(precio.get("max")),
+        } if precio.get("mediana") else None,
+        "demanda": {
+            "compradores": demanda,
+            "presupuesto_tipico": format_cop(pres_med) if pres_med else None,
+            "presupuesto_promedio": format_cop(dem.get("presupuesto_pedidos_promedio")) if dem.get("presupuesto_pedidos_promedio") else None,
+        },
+        "segmentos_precio": segmentos,
+        "mix_oferta": mix_out,
+        "recomendaciones": recos,
         "lectura": lectura,
         "baja_confianza": of.get("baja_confianza", False),
     }
