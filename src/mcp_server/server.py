@@ -20,8 +20,11 @@ from mcp.server.auth.settings import (
 )
 from mcp.server.transport_security import TransportSecuritySettings
 
+from functools import wraps
+
 from src.mcp_server.identity_context import require_agent, current_agent, AuthError
 from src.mcp_server.oauth_provider import FynderOAuthProvider, public_base_url, DEFAULT_SCOPES
+from src.services.redact import sanitize as _sanitize
 from src.services import property_service as ps
 from src.services import market_service as ms
 from src.services import diagnosis_service as ds
@@ -100,6 +103,27 @@ mcp = FastMCP(
         required_scopes=None,
     ),
 )
+
+# ---------------------------------------------------------------------------
+# BLINDAJE DE PRIVACIDAD (obligatorio): ninguna tool puede entregar datos de
+# contacto de agentes. Se envuelve `mcp.tool` para que la salida de TODA tool
+# (actual o futura) pase por `sanitize()`. Imposible de saltar por descuido.
+# ---------------------------------------------------------------------------
+_orig_tool = mcp.tool
+
+
+def _tool_saneada(*t_args, **t_kwargs):
+    deco = _orig_tool(*t_args, **t_kwargs)
+
+    def wrapper(fn):
+        @wraps(fn)
+        def envuelta(*args, **kwargs):
+            return _sanitize(fn(*args, **kwargs))
+        return deco(envuelta)
+    return wrapper
+
+
+mcp.tool = _tool_saneada
 
 
 def _agent_or_error() -> Optional[Dict[str, Any]]:

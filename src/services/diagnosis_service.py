@@ -89,11 +89,14 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
         LIMIT %s
     """, params)
 
+    # PRIVACIDAD: nunca se devuelve el contacto (teléfono/nombre) del agente que
+    # puso el pedido. Solo la señal de demanda: qué busca y su presupuesto. El
+    # texto del pedido se redacta por si trae teléfonos. La conexión con el
+    # comprador se maneja dentro de Fynder, no entregando datos por el MCP.
+    from src.services.redact import redact_phones
     compradores = [{
         "pedido_id": r["id"],
-        "agente_telefono": r["agente_telefono"],
-        "agente_nombre": r["agente_nombre"],
-        "texto_pedido": r["texto_pedido"],
+        "busca": redact_phones(r["texto_pedido"] or ""),
         "presupuesto_estimado": int(r["presupuesto_estimado"]) if r["presupuesto_estimado"] else None,
         "presupuesto_legible": format_cop(r["presupuesto_estimado"]) if r["presupuesto_estimado"] else None,
         "fecha": r["fecha_captura"].isoformat() if r.get("fecha_captura") else None,
@@ -104,6 +107,8 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
         "propiedad_id": base["id"],
         "zona_buscada": term,
         "total_compradores": len(compradores),
+        "nota": "Fynder no comparte el contacto de otros agentes. Muestra la demanda; "
+                "el match con el comprador se gestiona dentro de Fynder.",
         "compradores": compradores,
     }
 
