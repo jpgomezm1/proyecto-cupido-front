@@ -32,5 +32,6 @@ def test_render_no_agent_data():
 
 
 def test_links():
-    assert "/comparar?t=" in sh.link_comparativa([1, 2])
-    assert "/ficha?t=" in sh.link_brochure(1)
+    # Links elegantes en el dominio de Fynder (no el del MCP).
+    assert "fyndercol.netlify.app/comparar/" in sh.link_comparativa([1, 2])
+    assert "fyndercol.netlify.app/ficha/" in sh.link_brochure(1)
