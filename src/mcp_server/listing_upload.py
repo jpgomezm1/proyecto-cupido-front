@@ -20,6 +20,7 @@ from starlette.routing import Route
 from src.services import listing_service as lst
 from src.services import storage_service as store
 from src.services.db import get_db, fetch_one
+from src.services.textutils import build_share_link
 
 FYNDER_LOGO = "https://storage.googleapis.com/cluvi/FYNDER/logo_blanco_fynder_final.png"
 IRRELEVANT_LOGO = "https://storage.googleapis.com/cluvi/nuevo_irre-removebg-preview.png"
@@ -82,8 +83,17 @@ async def upload_endpoint(request: Request) -> JSONResponse:
                             status_code=500)
 
     res = lst.agregar_fotos(int(pid), urls)
+
+    # Link de Fynder para compartir la propiedad (ya publicada).
+    with get_db() as db:
+        prop = fetch_one(db.cursor, "SELECT titulo, activa FROM propiedades WHERE id=%s", (int(pid),))
+    link_compartir = build_share_link(int(pid), (prop or {}).get("titulo"))
+    publicada = bool((prop or {}).get("activa"))
+
     return JSONResponse({"ok": True, "subidas": len(urls), "errores": errores,
-                         "total_imagenes": res["total_imagenes"]})
+                         "total_imagenes": res["total_imagenes"],
+                         "publicada": publicada,
+                         "link_compartir": link_compartir})
 
 
 def listing_upload_routes():
@@ -131,6 +141,15 @@ _STYLE = """
   .ok{ color:var(--green); } .err{ color:#ff8b95; }
   .dev{ display:flex; align-items:center; justify-content:center; gap:8px; margin-top:22px; }
   .dev span{ color:#4A4A4A; font-size:12px; } .dev img{ height:16px; opacity:.6; }
+  .done{ text-align:center; margin-top:20px; padding-top:20px; border-top:1px solid var(--border); }
+  .done-badge{ font-size:38px; }
+  .done h2{ color:var(--white); font-size:20px; font-weight:700; margin-top:4px; }
+  .done-sub{ color:var(--text-2); font-size:14px; margin:6px 0 14px; }
+  .sharebox{ display:flex; gap:8px; align-items:center; background:#050b08; border:1px solid rgba(42,227,140,.35);
+             border-radius:12px; padding:12px 14px; }
+  .sharebox code{ flex:1; color:var(--green); font-size:12.5px; word-break:break-all; text-align:left; font-family:monospace; }
+  .sharebox button{ shrink:0; background:linear-gradient(150deg,#5DFAAB,var(--green)); color:#04120a;
+                    border:none; border-radius:9px; padding:8px 14px; font-weight:700; font-size:13px; cursor:pointer; }
 """
 
 _PAGE = """<!doctype html>
@@ -154,6 +173,13 @@ _PAGE = """<!doctype html>
       <div class="grid" id="grid"></div>
       <button class="go" id="go" disabled>Subir fotos</button>
       <div class="msg" id="msg"></div>
+      <div class="done" id="done" style="display:none">
+        <div class="done-badge">🎉</div>
+        <h2 id="done-title">¡Propiedad publicada!</h2>
+        <p class="done-sub">Ya aparece en Fynder. Este es tu link para compartirla con clientes:</p>
+        <div class="sharebox"><code id="share-url"></code>
+          <button id="share-copy" onclick="copiarShare()">Copiar</button></div>
+      </div>
     </div>
     <div class="dev"><span>Developed by</span><img src="__IRRELEVANT_LOGO__" alt="irrelevant"></div>
   </div>
@@ -183,12 +209,19 @@ drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('o
 drop.addEventListener('dragleave', ()=> drop.classList.remove('over'));
 drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); });
 
+let shareUrl='';
+window.copiarShare=()=>{ navigator.clipboard.writeText(shareUrl); const b=document.getElementById('share-copy'); b.textContent='\\u00a1Copiado!'; setTimeout(()=>b.textContent='Copiar',1500); };
+
 go.addEventListener('click', async ()=>{ go.disabled=true; go.textContent='Subiendo...'; msg.textContent='';
   try{ const r=await fetch('/listings/fotos',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({token:TOKEN, imagenes:fotos})});
     const d=await r.json();
-    if(d.ok){ msg.innerHTML='<span class="ok">\\u2705 \\u00a1Listo! '+d.subidas+' foto(s) subidas. Tu propiedad ya tiene '+d.total_imagenes+'.</span>';
-      fotos=[]; render(); go.textContent='Subir m\\u00e1s'; }
+    if(d.ok){ msg.innerHTML='<span class="ok">\\u2705 '+d.subidas+' foto(s) subidas. Tu propiedad ya tiene '+d.total_imagenes+'.</span>';
+      fotos=[]; render(); go.style.display='none';
+      if(d.link_compartir){ shareUrl=d.link_compartir; document.getElementById('share-url').textContent=d.link_compartir;
+        document.getElementById('done').style.display='block';
+        document.getElementById('done').scrollIntoView({behavior:'smooth'}); }
+    }
     else{ msg.innerHTML='<span class="err">'+(d.error||'No se pudo subir.')+'</span>'; go.disabled=false; go.textContent='Reintentar'; }
   }catch(e){ msg.innerHTML='<span class="err">Error de conexi\\u00f3n. Intenta de nuevo.</span>'; go.disabled=false; go.textContent='Reintentar'; }
 });
