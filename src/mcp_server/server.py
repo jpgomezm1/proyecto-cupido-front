@@ -48,6 +48,9 @@ _INSTRUCTIONS = (
     "'billón' es un millón de millones (10^12), NO mil millones — NUNCA uses 'B' "
     "ni 'billón' para miles de millones. Di '$1.290 millones', no '$1.29B'. Usa "
     "el campo '_legible' cuando venga en los datos.\n\n"
+    "LINKS: cuando muestres una propiedad, incluye SIEMPRE su 'link_compartir' "
+    "(el link listo para enviarle al cliente por WhatsApp). No inventes URLs; usa "
+    "solo el 'link_compartir' que viene en los datos.\n\n"
     "Cuando el agente pregunte por 'mis propiedades' o quiera cambiar "
     "precio/descripción/estado, esas acciones solo aplican a los inmuebles que "
     "él mismo captó."
@@ -124,7 +127,9 @@ def search_properties(query: str, limit: int = 10) -> Dict[str, Any]:
     if err:
         return err
     agent = current_agent()
-    return ps.search(query=query, limit=limit, telefono=agent.telefono if agent else None)
+    return ps.search(query=query, limit=limit,
+                     telefono=agent.telefono if agent else None,
+                     agente_id=agent.user_id if agent else None)
 
 
 @mcp.tool()
@@ -375,7 +380,9 @@ def ficha_venta(property_id: str, perfil_comprador: Optional[str] = None) -> Dic
     err = _agent_or_error()
     if err:
         return err
-    return ps.ficha_venta_public(property_id, perfil_comprador)
+    agent = current_agent()
+    return ps.ficha_venta_public(property_id, perfil_comprador,
+                                 agente_id=agent.user_id if agent else None)
 
 
 @mcp.tool()

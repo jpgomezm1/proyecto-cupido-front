@@ -18,6 +18,7 @@ from src.services.textutils import (
     like_param,
     split_image_urls,
     format_cop,
+    build_share_link,
 )
 
 # Proyección canónica de una propiedad (columnas reales de `propiedades`).
@@ -108,6 +109,8 @@ def _row_to_property(row: Dict[str, Any]) -> Dict[str, Any]:
         "owner_phone": row.get("agente_captador_telefono"),
         "activa": row.get("activa"),
         "dias_en_inventario": row.get("dias_en_inventario"),
+        # Link compartible listo para enviar al cliente (portal de Fynder).
+        "link_compartir": build_share_link(row["id"], row.get("titulo")),
     }
 
 
@@ -349,7 +352,8 @@ def _get_search_agent():
     return _search_agent
 
 
-def search(query: str, limit: int = 10, telefono: Optional[str] = None) -> Dict[str, Any]:
+def search(query: str, limit: int = 10, telefono: Optional[str] = None,
+           agente_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Búsqueda en lenguaje natural sobre el inventario, reutilizando el
     `PropertySearchAgent` (extracción de criterios con Claude + SQL + ranking +
@@ -381,6 +385,7 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None) -> Dict[
             "area_construida": float(area) if area else None,
             "precio_m2": precio_m2,
             "url": r.get("url"),
+            "link_compartir": build_share_link(r.get("id"), r.get("titulo") or r.get("title"), agente_id),
             "score": r.get("match_score") or r.get("alignment_score"),
         })
 
@@ -678,7 +683,8 @@ def match_comprador(cur, property_id, presupuesto_max: Optional[float] = None,
     }
 
 
-def ficha_venta(cur, property_id, perfil: Optional[str] = None) -> Dict[str, Any]:
+def ficha_venta(cur, property_id, perfil: Optional[str] = None,
+                agente_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Devuelve los puntos de venta estructurados de una propiedad para que Claude
     redacte una ficha/pitch de WhatsApp: precio, posición de precio/m² vs la
@@ -730,6 +736,7 @@ def ficha_venta(cur, property_id, perfil: Optional[str] = None) -> Dict[str, Any
             "direccion": p.get("direccion"),
             "url": p.get("url"), "imagen_principal": p.get("imagen_principal"),
             "total_imagenes": p.get("total_imagenes"),
+            "link_compartir": build_share_link(p["id"], p["titulo"], agente_id),
         },
         "posicion_precio": posicion,             # barato | en_precio | caro
         "gancho_precio_m2": gancho_m2,           # frase lista si es barato
@@ -778,9 +785,9 @@ def capacidad_de_compra_public(**kwargs):
         return capacidad_de_compra(db.cursor, **kwargs)
 
 
-def ficha_venta_public(property_id, perfil=None):
+def ficha_venta_public(property_id, perfil=None, agente_id=None):
     with get_db() as db:
-        return ficha_venta(db.cursor, property_id, perfil)
+        return ficha_venta(db.cursor, property_id, perfil, agente_id)
 
 
 def costo_total_mensual_public(property_id, cuota_inicial=None, tasa_mensual=0.011, plazo_anos=20):

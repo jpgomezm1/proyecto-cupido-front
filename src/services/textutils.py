@@ -5,9 +5,13 @@ Sin dependencias externas: solo stdlib. La idea es no arrastrar el monolito de
 `search_agent` para cosas simples (normalización de acentos, teléfonos, moneda).
 """
 
+import os
 import re
 import unicodedata
 from typing import List, Optional
+
+# URL pública del portal de Fynder (donde viven los links compartibles).
+FRONTEND_URL = os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
 
 # Mapa de acentos frecuentes en español -> ascii, para usar dentro de SQL con
 # translate() y así hacer matching accent-insensitive SIN depender de la
@@ -53,6 +57,44 @@ def like_param(value: Optional[str]) -> str:
     """Normaliza un valor de usuario para comparar con `accent_insensitive_expr`
     usando LIKE con comodines (%valor%)."""
     return f"%{strip_accents(value).lower().strip()}%"
+
+
+def slugify_titulo(titulo: Optional[str], max_length: int = 60) -> str:
+    """
+    Slug URL-friendly del título (idéntico al del backend/frontend de Fynder):
+    "APARTAMENTO SAN LUCAS AVIÑÓN" -> "apartamento-san-lucas-avinon".
+    """
+    if not titulo:
+        return ""
+    slug = strip_accents(str(titulo)).lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    if len(slug) > max_length:
+        slug = slug[:max_length]
+        last = slug.rfind("-")
+        if last > 0:
+            slug = slug[:last]
+    return slug
+
+
+def build_share_link(property_id, titulo: Optional[str] = None,
+                     agente_id: Optional[int] = None) -> Optional[str]:
+    """
+    Construye el link compartible de una propiedad, listo para enviar al cliente:
+    {FRONTEND}/compartir/{id}-{titulo-slug}?a={agente_id}
+
+    El portal resuelve la propiedad por el ID numérico al inicio del slug; el
+    nombre es decorativo/legible. `?a=` atribuye el share al agente (alimenta el
+    termómetro de interés).
+    """
+    if property_id is None:
+        return None
+    ts = slugify_titulo(titulo)
+    path = f"{property_id}-{ts}" if ts else str(property_id)
+    url = f"{FRONTEND_URL}/compartir/{path}"
+    if agente_id:
+        url += f"?a={agente_id}"
+    return url
 
 
 def normalize_phone(raw: Optional[str]) -> Optional[str]:
