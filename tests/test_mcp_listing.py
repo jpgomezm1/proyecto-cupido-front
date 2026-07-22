@@ -91,3 +91,28 @@ def test_crear_con_fotos_publica_directo():
         db.cursor.execute("DELETE FROM eventos_log WHERE propiedad_id=%s", (pid,))
         db.cursor.execute("DELETE FROM propiedades WHERE id=%s", (pid,))
         db.conn.commit()
+
+
+@requires_db
+def test_reordenar_fotos():
+    """Crear listing con fotos, reordenar, verificar portada, limpiar."""
+    from src.services.db import get_db
+    res = lst.crear_listing("+573009998877", {
+        "precio": 500000000, "area_construida": 80, "tipo_propiedad": "Apartamento",
+        "ciudad": "Envigado", "titulo": "Orden fotos test",
+        "imagenes_urls": ["https://x/a.jpg", "https://x/b.jpg", "https://x/c.jpg"],
+    })
+    pid = res["id"]
+    try:
+        # Reordenar: la 3ra pasa a portada
+        r = lst.reordenar_fotos(pid, [3, 1, 2])
+        assert r["ok"] and r["portada"] == "https://x/c.jpg"
+        # Orden inválido: falta una posición
+        import pytest
+        with pytest.raises(lst.ListingError):
+            lst.reordenar_fotos(pid, [1, 2])
+    finally:
+        with get_db() as db:
+            db.cursor.execute("DELETE FROM eventos_log WHERE propiedad_id=%s", (pid,))
+            db.cursor.execute("DELETE FROM propiedades WHERE id=%s", (pid,))
+            db.conn.commit()

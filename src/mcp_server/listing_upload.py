@@ -167,6 +167,14 @@ _STYLE = """
               color:#fff; border:none; border-radius:50%; width:24px; height:24px; cursor:pointer; font-size:14px;
               display:grid; place-items:center; line-height:1; }
   .thumb .rm:hover{ background:#ff5c5c; }
+  .thumb .setcover{ position:absolute; bottom:5px; left:5px; background:rgba(0,0,0,.65); backdrop-filter:blur(4px);
+              color:#fff; border:none; border-radius:7px; padding:3px 8px; cursor:pointer; font-size:10.5px; font-weight:600; }
+  .thumb .setcover:hover{ background:var(--green); color:#04120a; }
+  .thumb .num{ position:absolute; top:5px; left:5px; background:rgba(0,0,0,.6); color:#fff; border-radius:6px;
+               width:20px; height:20px; display:grid; place-items:center; font-size:11px; font-weight:700; }
+  .thumb.drag{ opacity:.4; } .thumb.dragover{ outline:2px solid var(--green); outline-offset:-2px; }
+  .grid.hint::before{ content:'Arrastra para reordenar · La primera es la portada'; grid-column:1/-1;
+                      font-size:11.5px; color:var(--text-3); margin-bottom:2px; }
 
   button.go{ width:100%; margin-top:22px; padding:16px; border:none; border-radius:15px; cursor:pointer;
              font-weight:700; font-size:16px; color:#04120a; font-family:inherit; transition:transform .12s, box-shadow .2s;
@@ -263,14 +271,24 @@ const drop=document.getElementById('drop'), file=document.getElementById('file')
       count=document.getElementById('count'), cn=document.getElementById('cn');
 let fotos=[];
 
+let dragFrom=null;
 function render(){ grid.innerHTML='';
-  fotos.forEach((f,i)=>{ const d=document.createElement('div'); d.className='thumb';
-    const cover = i===0 ? '<span class="cover">Portada</span>' : '';
-    d.innerHTML='<img src="'+f+'">'+cover+'<button class="rm" onclick="quitar('+i+')">\\u00d7</button>'; grid.appendChild(d); });
+  grid.classList.toggle('hint', fotos.length>1);
+  fotos.forEach((f,i)=>{ const d=document.createElement('div'); d.className='thumb'; d.draggable=true; d.dataset.i=i;
+    const cover = i===0 ? '<span class="cover">Portada</span>' : '<button class="setcover" onclick="portada('+i+')">\\u2605 Portada</button>';
+    d.innerHTML='<img src="'+f+'"><span class="num">'+(i+1)+'</span>'+cover+'<button class="rm" onclick="quitar('+i+')">\\u00d7</button>';
+    d.addEventListener('dragstart', ()=>{ dragFrom=i; d.classList.add('drag'); });
+    d.addEventListener('dragend', ()=>{ d.classList.remove('drag'); document.querySelectorAll('.thumb').forEach(t=>t.classList.remove('dragover')); });
+    d.addEventListener('dragover', e=>{ e.preventDefault(); d.classList.add('dragover'); });
+    d.addEventListener('dragleave', ()=> d.classList.remove('dragover'));
+    d.addEventListener('drop', e=>{ e.preventDefault(); const to=+d.dataset.i;
+      if(dragFrom!==null && dragFrom!==to){ const m=fotos.splice(dragFrom,1)[0]; fotos.splice(to,0,m); render(); } dragFrom=null; });
+    grid.appendChild(d); });
   cn.textContent=fotos.length; count.classList.toggle('hidden', fotos.length===0);
   go.disabled = fotos.length===0;
   go.innerHTML = fotos.length? ('Subir '+fotos.length+' foto'+(fotos.length>1?'s':'')) : 'Subir fotos'; }
 window.quitar=(i)=>{ fotos.splice(i,1); render(); };
+window.portada=(i)=>{ const m=fotos.splice(i,1)[0]; fotos.unshift(m); render(); };
 document.getElementById('addmore').addEventListener('click', ()=> file.click());
 
 function comprimir(fileObj){ return new Promise(res=>{ const img=new Image(); const rd=new FileReader();
@@ -279,11 +297,11 @@ function comprimir(fileObj){ return new Promise(res=>{ const img=new Image(); co
     const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
     res(c.toDataURL('image/jpeg',0.8)); }; img.src=e.target.result; }; rd.readAsDataURL(fileObj); }); }
 
-async function add(files){ for(const f of files){ if(!f.type.startsWith('image/')) continue;
+async function add(files){ const arr=Array.from(files); for(const f of arr){ if(!f.type.startsWith('image/')) continue;
   if(fotos.length>=20){ msg.innerHTML='<span class="err">M\\u00e1ximo 20 fotos.</span>'; break; }
   fotos.push(await comprimir(f)); } render(); }
 
-file.addEventListener('change', e=>{ add(e.target.files); file.value=''; });
+file.addEventListener('change', async e=>{ const arr=Array.from(e.target.files); await add(arr); file.value=''; });
 drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', ()=> drop.classList.remove('over'));
 drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); });

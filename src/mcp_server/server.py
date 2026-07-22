@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from urllib.parse import urlparse
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.auth.settings import (
     AuthSettings, ClientRegistrationOptions, RevocationOptions,
 )
@@ -582,6 +582,84 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
                                  agente_nombre=agent.nombre, agente_user_id=agent.user_id)
     except lst.ListingError as e:
         return {"error": "datos_incompletos", "mensaje": str(e)}
+
+
+# =========================================================================
+# ORDENAR FOTOS DE UN LISTING (apalancando la visión del LLM)
+# =========================================================================
+
+@mcp.tool()
+def revisar_fotos(property_id: str):
+    """
+    Devuelve las FOTOS de una propiedad propia como imágenes numeradas para que
+    TÚ las veas y decidas el mejor orden de presentación (portada primero, luego
+    sala, cocina, habitaciones, baños, y por último exteriores/amenidades).
+
+    Úsala ANTES de `ordenar_fotos`: mira las imágenes, decide el orden ideal y
+    luego llama `ordenar_fotos` con las posiciones en el orden que elegiste.
+    Solo funciona sobre propiedades que el agente captó.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    # Verificar ownership.
+    prop = ps.get_property_public(property_id)
+    if not prop:
+        return {"error": "no_encontrada"}
+    from src.services.textutils import normalize_phone
+    if normalize_phone(prop.get("owner_phone")) != agent.telefono_10:
+        return {"error": "no_es_tuya", "mensaje": "Solo puedes ordenar fotos de propiedades que tú captaste."}
+
+    data = lst.listar_fotos(prop["id"])
+    if data.get("total", 0) == 0:
+        return {"mensaje": "La propiedad no tiene fotos todavía."}
+
+    import httpx
+    salida = [
+        f"Fotos de la propiedad #{prop['id']} — {data.get('titulo') or ''}. "
+        f"Son {data['total']}, numeradas 1 a {data['total']}. Míralas, decide el "
+        f"mejor orden de presentación y luego llama ordenar_fotos con las posiciones "
+        f"en ese orden (la primera será la portada)."
+    ]
+    for foto in data["fotos"]:
+        salida.append(f"— Foto {foto['posicion']}:")
+        try:
+            r = httpx.get(foto["url"], timeout=15, follow_redirects=True)
+            if r.status_code == 200:
+                fmt = "png" if "png" in r.headers.get("content-type", "").lower() else "jpeg"
+                salida.append(Image(data=r.content, format=fmt))
+            else:
+                salida.append(f"(no se pudo cargar la foto {foto['posicion']})")
+        except Exception:
+            salida.append(f"(no se pudo cargar la foto {foto['posicion']})")
+    return salida
+
+
+@mcp.tool()
+def ordenar_fotos(property_id: str, orden: List[int]) -> Dict[str, Any]:
+    """
+    Reordena las fotos de una propiedad PROPIA. `orden` es la lista de POSICIONES
+    actuales (1-indexed) en el orden que quieres. Ej: si hay 4 fotos y pasas
+    [3,1,4,2], la foto #3 queda de PORTADA. Debe incluir cada posición una vez.
+
+    Primero usa `revisar_fotos` para ver las imágenes y decidir el orden ideal
+    (portada atractiva, luego áreas sociales, habitaciones, y exteriores).
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    prop = ps.get_property_public(property_id)
+    if not prop:
+        return {"error": "no_encontrada"}
+    from src.services.textutils import normalize_phone
+    if normalize_phone(prop.get("owner_phone")) != agent.telefono_10:
+        return {"error": "no_es_tuya", "mensaje": "Solo puedes ordenar fotos de propiedades que tú captaste."}
+    try:
+        return lst.reordenar_fotos(prop["id"], orden)
+    except lst.ListingError as e:
+        return {"error": "orden_invalido", "mensaje": str(e)}
 
 
 # =========================================================================

@@ -281,3 +281,59 @@ def agregar_fotos(property_id: int, nuevas_urls: List[str]) -> Dict[str, Any]:
     return {"ok": True, "total_imagenes": len(combinadas),
             "agregadas": len(combinadas) - len(actuales),
             "publicado_ahora": publicado_ahora}
+
+
+def listar_fotos(property_id: int) -> Dict[str, Any]:
+    """Devuelve las fotos de una propiedad numeradas (1-indexed), para ordenar."""
+    with get_db() as db:
+        row = fetch_one(db.cursor,
+            "SELECT titulo, imagenes_urls FROM propiedades WHERE id=%s", (property_id,))
+    if not row:
+        return {"error": "Propiedad no encontrada"}
+    urls = split_image_urls(row.get("imagenes_urls"))
+    return {
+        "propiedad_id": property_id,
+        "titulo": row.get("titulo"),
+        "total": len(urls),
+        "fotos": [{"posicion": i + 1, "url": u} for i, u in enumerate(urls)],
+    }
+
+
+def reordenar_fotos(property_id: int, nuevo_orden: List[int]) -> Dict[str, Any]:
+    """
+    Reordena las fotos de una propiedad. `nuevo_orden` es la lista de POSICIONES
+    actuales (1-indexed) en el orden deseado. Ej: [3,1,2] -> la foto que estaba
+    de tercera queda de portada. La primera del nuevo orden es la portada.
+    """
+    with get_db() as db:
+        row = fetch_one(db.cursor,
+            "SELECT imagenes_urls FROM propiedades WHERE id=%s", (property_id,))
+        if not row:
+            raise ListingError("Propiedad no encontrada")
+        urls = split_image_urls(row.get("imagenes_urls"))
+        n = len(urls)
+        if n == 0:
+            raise ListingError("La propiedad no tiene fotos para ordenar")
+
+        # Validar: debe ser una permutación completa de 1..n.
+        try:
+            orden = [int(x) for x in nuevo_orden]
+        except (TypeError, ValueError):
+            raise ListingError("El orden debe ser una lista de números de posición")
+        if sorted(orden) != list(range(1, n + 1)):
+            raise ListingError(
+                f"El orden debe incluir cada foto exactamente una vez (posiciones 1 a {n}). "
+                f"Recibí: {orden}")
+
+        reordenadas = [urls[i - 1] for i in orden]
+        db.cursor.execute("""
+            UPDATE propiedades
+            SET imagenes_urls = %s, imagen_principal = %s, fecha_actualizacion = NOW()
+            WHERE id = %s
+        """, ("|".join(reordenadas), reordenadas[0], property_id))
+        db.conn.commit()
+
+    return {"ok": True, "total": n,
+            "portada": reordenadas[0],
+            "nuevo_orden": [{"posicion": i + 1, "url": u} for i, u in enumerate(reordenadas)],
+            "mensaje": "Fotos reordenadas. La primera es ahora la portada de la propiedad."}
