@@ -70,12 +70,14 @@ def _cut_signature(text: str) -> str:
 
     for i, ln in enumerate(lines):
         stripped = ln.strip()
+        if not stripped:
+            continue  # líneas vacías nunca son firma
         low = stripped.lower()
-        # Marcador de firma al INICIO de la línea (☎, 🌻, "su red", "asesor"...).
-        empieza_marcador = any(low.startswith(m) or low[:3] in m for m in _SIGNATURE_MARKERS if m)
+        empieza_marcador = any(low.startswith(m) for m in _SIGNATURE_MARKERS)
         marcador_en_linea = any(m in low for m in _SIGNATURE_MARKERS)
         tiene_tel = bool(_HAS_PHONE.search(ln))
-        # Línea de PURA firma: corta y con teléfono, o empieza con marcador.
+        # Línea de PURA firma: empieza con marcador, o es corta y con
+        # teléfono/marcador (nombre+tel de la firma del agente).
         es_firma = (empieza_marcador
                     or (tiene_tel and len(stripped) <= 45)
                     or (marcador_en_linea and len(stripped) <= 45))
