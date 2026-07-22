@@ -8,8 +8,17 @@ contacto de agentes.
 from flask import Blueprint, jsonify
 
 from src.services import share_service as sh
+from src.services import documento_service as doc
 
 share_bp = Blueprint("share_public", __name__, url_prefix="/api/share")
+
+
+@share_bp.route("/documento/<share_id>", methods=["GET"])
+def documento(share_id):
+    data = doc.get_documento(share_id)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 404
+    return jsonify({"success": True, "data": data})
 
 
 @share_bp.route("/comparativa/<path:token>", methods=["GET"])

@@ -28,6 +28,8 @@ EXPECTED_TOOLS = {
     # Preguntar sobre inmueble
     "preguntar_sobre_inmueble",
     "reporte_zona_captacion",
+    # Documentos de cierre
+    "generar_promesa_compraventa",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "register_buyer_match_tool", "apply_change",

@@ -34,6 +34,7 @@ from src.services import location_service as ls
 from src.services import listing_service as lst
 from src.services import share_service as sh
 from src.services import qa_service as qa
+from src.services import documento_service as doc
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -708,6 +709,67 @@ def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
         "link": sh.link_brochure(p["id"]),
         "mensaje": "Ficha lista. Envíale este link al cliente por WhatsApp.",
     }
+
+
+# =========================================================================
+# DOCUMENTOS DE CIERRE: promesa de compraventa (BORRADOR)
+# =========================================================================
+
+@mcp.tool()
+def generar_promesa_compraventa(
+    property_id: str,
+    comprador_nombre: Optional[str] = None, comprador_cedula: Optional[str] = None,
+    comprador_domicilio: Optional[str] = None,
+    vendedor_nombre: Optional[str] = None, vendedor_cedula: Optional[str] = None,
+    vendedor_domicilio: Optional[str] = None,
+    precio_total: Optional[int] = None, arras: Optional[int] = None,
+    cuota_inicial: Optional[int] = None, forma_pago: Optional[str] = None,
+    plazo_escrituracion_dias: Optional[int] = None, notaria: Optional[str] = None,
+    matricula_inmobiliaria: Optional[str] = None, fecha_entrega: Optional[str] = None,
+    ciudad_firma: Optional[str] = None, clausula_penal: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Genera un BORRADOR de PROMESA DE COMPRAVENTA (Colombia) para un negocio.
+    Devuelve un `link` a un documento imprimible/descargable en PDF.
+
+    IMPORTANTE — es un BORRADOR de apoyo, NO asesoría legal ni documento
+    definitivo; debe revisarlo un abogado/notaría. Adviértele esto al agente.
+
+    ANTES de llamar, reúne con el agente los datos (pregúntalos si faltan; los que
+    no tengas se dejan en blanco para llenar a mano): matrícula inmobiliaria,
+    nombre y cédula del COMPRADOR y del VENDEDOR, precio total, forma de pago,
+    arras/cuota inicial, notaría, plazo de escrituración y fecha de entrega. El
+    inmueble (dirección, área) se toma de Fynder.
+
+    La respuesta trae `campos_faltantes` si algo quedó sin completar: díselos al
+    agente para que los consiga.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    prop = ps.get_property_public(property_id)
+    if not prop:
+        return {"error": "no_encontrada"}
+    res = doc.crear_promesa(
+        prop["id"], agent.telefono,
+        comprador={"nombre": comprador_nombre, "cedula": comprador_cedula, "domicilio": comprador_domicilio},
+        vendedor={"nombre": vendedor_nombre, "cedula": vendedor_cedula, "domicilio": vendedor_domicilio},
+        terminos={"precio_total": precio_total, "arras": arras, "cuota_inicial": cuota_inicial,
+                  "forma_pago": forma_pago, "plazo_escrituracion_dias": plazo_escrituracion_dias,
+                  "notaria": notaria, "matricula_inmobiliaria": matricula_inmobiliaria,
+                  "fecha_entrega": fecha_entrega, "ciudad_firma": ciudad_firma,
+                  "clausula_penal": clausula_penal},
+        agente_nombre=agent.nombre,
+    )
+    if res.get("error"):
+        return res
+    # Avisar qué falta (leyendo el documento generado).
+    from src.services.documento_service import get_documento
+    docdata = get_documento(res["share_id"])
+    faltantes = (docdata.get("documento") or {}).get("campos_faltantes", [])
+    res["campos_faltantes"] = faltantes
+    return res
 
 
 # =========================================================================
