@@ -662,6 +662,31 @@ def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
 
 
 @mcp.tool()
+def reporte_zona_captacion(ciudad: Optional[str] = None, zona: Optional[str] = None,
+                           tipo_propiedad: str = "apartamento") -> Dict[str, Any]:
+    """
+    Genera un REPORTE de mercado de una zona para que el agente se lo mande a un
+    DUEÑO que quiere captar: una página bonita (branding Fynder) con cuántos
+    inmuebles hay en venta, precio típico, precio/m², qué tan rápido se vende y
+    cuántos compradores están buscando — con un mensaje de captación. Devuelve un
+    `link` para compartir.
+
+    Úsala cuando el agente diga "arma un reporte de [zona] para mandarle a un
+    dueño / para captar".
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    if not ciudad and not zona:
+        return {"error": "falta_zona", "mensaje": "Dime la ciudad o el barrio de la zona."}
+    return {
+        "ok": True,
+        "link": sh.link_reporte_zona(ciudad, zona, tipo_propiedad),
+        "mensaje": "Reporte de zona listo. Mándaselo al dueño por WhatsApp para captar su propiedad.",
+    }
+
+
+@mcp.tool()
 def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
     """
     Genera una FICHA/BROCHURE visual de UN inmueble para enviarle al CLIENTE

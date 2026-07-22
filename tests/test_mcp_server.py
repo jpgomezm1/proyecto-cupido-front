@@ -27,6 +27,7 @@ EXPECTED_TOOLS = {
     "generar_comparativa", "generar_ficha_cliente",
     # Preguntar sobre inmueble
     "preguntar_sobre_inmueble",
+    "reporte_zona_captacion",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "register_buyer_match_tool", "apply_change",

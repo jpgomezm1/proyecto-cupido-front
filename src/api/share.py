@@ -41,3 +41,17 @@ def ficha(token):
         return jsonify({"success": False, "error": data["error"]}), 404
     sh.registrar_vista("brochure", ids)
     return jsonify({"success": True, "data": data})
+
+
+@share_bp.route("/zona/<path:token>", methods=["GET"])
+def zona(token):
+    try:
+        payload = sh.verify_token(token)
+    except sh.ShareError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    if payload.get("k") != "zona":
+        return jsonify({"success": False, "error": "Link inválido"}), 400
+    data = sh.datos_reporte_zona(payload.get("ciudad"), payload.get("zona"), payload.get("tipo"))
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 404
+    return jsonify({"success": True, "data": data})

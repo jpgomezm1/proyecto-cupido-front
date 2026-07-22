@@ -43,11 +43,19 @@ def _b64d(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def make_token(kind: str, ids: List[int]) -> str:
-    payload = {"k": kind, "ids": [int(i) for i in ids], "exp": int(time.time()) + _TTL}
+def _sign(payload: Dict[str, Any]) -> str:
+    payload = {**payload, "exp": int(time.time()) + _TTL}
     body = _b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     sig = _b64e(hmac.new(_secret(), body.encode(), hashlib.sha256).digest())
     return f"{body}.{sig}"
+
+
+def make_token(kind: str, ids: List[int]) -> str:
+    return _sign({"k": kind, "ids": [int(i) for i in ids]})
+
+
+def make_token_zona(ciudad, zona, tipo) -> str:
+    return _sign({"k": "zona", "ciudad": ciudad, "zona": zona, "tipo": tipo})
 
 
 def verify_token(token: str) -> Dict[str, Any]:
@@ -75,6 +83,10 @@ def link_comparativa(ids: List[int]) -> str:
 
 def link_brochure(property_id: int) -> str:
     return f"{_frontend_base()}/ficha/{make_token('fic', [property_id])}"
+
+
+def link_reporte_zona(ciudad, zona, tipo) -> str:
+    return f"{_frontend_base()}/zona/{make_token_zona(ciudad, zona, tipo)}"
 
 
 # --------------------------------------------------------------------------
@@ -140,6 +152,56 @@ def datos_brochure(property_id: int) -> Dict[str, Any]:
     if not p:
         return {"error": "Propiedad no encontrada"}
     return {"propiedad": p}
+
+
+def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
+    """
+    Reporte de mercado de una zona para MANDARLE A UN DUEÑO (captación).
+    Traducido a lenguaje de propietario, no de estadístico.
+    """
+    from src.services.market_service import supply_demand_balance
+    with get_db() as db:
+        bal = supply_demand_balance(db.cursor, ciudad, zona, tipo, "Venta")
+
+    of = bal.get("detalle_oferta", {})
+    dem = bal.get("detalle_demanda", {})
+    precio = of.get("precio", {})
+    inventario = bal.get("oferta_inventario", 0)
+    demanda = bal.get("demanda_total", 0)
+    dias = of.get("dias_inventario_promedio")
+    clas = bal.get("clasificacion")
+
+    # Lectura para el dueño.
+    if clas == "caliente":
+        lectura = ("Es momento de VENDEDOR: hay bastantes más compradores buscando que "
+                   "propiedades en venta. Buen momento para poner tu inmueble en el mercado.")
+    elif clas == "equilibrado":
+        lectura = ("El mercado está equilibrado, con buena demanda. Con el precio y la "
+                   "presentación correctos, tu propiedad se puede mover bien.")
+    elif clas == "frio":
+        lectura = ("Hay bastante oferta en la zona; para destacar es clave un buen precio y "
+                   "una presentación impecable. Ahí es donde te acompañamos.")
+    else:
+        lectura = "Analicemos juntos el mejor momento y precio para tu propiedad."
+
+    lugar = " · ".join([x for x in [zona, ciudad] if x]) or (ciudad or "la zona")
+
+    return {
+        "lugar": lugar, "ciudad": ciudad, "zona": zona, "tipo": tipo or "propiedad",
+        "resumen": {
+            "en_venta": inventario,
+            "compradores_buscando": demanda,
+            "clasificacion": clas,
+            "precio_tipico": precio.get("mediana_legible"),
+            "precio_min": format_cop(precio.get("p25")) if precio.get("p25") else None,
+            "precio_max": format_cop(precio.get("p75")) if precio.get("p75") else None,
+            "precio_m2": format_cop(of.get("precio_m2_mediana")) if of.get("precio_m2_mediana") else None,
+            "dias_en_venta_promedio": round(dias) if dias else None,
+            "fotos_promedio": round(of.get("fotos_promedio")) if of.get("fotos_promedio") else None,
+        },
+        "lectura": lectura,
+        "baja_confianza": of.get("baja_confianza", False),
+    }
 
 
 def registrar_vista(kind: str, ids: List[int], visitor: Optional[str] = None) -> None:
