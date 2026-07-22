@@ -457,6 +457,184 @@ def capacidad_de_compra(cur, ingreso_mensual: float, cuota_inicial: float = 0,
     return resultado
 
 
+# Estimaciones por estrato cuando faltan datos (servicios públicos mensuales y
+# administración de respaldo). Cifras de referencia para vivienda familiar en
+# el Valle de Aburrá; se marcan siempre como "estimado".
+_SERVICIOS_POR_ESTRATO = {1: 160_000, 2: 200_000, 3: 280_000, 4: 380_000, 5: 480_000, 6: 650_000}
+_ADMIN_FALLBACK_ESTRATO = {3: 300_000, 4: 450_000, 5: 650_000, 6: 1_000_000}
+
+
+def _cuota_credito(monto: float, tasa_mensual: float, plazo_anos: int) -> float:
+    """Cuota fija mensual de un crédito (sistema francés)."""
+    n = plazo_anos * 12
+    i = tasa_mensual
+    if monto <= 0:
+        return 0.0
+    if i <= 0:
+        return monto / n
+    return monto * i / (1 - (1 + i) ** (-n))
+
+
+def costo_total_mensual(cur, property_id, cuota_inicial: Optional[float] = None,
+                        tasa_mensual: float = 0.011, plazo_anos: int = 20) -> Dict[str, Any]:
+    """
+    Costo mensual REAL de vivir en una propiedad: administración + servicios
+    (estimados por estrato) + predial mensualizado + (opcional) cuota de crédito.
+
+    Un apto "barato" con administración alta no es barato. Esta tool arma el
+    número que el comprador colombiano de verdad pregunta.
+    """
+    p = get_property(cur, property_id)
+    if not p:
+        return {"error": f"Propiedad {property_id} no encontrada"}
+
+    estrato = p.get("estrato")
+    precio = p.get("precio") or 0
+
+    # Administración: usar el dato si es plausible; si no, estimar por estrato.
+    admin_raw = p.get("administracion")
+    admin_estimada = False
+    if admin_raw and 20_000 <= admin_raw <= 5_000_000:
+        admin = int(admin_raw)
+    else:
+        admin = _ADMIN_FALLBACK_ESTRATO.get(estrato, 500_000)
+        admin_estimada = True
+
+    # Servicios públicos: estimado por estrato.
+    servicios = _SERVICIOS_POR_ESTRATO.get(estrato, 350_000)
+
+    # Predial mensualizado: estimación conservadora (~0,35% anual del valor comercial).
+    predial_mensual = round(precio * 0.0035 / 12) if precio else 0
+
+    componentes = {
+        "administracion": admin,
+        "administracion_estimada": admin_estimada,
+        "servicios_estimados": servicios,
+        "predial_mensual_estimado": predial_mensual,
+    }
+
+    total_sin_credito = admin + servicios + predial_mensual
+    resultado = {
+        "propiedad": {"id": p["id"], "slug": p["slug"], "titulo": p["titulo"],
+                      "precio_legible": p["precio_legible"], "estrato": estrato, "zona": p["zona"]},
+        "componentes": componentes,
+        "costo_mensual_sin_credito": total_sin_credito,
+        "costo_mensual_sin_credito_legible": format_cop(total_sin_credito),
+        "nota": ("Servicios y predial son estimados por estrato/valor; la administración "
+                 "es real cuando el dato existe y es plausible."),
+    }
+
+    if cuota_inicial is not None:
+        monto_credito = max(precio - float(cuota_inicial), 0)
+        cuota = round(_cuota_credito(monto_credito, tasa_mensual, plazo_anos))
+        total_con_credito = total_sin_credito + cuota
+        resultado["credito"] = {
+            "cuota_inicial": round(float(cuota_inicial)),
+            "monto_financiado": round(monto_credito),
+            "cuota_mensual": cuota,
+            "tasa_mensual": tasa_mensual, "plazo_anos": plazo_anos,
+        }
+        resultado["costo_mensual_total"] = total_con_credito
+        resultado["costo_mensual_total_legible"] = format_cop(total_con_credito)
+
+    return resultado
+
+
+def match_comprador(cur, property_id, presupuesto_max: Optional[float] = None,
+                    habitaciones_min: Optional[int] = None,
+                    parqueaderos_min: Optional[int] = None,
+                    estrato_min: Optional[int] = None,
+                    area_min: Optional[float] = None,
+                    amenidades: Optional[List[str]] = None,
+                    zonas: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Puntúa qué tan bien le encaja una propiedad a un perfil de comprador (el que
+    Claude extrae de una conversación/transcripción), con razones por criterio.
+    Devuelve un score 0-100 y un veredicto.
+    """
+    p = get_property(cur, property_id)
+    if not p:
+        return {"error": f"Propiedad {property_id} no encontrada"}
+
+    criterios = []          # (etiqueta, cumple(bool|None), peso, detalle)
+    def add(etiqueta, cumple, peso, detalle):
+        criterios.append({"criterio": etiqueta, "cumple": cumple, "peso": peso, "detalle": detalle})
+
+    # Presupuesto (crítico).
+    if presupuesto_max:
+        precio = p.get("precio") or 0
+        if precio <= presupuesto_max:
+            add("presupuesto", True, 30, f"{p['precio_legible']} dentro del techo")
+        elif precio <= presupuesto_max * 1.1:
+            add("presupuesto", None, 30, f"{p['precio_legible']} apenas por encima (~10%), negociable")
+        else:
+            add("presupuesto", False, 30, f"{p['precio_legible']} se pasa del presupuesto")
+
+    if habitaciones_min:
+        h = p.get("habitaciones")
+        add("habitaciones", (h is not None and h >= habitaciones_min), 20,
+            f"tiene {h} (pedía {habitaciones_min}+)")
+
+    if parqueaderos_min:
+        pk = p.get("parqueaderos") or 0
+        add("parqueaderos", pk >= parqueaderos_min, 15, f"tiene {pk} (pedía {parqueaderos_min}+)")
+
+    if estrato_min:
+        e = p.get("estrato")
+        add("estrato", (e is not None and e >= estrato_min), 10, f"estrato {e} (pedía {estrato_min}+)")
+
+    if area_min:
+        a = p.get("area_construida") or 0
+        add("area", a >= area_min, 10, f"{a:.0f} m² (pedía {area_min:.0f}+)")
+
+    if amenidades:
+        texto = f"{p.get('amenidades_internas') or ''} {p.get('amenidades_externas') or ''} {p.get('descripcion') or ''}"
+        from src.services.textutils import strip_accents
+        texto_n = strip_accents(texto).lower()
+        encontradas = [a for a in amenidades if strip_accents(a).lower() in texto_n]
+        cumple = len(encontradas) == len(amenidades)
+        add("amenidades", cumple if amenidades else None, 10,
+            f"encontradas {encontradas or 'ninguna'} de {amenidades}")
+
+    if zonas:
+        from src.services.textutils import strip_accents
+        pzona = strip_accents(f"{p.get('zona') or ''} {p.get('ciudad') or ''}").lower()
+        cumple = any(strip_accents(z).lower() in pzona for z in zonas)
+        add("zona", cumple, 15, f"está en {p.get('zona')} / {p.get('ciudad')}")
+
+    # Score ponderado: cumple=1, parcial(None con peso)=0.5, no=0.
+    peso_total = sum(c["peso"] for c in criterios) or 1
+    ganado = 0
+    for c in criterios:
+        if c["cumple"] is True:
+            ganado += c["peso"]
+        elif c["cumple"] is None:
+            ganado += c["peso"] * 0.5
+    score = round(ganado / peso_total * 100)
+
+    # Deal-breakers duros: presupuesto o habitaciones que NO cumplen.
+    rompedores = [c["criterio"] for c in criterios
+                  if c["cumple"] is False and c["criterio"] in ("presupuesto", "habitaciones")]
+
+    if rompedores:
+        veredicto = "no_encaja"
+    elif score >= 80:
+        veredicto = "encaja_bien"
+    elif score >= 55:
+        veredicto = "encaja_parcial"
+    else:
+        veredicto = "flojo"
+
+    return {
+        "propiedad": {"id": p["id"], "slug": p["slug"], "titulo": p["titulo"],
+                      "precio_legible": p["precio_legible"], "zona": p["zona"]},
+        "score": score,
+        "veredicto": veredicto,
+        "deal_breakers": rompedores,
+        "criterios": criterios,
+    }
+
+
 def ficha_venta(cur, property_id, perfil: Optional[str] = None) -> Dict[str, Any]:
     """
     Devuelve los puntos de venta estructurados de una propiedad para que Claude
@@ -560,3 +738,13 @@ def capacidad_de_compra_public(**kwargs):
 def ficha_venta_public(property_id, perfil=None):
     with get_db() as db:
         return ficha_venta(db.cursor, property_id, perfil)
+
+
+def costo_total_mensual_public(property_id, cuota_inicial=None, tasa_mensual=0.011, plazo_anos=20):
+    with get_db() as db:
+        return costo_total_mensual(db.cursor, property_id, cuota_inicial, tasa_mensual, plazo_anos)
+
+
+def match_comprador_public(property_id, **kwargs):
+    with get_db() as db:
+        return match_comprador(db.cursor, property_id, **kwargs)

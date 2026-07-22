@@ -17,6 +17,8 @@ EXPECTED_TOOLS = {
     # Lote 1: cerrador / cazador / calificador
     "donde_captar", "capacidad_de_compra", "ficha_venta",
     "termometro_de_interes", "mis_listings_calientes",
+    # Lote 2: costo total + match de comprador
+    "costo_total_mensual", "match_comprador",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "register_buyer_match_tool", "apply_change",

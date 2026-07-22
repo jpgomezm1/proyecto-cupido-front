@@ -378,6 +378,52 @@ def ficha_venta(property_id: str, perfil_comprador: Optional[str] = None) -> Dic
 
 
 @mcp.tool()
+def costo_total_mensual(property_id: str, cuota_inicial: Optional[float] = None,
+                        tasa_mensual: float = 0.011, plazo_anos: int = 20) -> Dict[str, Any]:
+    """
+    Calcula cuánto le sale AL MES vivir en una propiedad: administración +
+    servicios (estimados por estrato) + predial mensualizado + (si pasas cuota
+    inicial) la cuota del crédito. Un apto barato con administración alta no es
+    barato: esta tool arma el número real.
+
+    Úsala para "¿en cuánto le sale vivir ahí al mes?" o para comparar el costo
+    mensual de dos propiedades.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ps.costo_total_mensual_public(property_id, cuota_inicial, tasa_mensual, plazo_anos)
+
+
+@mcp.tool()
+def match_comprador(property_id: str, presupuesto_max: Optional[float] = None,
+                    habitaciones_min: Optional[int] = None,
+                    parqueaderos_min: Optional[int] = None,
+                    estrato_min: Optional[int] = None,
+                    area_min: Optional[float] = None,
+                    amenidades: Optional[List[str]] = None,
+                    zonas: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Puntúa qué tan bien le encaja una propiedad a un perfil de comprador (el que
+    extraes de una conversación o transcripción), con un score 0-100, veredicto
+    y razones por criterio. Marca deal-breakers (presupuesto o habitaciones que
+    no cumplen).
+
+    Úsala después de leer una transcripción: "¿qué tan bien le sirve el #X a
+    esta familia?" pasando lo que necesitan (habitaciones, presupuesto,
+    parqueaderos, amenidades como ['piscina','gimnasio'], zonas, etc.).
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    return ps.match_comprador_public(
+        property_id, presupuesto_max=presupuesto_max, habitaciones_min=habitaciones_min,
+        parqueaderos_min=parqueaderos_min, estrato_min=estrato_min, area_min=area_min,
+        amenidades=amenidades, zonas=zonas,
+    )
+
+
+@mcp.tool()
 def termometro_de_interes(property_id: str, dias: int = 30) -> Dict[str, Any]:
     """
     Muestra el interés REAL de una propiedad: cuántas veces la vieron, cuántos

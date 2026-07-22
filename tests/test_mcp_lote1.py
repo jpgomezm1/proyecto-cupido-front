@@ -42,3 +42,36 @@ def test_termometro_shape(sample_property_id):
     t = es.termometro_public(sample_property_id, dias=365)
     assert "interes" in t and "estado" in t
     assert set(t["interes"]) >= {"vistas", "contactos_whatsapp", "visitantes_unicos"}
+
+
+# ---- Lote 2 ----
+
+def test_costo_credito_math():
+    # cuota de crédito: función pura, sin BD.
+    from src.services.property_service import _cuota_credito
+    cuota = _cuota_credito(200_000_000, 0.011, 20)
+    assert 1_500_000 < cuota < 3_500_000  # rango razonable
+
+
+@requires_db
+def test_costo_total_mensual(sample_property_id):
+    c = ps.costo_total_mensual_public(sample_property_id, cuota_inicial=100_000_000)
+    assert c["costo_mensual_sin_credito"] > 0
+    assert "credito" in c and c["credito"]["cuota_mensual"] > 0
+    assert c["componentes"]["administracion"] <= 5_000_000  # nunca la basura
+
+
+@requires_db
+def test_match_comprador(sample_property_id):
+    m = ps.match_comprador_public(sample_property_id, presupuesto_max=5_000_000_000,
+                                  habitaciones_min=1)
+    assert 0 <= m["score"] <= 100
+    assert m["veredicto"] in {"encaja_bien", "encaja_parcial", "flojo", "no_encaja"}
+
+
+@requires_db
+def test_match_dealbreaker_presupuesto(sample_property_id):
+    # presupuesto imposible -> deal breaker + no_encaja
+    m = ps.match_comprador_public(sample_property_id, presupuesto_max=1_000_000)
+    assert "presupuesto" in m["deal_breakers"]
+    assert m["veredicto"] == "no_encaja"
