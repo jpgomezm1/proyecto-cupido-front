@@ -33,6 +33,7 @@ from src.api.bulk_upload import bulk_bp
 from src.api.conversations import conversations_bp
 from src.api.chat_auth import chat_auth_bp
 from src.api.listings import listings_bp
+from src.api.share import share_bp
 from src.api.chat_users_admin import chat_users_admin_bp
 from src.api.shared_selections import shared_selections_bp
 from src.api.favorites import favorites_bp
@@ -148,6 +149,7 @@ app.register_blueprint(bulk_bp)
 app.register_blueprint(conversations_bp)
 app.register_blueprint(chat_auth_bp)
 app.register_blueprint(listings_bp)
+app.register_blueprint(share_bp)
 app.register_blueprint(chat_users_admin_bp)
 app.register_blueprint(shared_selections_bp)
 app.register_blueprint(favorites_bp)

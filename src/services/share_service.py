@@ -64,16 +64,17 @@ def verify_token(token: str) -> Dict[str, Any]:
     return payload
 
 
-def _public_base() -> str:
-    return os.getenv("MCP_PUBLIC_URL", "http://localhost:8767").rstrip("/")
+def _frontend_base() -> str:
+    return os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
 
 
 def link_comparativa(ids: List[int]) -> str:
-    return f"{_public_base()}/comparar?t={make_token('cmp', ids)}"
+    # Link elegante con el dominio de Fynder (la página vive en el portal React).
+    return f"{_frontend_base()}/comparar/{make_token('cmp', ids)}"
 
 
 def link_brochure(property_id: int) -> str:
-    return f"{_public_base()}/ficha?t={make_token('fic', [property_id])}"
+    return f"{_frontend_base()}/ficha/{make_token('fic', [property_id])}"
 
 
 # --------------------------------------------------------------------------
@@ -85,8 +86,11 @@ def _prop_limpia(cur, pid: int) -> Optional[Dict[str, Any]]:
     p = get_property(cur, pid)
     if not p:
         return None
+    from src.services.textutils import build_share_link
     return {
         "id": p["id"],
+        "slug": p.get("slug"),
+        "link_detalle": build_share_link(p["id"], p.get("titulo")),  # detalle en el portal de Fynder
         "titulo": p.get("titulo") or "Propiedad",
         "precio": p.get("precio"),
         "precio_legible": p.get("precio_legible"),
