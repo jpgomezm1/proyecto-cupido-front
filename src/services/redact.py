@@ -27,19 +27,23 @@ SENSITIVE_KEYS = {
     "phone", "celular", "whatsapp",
 }
 
-# Teléfonos colombianos. Se es AGRESIVO: ante la duda, redactar. Un teléfono
-# filtrado es inaceptable; redactar un precio ocasional (que igual se muestra en
-# los campos estructurados) es tolerable.
+# Teléfonos colombianos. Se es AGRESIVO con celulares (el riesgo real). Ante la
+# duda, redactar: un teléfono filtrado es inaceptable.
+# Patrones SIEMPRE (aplican a todo, incluso campos estructurados): solo el
+# celular (10 dígitos empezando en 3) y números tras palabra de contacto. No se
+# incluye "7 dígitos sueltos" aquí para no romper códigos/IDs (ej. slug).
 _PHONE_PATTERNS = [
     # Celular con o SIN separadores: 3xx xxx xxxx / 3xxxxxxxxx, con +57 opcional.
     re.compile(r"(?<!\d)(?:\+?57[\s.\-]?)?3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"),
     # Número tras palabra/emoji de contacto (cel, tel, wpp, ☎, 📞, etc.).
     re.compile(r"(?i)(?:cel(?:ular)?|tel(?:efono|éfono)?|whats?app|wpp|contacto|llamar|escribir|☎|📞|📱|✆)"
                r"\s*[:\-]?\s*\+?\d[\d\s.\-]{5,13}\d"),
-    # Fijo de 7 dígitos aislado.
-    re.compile(r"(?<!\d)\d{7}(?!\d)"),
-    # Indicativo + fijo (604 xxx xxxx).
-    re.compile(r"(?<!\d)60\d[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"),
+]
+# Patrones EXTRA solo para texto libre de pedidos (donde 7 dígitos = teléfono
+# fijo, no un ID). Se aplican junto con cut_signatures.
+_PHONE_PATTERNS_TEXTO = _PHONE_PATTERNS + [
+    re.compile(r"(?<!\d)60\d[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"),  # indicativo + fijo
+    re.compile(r"(?<!\d)\d{7}(?!\d)"),                            # fijo de 7 dígitos
 ]
 _REDACTED = "[contacto oculto]"
 
@@ -109,7 +113,10 @@ def redact_phones(text: str, cut_signatures: bool = False) -> str:
     if not text or not isinstance(text, str):
         return text
     out = _cut_signature(text) if cut_signatures else text
-    for pat in _PHONE_PATTERNS:
+    # En texto de pedidos (cut_signatures) se redacta también fijos de 7 dígitos;
+    # en campos estructurados NO, para no romper IDs/códigos.
+    patrones = _PHONE_PATTERNS_TEXTO if cut_signatures else _PHONE_PATTERNS
+    for pat in patrones:
         out = pat.sub(_REDACTED, out)
     return out
 
