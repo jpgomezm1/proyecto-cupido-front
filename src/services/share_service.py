@@ -17,7 +17,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from src.services.db import get_db, fetch_one
+from src.services.db import get_db, fetch_one, fetch_all
 from src.services.property_service import get_property
 from src.services.textutils import format_cop, split_image_urls
 
@@ -160,9 +160,21 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
     Traducido a lenguaje de propietario, no de estadístico.
     """
     from src.services.market_service import supply_demand_balance, segmentos_precio
+    from src.services.textutils import accent_insensitive_expr, like_param
     with get_db() as db:
         bal = supply_demand_balance(db.cursor, ciudad, zona, tipo, "Venta")
         segmentos = segmentos_precio(db.cursor, ciudad, zona, tipo)
+        # Muestra de coordenadas válidas (dentro de Colombia) para el mapa.
+        term = like_param(zona or ciudad or "")
+        puntos = fetch_all(db.cursor, f"""
+            SELECT latitud, longitud, precio
+            FROM propiedades p
+            WHERE p.activa AND p.tipo_negocio='Venta' AND p.precio > 0
+              AND {accent_insensitive_expr('p.tipo_propiedad')} LIKE %s
+              AND ({accent_insensitive_expr('p.ciudad')} LIKE %s OR {accent_insensitive_expr('p.zona')} LIKE %s)
+              AND p.latitud BETWEEN 1 AND 13 AND p.longitud BETWEEN -80 AND -66
+            LIMIT 400
+        """, (like_param(tipo), term, term))
 
     of = bal.get("detalle_oferta", {})
     dem = bal.get("detalle_demanda", {})
@@ -210,6 +222,14 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
     mix_out = [{"label": hab_labels.get(m["habitaciones"], f'{m["habitaciones"]} hab'),
                 "cantidad": m["cantidad"]} for m in mix if m.get("cantidad")]
 
+    # Puntos del mapa + centro (promedio).
+    mapa = [{"lat": float(p["latitud"]), "lng": float(p["longitud"]),
+             "precio": int(p["precio"]) if p["precio"] else None} for p in puntos]
+    centro = None
+    if mapa:
+        centro = {"lat": sum(p["lat"] for p in mapa) / len(mapa),
+                  "lng": sum(p["lng"] for p in mapa) / len(mapa)}
+
     return {
         "lugar": lugar, "ciudad": ciudad, "zona": zona, "tipo": tipo or "propiedad",
         "resumen": {
@@ -238,6 +258,7 @@ def datos_reporte_zona(ciudad, zona, tipo) -> Dict[str, Any]:
         "mix_oferta": mix_out,
         "recomendaciones": recos,
         "lectura": lectura,
+        "mapa": {"centro": centro, "puntos": mapa} if mapa else None,
         "baja_confianza": of.get("baja_confianza", False),
     }
 
