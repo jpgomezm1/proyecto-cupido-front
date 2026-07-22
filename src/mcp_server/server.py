@@ -52,6 +52,11 @@ _INSTRUCTIONS = (
     "LINKS: cuando muestres una propiedad, incluye SIEMPRE su 'link_compartir' "
     "(el link listo para enviarle al cliente por WhatsApp). No inventes URLs; usa "
     "solo el 'link_compartir' que viene en los datos.\n\n"
+    "PUBLICAR PROPIEDADES: para crear un listing, primero reúne los datos mínimos "
+    "obligatorios (precio, área, tipo, ubicación) y adviértele al agente que "
+    "necesitará FOTOS. Sin fotos el listing queda como borrador y NO se publica; "
+    "entrégale siempre el 'link_subir_fotos' y explícale que se publica solo al "
+    "subir la primera foto.\n\n"
     "Cuando el agente pregunte por 'mis propiedades' o quiera cambiar "
     "precio/descripción/estado, esas acciones solo aplican a los inmuebles que "
     "él mismo captó."
@@ -506,17 +511,25 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
     """
     Publica una propiedad NUEVA en Fynder (listing nativo del agente autenticado).
 
-    IMPORTANTE: TÚ (el asistente) redactas el `titulo` y la `descripcion`
-    atractivos, y armas las amenidades a partir de lo que el agente te cuente y
-    de las fotos que te describa — no hay que llamar a otra IA. Separa varias
-    amenidades con '|' (ej. "Piscina|Gimnasio|Zona infantil").
+    ANTES DE LLAMAR ESTA TOOL, reúne con el agente los REQUISITOS MÍNIMOS. Si
+    falta algo, PREGÚNTALE — no inventes ni publiques a medias:
+    - OBLIGATORIOS (el agente los da; tú no puedes saberlos): precio en pesos
+      (ej. 600000000), area_construida en m², tipo_propiedad, y ubicación
+      (ciudad y/o zona).
+    - MUY RECOMENDADOS: habitaciones, baños, parqueaderos, estrato. Pídeselos.
+    - FOTOS: son OBLIGATORIAS para publicar. Como no se suben por el chat,
+      adviértele desde el principio que va a necesitar fotos y que se las pedirás
+      con un link al final.
 
-    El agente DEBE dar los datos que no se pueden inventar: precio (en pesos, ej.
-    600000000), area_construida (m²), tipo_propiedad, y la ubicación (ciudad o
-    zona). Habitaciones, baños, parqueaderos y estrato si los sabe.
+    TÚ redactas el `titulo` y la `descripcion` atractivos y armas las amenidades
+    (separadas por '|', ej. "Piscina|Gimnasio|Zona infantil") con lo que el
+    agente te cuente y las fotos que te describa — sin llamar a otra IA.
 
-    Las FOTOS no se suben por aquí: la respuesta trae un `link_subir_fotos` que
-    el agente abre en el celular para arrastrar las fotos. Dáselo siempre.
+    CÓMO FUNCIONA LA PUBLICACIÓN: si creas el listing SIN fotos, queda como
+    BORRADOR (no aparece en búsquedas). En la respuesta viene `link_subir_fotos`:
+    DÁSELO SIEMPRE al agente y explícale que la propiedad se PUBLICA SOLA en
+    cuanto suba al menos una foto por ese link. Revisa `estado_publicacion` y
+    `requiere_fotos` en la respuesta y comunícaselo.
 
     Úsala cuando el agente diga "publica/crea/sube una propiedad/listing".
     """

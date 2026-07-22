@@ -44,8 +44,8 @@ def test_crear_listing_valida_obligatorios():
 
 
 @requires_db
-def test_crear_y_borrar_listing():
-    """Crea un listing real y lo limpia (incluye evento y foto ref)."""
+def test_crear_borrador_y_autopublicar():
+    """Sin fotos -> borrador (activa=false); al agregar foto -> se publica solo."""
     from src.services.db import get_db
     res = lst.crear_listing("+573009998877", {
         "precio": 550000000, "area_construida": 85, "tipo_propiedad": "Apartamento",
@@ -55,14 +55,39 @@ def test_crear_y_borrar_listing():
     }, agente_nombre="Test", agente_user_id=None)
     assert res["ok"] and res["id"]
     assert res["link_compartir"] and res["link_subir_fotos"]
+    assert res["estado_publicacion"] == "borrador_pendiente_fotos" and res["requiere_fotos"] is True
     pid = res["id"]
     try:
         with get_db() as db:
             db.cursor.execute("SELECT fuente, activa FROM propiedades WHERE id=%s", (pid,))
             row = db.cursor.fetchone()
-            assert row["fuente"] == "Fynder" and row["activa"] is True
+            assert row["fuente"] == "Fynder" and row["activa"] is False  # borrador
+
+        # Agregar una foto -> auto-publica
+        r2 = lst.agregar_fotos(pid, ["https://x/foto.jpg"])
+        assert r2["publicado_ahora"] is True
+        with get_db() as db:
+            db.cursor.execute("SELECT activa FROM propiedades WHERE id=%s", (pid,))
+            assert db.cursor.fetchone()["activa"] is True  # publicado
     finally:
         with get_db() as db:
             db.cursor.execute("DELETE FROM eventos_log WHERE propiedad_id=%s", (pid,))
             db.cursor.execute("DELETE FROM propiedades WHERE id=%s", (pid,))
             db.conn.commit()
+
+
+@requires_db
+def test_crear_con_fotos_publica_directo():
+    """Con fotos desde el inicio -> se publica directo (activa=true)."""
+    from src.services.db import get_db
+    res = lst.crear_listing("+573009998877", {
+        "precio": 500000000, "area_construida": 80, "tipo_propiedad": "Apartamento",
+        "ciudad": "Envigado", "titulo": "Con fotos",
+        "imagenes_urls": ["https://x/1.jpg", "https://x/2.jpg"],
+    })
+    assert res["estado_publicacion"] == "publicado" and res["requiere_fotos"] is False
+    pid = res["id"]
+    with get_db() as db:
+        db.cursor.execute("DELETE FROM eventos_log WHERE propiedad_id=%s", (pid,))
+        db.cursor.execute("DELETE FROM propiedades WHERE id=%s", (pid,))
+        db.conn.commit()

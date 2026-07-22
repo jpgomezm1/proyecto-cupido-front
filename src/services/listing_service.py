@@ -151,21 +151,34 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
         "anonimizado_version": 1,
     }
 
+    # Sin fotos => BORRADOR (activa=false): no aparece en búsquedas hasta que
+    # tenga al menos una foto. Se publica solo al subir fotos (ver agregar_fotos).
+    es_borrador = len(imgs) == 0
+
     with get_db() as db:
         prop_id = db.insert_property(property_data)
-        db.conn.commit()
         if not prop_id:
             raise ListingError("No se pudo guardar la propiedad. Intenta de nuevo.")
+        if es_borrador:
+            db.cursor.execute("UPDATE propiedades SET activa = FALSE WHERE id = %s", (prop_id,))
+        db.conn.commit()
         try:
             db.log_evento(
                 tipo_evento="listing_creado_fynder",
                 agente_telefono=agente_telefono,
                 propiedad_id=prop_id,
                 datos_evento={"codigo": codigo, "precio": precio, "origen": "Fynder_App",
-                              "imagenes": len(imgs)},
+                              "imagenes": len(imgs), "borrador": es_borrador},
             )
         except Exception:
             pass
+
+    if es_borrador:
+        mensaje = ("Borrador creado con el título, la descripción y los datos. Para PUBLICARLO "
+                   "(que aparezca en búsquedas y sea compartible) FALTAN LAS FOTOS: pásale al "
+                   "agente el link de subir fotos. En cuanto suba al menos una, se publica solo.")
+    else:
+        mensaje = "¡Listing publicado en Fynder! Ya aparece en tu inventario y es compartible."
 
     return {
         "ok": True,
@@ -174,9 +187,11 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
         "titulo": titulo,
         "precio_legible": format_cop(precio),
         "total_imagenes": len(imgs),
+        "estado_publicacion": "borrador_pendiente_fotos" if es_borrador else "publicado",
+        "requiere_fotos": es_borrador,
         "link_compartir": build_share_link(prop_id, titulo, agente_user_id),
         "link_subir_fotos": link_subir_fotos(prop_id, tel10),
-        "mensaje": "¡Listing creado en Fynder! Ya aparece en tu inventario y es compartible.",
+        "mensaje": mensaje,
     }
 
 
@@ -241,7 +256,8 @@ def agregar_fotos(property_id: int, nuevas_urls: List[str]) -> Dict[str, Any]:
         return {"ok": True, "total_imagenes": 0, "agregadas": 0}
     with get_db() as db:
         row = fetch_one(db.cursor,
-            "SELECT imagenes_urls, imagen_principal FROM propiedades WHERE id=%s", (property_id,))
+            "SELECT imagenes_urls, imagen_principal, activa, fuente FROM propiedades WHERE id=%s",
+            (property_id,))
         if not row:
             raise ListingError("Propiedad no encontrada")
         actuales = split_image_urls(row.get("imagenes_urls"))
@@ -253,5 +269,15 @@ def agregar_fotos(property_id: int, nuevas_urls: List[str]) -> Dict[str, Any]:
                 fecha_actualizacion = NOW()
             WHERE id = %s
         """, ("|".join(combinadas), len(combinadas), principal, property_id))
+
+        # Auto-publicar: si era un borrador de Fynder (sin fotos) y ahora tiene
+        # al menos una, se publica solo.
+        publicado_ahora = False
+        if not row.get("activa") and row.get("fuente") == "Fynder" and combinadas:
+            db.cursor.execute("UPDATE propiedades SET activa = TRUE WHERE id = %s", (property_id,))
+            publicado_ahora = True
         db.conn.commit()
-    return {"ok": True, "total_imagenes": len(combinadas), "agregadas": len(combinadas) - len(actuales)}
+
+    return {"ok": True, "total_imagenes": len(combinadas),
+            "agregadas": len(combinadas) - len(actuales),
+            "publicado_ahora": publicado_ahora}
