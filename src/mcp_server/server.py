@@ -33,6 +33,7 @@ from src.services import engagement_service as es
 from src.services import location_service as ls
 from src.services import listing_service as lst
 from src.services import share_service as sh
+from src.services import qa_service as qa
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -254,6 +255,33 @@ def get_supply_demand_balance(ciudad: Optional[str] = None, zona: Optional[str] 
     if err:
         return err
     return ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias)
+
+
+# =========================================================================
+# PREGUNTAR SOBRE UN INMUEBLE
+# =========================================================================
+
+@mcp.tool()
+def preguntar_sobre_inmueble(property_id: str, pregunta: str) -> Dict[str, Any]:
+    """
+    Responde preguntas sobre un inmueble ("¿tiene piscina?", "¿de qué año es?",
+    "¿cuánto es la administración?", "¿la cocina se ve remodelada?", "¿tiene
+    buena luz natural?"). Devuelve TODO lo que Fynder sabe de la propiedad:
+    specs, amenidades, descripción y lo que la IA detectó en las FOTOS (estilo,
+    estado, ambientes, calidad). Con eso respóndele al agente.
+
+    Si el dato no está, dilo con honestidad (no inventes): sugiere confirmarlo
+    con el agente que captó el inmueble.
+
+    Úsala para cualquier duda puntual sobre una propiedad específica.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    d = qa.dossier_public(property_id)
+    if isinstance(d, dict):
+        d["pregunta"] = pregunta
+    return d
 
 
 # =========================================================================

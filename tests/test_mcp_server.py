@@ -25,6 +25,8 @@ EXPECTED_TOOLS = {
     "crear_listing", "revisar_fotos", "ordenar_fotos",
     # Piezas para el cliente final
     "generar_comparativa", "generar_ficha_cliente",
+    # Preguntar sobre inmueble
+    "preguntar_sobre_inmueble",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "register_buyer_match_tool", "apply_change",
