@@ -426,18 +426,25 @@ def capacidad_de_compra(cur, ingreso_mensual: float, cuota_inicial: float = 0,
         credito_max = cuota_max * n
     precio_max = round(credito_max + cuota_inicial)
 
+    tasa_anual = round(((1 + tasa_mensual) ** 12 - 1) * 100, 1)
     resultado = {
         "supuestos": {
             "ingreso_mensual": round(ingreso_mensual),
             "cuota_inicial": round(cuota_inicial),
             "cuota_mensual_max": round(cuota_max),
             "tasa_mensual": tasa_mensual,
+            "tasa_anual_efectiva_aprox": tasa_anual,
             "plazo_anos": plazo_anos,
             "regla_cuota": f"{int(max_cuota_pct*100)}% del ingreso",
         },
         "credito_max": round(credito_max),
         "precio_max": precio_max,
         "precio_max_legible": format_cop(precio_max),
+        # Nota prominente: el techo depende MUCHO de la tasa. Que Claude siempre
+        # la mencione y aclare que es un supuesto ajustable.
+        "supuesto_clave": (f"Calculado con tasa ~{tasa_anual}% anual ({tasa_mensual*100:.1f}% mensual) "
+                           f"a {plazo_anos} años. Si el banco del comprador da otra tasa, el techo cambia; "
+                           f"confírmala con su preaprobado."),
     }
 
     # Si hay filtros, cuántas propiedades entran en el techo.
@@ -540,6 +547,40 @@ def costo_total_mensual(cur, property_id, cuota_inicial: Optional[float] = None,
     return resultado
 
 
+# Grupos de amenidades con sus variantes tal como aparecen en los listings
+# colombianos. Permite que "zona de niños" matchee "Parque infantil", etc.
+_AMENIDAD_SINONIMOS = {
+    "piscina": ["piscina"],
+    "gimnasio": ["gimnasio", "gym"],
+    "zona_ninos": ["infantil", "juegos infantiles", "parque infantil", "zona infantil",
+                   "ludoteca", "zona de ninos", "ninos", "juegos"],
+    "seguridad": ["porteria", "vigilancia", "seguridad", "circuito cerrado", "cctv",
+                  "recepcion", "guarda", "monitoreo"],
+    "ascensor": ["ascensor"],
+    "salon_social": ["salon comunal", "salon social", "salon de eventos"],
+    "bbq": ["bbq", "asados", "zona humeda"],
+    "turco_sauna": ["turco", "sauna", "jacuzzi", "vapor"],
+    "mascotas": ["admite mascotas", "pet friendly", "mascotas"],
+    "parqueadero_visitantes": ["parqueadero visitantes", "garaje visitantes", "visitantes"],
+}
+
+
+def _amenidad_presente(deseada: str, texto_norm: str) -> bool:
+    """
+    ¿La amenidad que pide el comprador está en el texto de la propiedad?
+    Reconoce sinónimos ("zona de niños" ≈ "parque infantil"). Si no cae en
+    ningún grupo conocido, hace match literal.
+    """
+    from src.services.textutils import strip_accents
+    d = strip_accents(deseada).lower().strip()
+    # Buscar a qué grupo pertenece lo que pidió el comprador.
+    for variantes in _AMENIDAD_SINONIMOS.values():
+        if any(v in d or d in v for v in variantes):
+            return any(v in texto_norm for v in variantes)
+    # Amenidad desconocida: match literal.
+    return d in texto_norm
+
+
 def match_comprador(cur, property_id, presupuesto_max: Optional[float] = None,
                     habitaciones_min: Optional[int] = None,
                     parqueaderos_min: Optional[int] = None,
@@ -591,10 +632,12 @@ def match_comprador(cur, property_id, presupuesto_max: Optional[float] = None,
         texto = f"{p.get('amenidades_internas') or ''} {p.get('amenidades_externas') or ''} {p.get('descripcion') or ''}"
         from src.services.textutils import strip_accents
         texto_n = strip_accents(texto).lower()
-        encontradas = [a for a in amenidades if strip_accents(a).lower() in texto_n]
+        # Match con sinónimos ("zona de niños" ≈ "parque infantil").
+        encontradas = [a for a in amenidades if _amenidad_presente(a, texto_n)]
+        faltantes = [a for a in amenidades if a not in encontradas]
         cumple = len(encontradas) == len(amenidades)
         add("amenidades", cumple if amenidades else None, 10,
-            f"encontradas {encontradas or 'ninguna'} de {amenidades}")
+            f"tiene {encontradas or 'ninguna'}" + (f", faltaría {faltantes}" if faltantes else ""))
 
     if zonas:
         from src.services.textutils import strip_accents
