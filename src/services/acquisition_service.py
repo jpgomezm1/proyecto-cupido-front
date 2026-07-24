@@ -45,6 +45,20 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
                 WHERE RIGHT(REGEXP_REPLACE(telefono,'[^0-9]','','g'),10) = %s LIMIT 1
             """, (tel10,))
             nombre = (a or {}).get("nombre")
+        if not nombre:
+            pa = fetch_one(db.cursor, """
+                SELECT asesor FROM propiedades
+                WHERE RIGHT(REGEXP_REPLACE(COALESCE(agente_captador_telefono,''),'[^0-9]','','g'),10) = %s
+                  AND asesor IS NOT NULL AND asesor <> '' LIMIT 1
+            """, (tel10,))
+            nombre = (pa or {}).get("asesor")
+        # Limpiar el nombre scrapeado (labels, teléfono enmascarado, "Mostrar número").
+        try:
+            from src.services.interes_service import _limpiar_texto_captador
+            if nombre:
+                nombre = _limpiar_texto_captador(nombre)
+        except Exception:
+            pass
         nombre = nombre or f"Agente {tel10}"
 
         existente = fetch_one(db.cursor, """
