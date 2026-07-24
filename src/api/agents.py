@@ -50,6 +50,55 @@ def provisionar_agente():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@agents_bp.route('/precargadas', methods=['GET'])
+def listar_cuentas_precargadas():
+    """Lista las cuentas pre-cargadas (C1) con inventario y estado de acceso entregado."""
+    try:
+        from src.services.acquisition_service import listar_precargadas, DEFAULT_PASSWORD
+        cuentas = listar_precargadas()
+        return jsonify({'success': True, 'data': {
+            'total': len(cuentas),
+            'clave_estandar': DEFAULT_PASSWORD,
+            'cuentas': cuentas,
+        }}), 200
+    except Exception as e:
+        print(f"❌ Error en listar_cuentas_precargadas: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@agents_bp.route('/precargadas/<int:user_id>/acceso', methods=['PATCH'])
+def set_acceso_cuenta(user_id):
+    """Marca/desmarca si a esa cuenta pre-cargada ya se le entregó el acceso (chulear)."""
+    try:
+        from src.services.acquisition_service import set_acceso
+        data = request.get_json(silent=True) or {}
+        entregado = bool(data.get('entregado'))
+        res = set_acceso(user_id, entregado)
+        if res.get('error'):
+            return jsonify({'success': False, 'error': res['error']}), 404
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        print(f"❌ Error en set_acceso_cuenta: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@agents_bp.route('/precargadas/provisionar-lote', methods=['POST'])
+def provisionar_lote_cuentas():
+    """Provisiona cuentas para los captadores con más inventario que aún no tienen cuenta."""
+    try:
+        from src.services.acquisition_service import provisionar_lote
+        data = request.get_json(silent=True) or {}
+        limit = int(data.get('limit', 50))
+        res = provisionar_lote(limit)
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        print(f"❌ Error en provisionar_lote_cuentas: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @agents_bp.route('', methods=['GET'])
 def get_agents():
     """

@@ -8,17 +8,15 @@ el acceso (email + clave temporal + link de login) que Matías entrega en el col
 WhatsApp. Reutiliza el hashing bcrypt de pgcrypto, igual que chat_users.
 """
 
-import secrets
-import string
-from typing import Any, Dict, Optional
+import os
+from typing import Any, Dict, List, Optional
 
-from src.services.db import get_db, fetch_one
+from src.services.db import get_db, fetch_one, fetch_all
 from src.services.textutils import normalize_phone, FRONTEND_URL
 
-
-def _temp_password(n: int = 10) -> str:
-    alfabeto = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alfabeto) for _ in range(n))
+# Clave compartida de las cuentas pre-cargadas (pilotaje: fácil de entregar por
+# WhatsApp). Sobreescribible con DEFAULT_AGENT_PASSWORD en el entorno.
+DEFAULT_PASSWORD = os.getenv("DEFAULT_AGENT_PASSWORD", "Fynder2026*")
 
 
 def provisionar_captador(telefono: str, email: Optional[str] = None,
@@ -59,12 +57,13 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
                     "nombre": nombre, "inventario": inventario, "login_url": login_url,
                     "mensaje": "El agente ya tiene cuenta activa. Usa reset_password para regenerar la clave."}
 
-        temp = _temp_password()
+        password = DEFAULT_PASSWORD
 
         if existente and reset_password:
             db.cursor.execute(
-                "UPDATE chat_users SET password_hash = crypt(%s, gen_salt('bf')), activo = TRUE WHERE id = %s",
-                (temp, existente["id"]))
+                "UPDATE chat_users SET password_hash = crypt(%s, gen_salt('bf')), activo = TRUE, "
+                "origen = 'provision' WHERE id = %s",
+                (password, existente["id"]))
             db.conn.commit()
             email_final = existente["email"]
         else:
@@ -73,13 +72,74 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
             if dup:
                 return {"error": f"Ya existe una cuenta con el email {email_final}. Usa otro email."}
             db.cursor.execute("""
-                INSERT INTO chat_users (email, nombre, password_hash, telefono, activo)
-                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE)
-            """, (email_final, nombre, temp, tel_full))
+                INSERT INTO chat_users (email, nombre, password_hash, telefono, activo, origen, acceso_entregado)
+                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE, 'provision', FALSE)
+            """, (email_final, nombre, password, tel_full))
             db.conn.commit()
 
         return {"ok": True, "ya_existia": False, "email": email_final,
-                "password_temporal": temp, "nombre": nombre, "inventario": inventario,
+                "password": password, "nombre": nombre, "inventario": inventario,
                 "login_url": login_url,
-                "mensaje": f"Cuenta lista con {inventario} inmueble(s) de su inventario. "
-                           "Entrégale email + clave temporal por WhatsApp."}
+                "mensaje": f"Cuenta lista con {inventario} inmueble(s). Entrégale email + clave "
+                           f"({password}) por WhatsApp."}
+
+
+# =========================================================================
+# Gestión de cuentas pre-cargadas (tabla en el admin)
+# =========================================================================
+
+def listar_precargadas() -> List[Dict[str, Any]]:
+    """Lista las cuentas pre-cargadas (origen='provision') con inventario y estado de entrega."""
+    with get_db() as db:
+        rows = fetch_all(db.cursor, """
+            SELECT u.id, u.nombre, u.email, u.telefono, u.activo, u.acceso_entregado,
+                   u.acceso_entregado_at, u.ultimo_login, u.fecha_creacion,
+                   (SELECT COUNT(*) FROM propiedades p
+                    WHERE RIGHT(REGEXP_REPLACE(COALESCE(p.agente_captador_telefono,''),'[^0-9]','','g'),10)
+                        = RIGHT(REGEXP_REPLACE(COALESCE(u.telefono,''),'[^0-9]','','g'),10)) AS inventario
+            FROM chat_users u
+            WHERE u.origen = 'provision'
+            ORDER BY u.acceso_entregado ASC, inventario DESC, u.nombre ASC
+        """)
+    return [dict(r) for r in rows]
+
+
+def set_acceso(user_id: int, entregado: bool) -> Dict[str, Any]:
+    """Marca/desmarca si a esa cuenta pre-cargada ya se le entregó el acceso."""
+    with get_db() as db:
+        db.cursor.execute("""
+            UPDATE chat_users
+            SET acceso_entregado = %s,
+                acceso_entregado_at = CASE WHEN %s THEN NOW() ELSE NULL END
+            WHERE id = %s AND origen = 'provision'
+            RETURNING id, acceso_entregado
+        """, (entregado, entregado, user_id))
+        row = db.cursor.fetchone()
+        if not row:
+            db.conn.rollback()
+            return {"error": "Cuenta no encontrada o no es pre-cargada."}
+        db.conn.commit()
+    return {"ok": True, "id": row["id"], "acceso_entregado": row["acceso_entregado"]}
+
+
+def provisionar_lote(limit: int = 50) -> Dict[str, Any]:
+    """Provisiona cuentas para los captadores con más inventario que aún no tienen cuenta."""
+    with get_db() as db:
+        rows = fetch_all(db.cursor, """
+            SELECT MAX(agente_captador_telefono) AS telefono, COUNT(*) AS inventario,
+                   RIGHT(REGEXP_REPLACE(agente_captador_telefono,'[^0-9]','','g'),10) AS tel10
+            FROM propiedades
+            WHERE agente_captador_telefono IS NOT NULL
+              AND RIGHT(REGEXP_REPLACE(agente_captador_telefono,'[^0-9]','','g'),10) NOT IN (
+                  SELECT RIGHT(REGEXP_REPLACE(COALESCE(telefono,''),'[^0-9]','','g'),10)
+                  FROM chat_users WHERE telefono IS NOT NULL)
+            GROUP BY tel10
+            ORDER BY inventario DESC
+            LIMIT %s
+        """, (limit,))
+    creadas = 0
+    for r in rows:
+        res = provisionar_captador(r["telefono"])
+        if res.get("ok") and not res.get("ya_existia"):
+            creadas += 1
+    return {"ok": True, "creadas": creadas, "candidatos": len(rows)}

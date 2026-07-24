@@ -63,7 +63,7 @@ def main():
         if res.get("error"):
             print(f"  ✗ {c['telefono']}: {res['error']}")
             continue
-        print(f"  ✓ {res['email']}  |  clave: {res.get('password_temporal','(existente)')}  "
+        print(f"  ✓ {res['email']}  |  clave: {res.get('password','(existente)')}  "
               f"|  {res['inventario']} inmueble(s)  |  {res['login_url']}")
 
 
