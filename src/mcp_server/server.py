@@ -35,6 +35,7 @@ from src.services import listing_service as lst
 from src.services import share_service as sh
 from src.services import qa_service as qa
 from src.services import documento_service as doc
+from src.services import interes_service as interes
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -869,6 +870,38 @@ def list_my_properties(limit: int = 50) -> Dict[str, Any]:
         return {"total": 0, "propiedades": [],
                 "mensaje": "Tu usuario no tiene un teléfono asociado para identificar inventario propio."}
     return ps.list_my_properties_public(agent.telefono_10, limit)
+
+
+@mcp.tool()
+def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None) -> Dict[str, Any]:
+    """
+    Dispara una solicitud de VISITA para un inmueble (por su código). Con esto,
+    Fynder registra tu interés, verifica que el inmueble siga disponible, y le
+    pasa la coordinación a Hernán de Fynder, que contacta a ambas partes y agenda
+    la visita. Úsala cuando el agente diga algo como "quiero ver el código X",
+    "coordíname una visita a la X" o "pásale esta al equipo".
+
+    - `codigo`: código del inmueble (obligatorio).
+    - `cliente_ref`: referencia libre de tu cliente comprador (opcional; ej. "familia López").
+    - `preguntas`: dudas para el dueño que quieras que Hernán resuelva (opcional).
+
+    Importante: Fynder coordina por ti; NO se entregan datos de contacto de la
+    otra parte. Al terminar, dile al agente que Hernán le confirmará la visita.
+    """
+    err = _agent_or_error()
+    if err:
+        return err
+    agent = current_agent()
+    if not agent.telefono:
+        return {"error": "sin_telefono",
+                "mensaje": "Tu usuario no tiene un teléfono asociado para identificarte como comprador."}
+    return interes.orquestar_solicitud(
+        propiedad_ref=codigo,
+        comprador_telefono=agent.telefono,
+        cliente_ref=cliente_ref,
+        preguntas=preguntas,
+        fuente="MCP",
+    )
 
 
 # Las herramientas de ESCRITURA (propose/apply) se registran en write_tools.

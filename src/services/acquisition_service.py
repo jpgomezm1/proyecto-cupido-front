@@ -1,0 +1,85 @@
+"""
+C1 — Provisionar cuentas de agentes (adquisición).
+
+Dado el teléfono de un captador, arma/entrega su cuenta del portal (chat_users)
+ya asociada a su inventario (las propiedades que él captó son visibles con
+`list_my_properties`, scoped por los últimos 10 dígitos del teléfono). Devuelve
+el acceso (email + clave temporal + link de login) que Matías entrega en el cold
+WhatsApp. Reutiliza el hashing bcrypt de pgcrypto, igual que chat_users.
+"""
+
+import secrets
+import string
+from typing import Any, Dict, Optional
+
+from src.services.db import get_db, fetch_one
+from src.services.textutils import normalize_phone, FRONTEND_URL
+
+
+def _temp_password(n: int = 10) -> str:
+    alfabeto = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alfabeto) for _ in range(n))
+
+
+def provisionar_captador(telefono: str, email: Optional[str] = None,
+                         nombre: Optional[str] = None,
+                         reset_password: bool = False) -> Dict[str, Any]:
+    """
+    Crea (o refresca) la cuenta del portal para un captador. Devuelve el acceso
+    listo para entregar. Si ya existe y `reset_password` es False, no cambia nada.
+    """
+    tel10 = normalize_phone(telefono)
+    if not tel10:
+        return {"error": f"Teléfono inválido: {telefono}"}
+    tel_full = telefono if str(telefono).startswith("+") else f"+57{tel10}"
+    login_url = f"{FRONTEND_URL}/chat/login"
+
+    with get_db() as db:
+        inv = fetch_one(db.cursor, """
+            SELECT COUNT(*) AS n FROM propiedades
+            WHERE RIGHT(REGEXP_REPLACE(COALESCE(agente_captador_telefono,''),'[^0-9]','','g'),10) = %s
+        """, (tel10,))
+        inventario = inv["n"] if inv else 0
+
+        if not nombre:
+            a = fetch_one(db.cursor, """
+                SELECT nombre FROM agentes
+                WHERE RIGHT(REGEXP_REPLACE(telefono,'[^0-9]','','g'),10) = %s LIMIT 1
+            """, (tel10,))
+            nombre = (a or {}).get("nombre")
+        nombre = nombre or f"Agente {tel10}"
+
+        existente = fetch_one(db.cursor, """
+            SELECT id, email FROM chat_users
+            WHERE RIGHT(REGEXP_REPLACE(COALESCE(telefono,''),'[^0-9]','','g'),10) = %s LIMIT 1
+        """, (tel10,))
+
+        if existente and not reset_password:
+            return {"ok": True, "ya_existia": True, "email": existente["email"],
+                    "nombre": nombre, "inventario": inventario, "login_url": login_url,
+                    "mensaje": "El agente ya tiene cuenta activa. Usa reset_password para regenerar la clave."}
+
+        temp = _temp_password()
+
+        if existente and reset_password:
+            db.cursor.execute(
+                "UPDATE chat_users SET password_hash = crypt(%s, gen_salt('bf')), activo = TRUE WHERE id = %s",
+                (temp, existente["id"]))
+            db.conn.commit()
+            email_final = existente["email"]
+        else:
+            email_final = (email or f"{tel10}@agentes.fynder.co").strip().lower()
+            dup = fetch_one(db.cursor, "SELECT id FROM chat_users WHERE lower(email) = lower(%s)", (email_final,))
+            if dup:
+                return {"error": f"Ya existe una cuenta con el email {email_final}. Usa otro email."}
+            db.cursor.execute("""
+                INSERT INTO chat_users (email, nombre, password_hash, telefono, activo)
+                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE)
+            """, (email_final, nombre, temp, tel_full))
+            db.conn.commit()
+
+        return {"ok": True, "ya_existia": False, "email": email_final,
+                "password_temporal": temp, "nombre": nombre, "inventario": inventario,
+                "login_url": login_url,
+                "mensaje": f"Cuenta lista con {inventario} inmueble(s) de su inventario. "
+                           "Entrégale email + clave temporal por WhatsApp."}

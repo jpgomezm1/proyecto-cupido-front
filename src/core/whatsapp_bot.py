@@ -208,6 +208,17 @@ class WhatsAppBot:
 
             print(f"   ✅ Pedido guardado con ID: {pedido_id}")
 
+            # === MOTOR DE LEADS (Bloque E): corre automático al entrar el pedido,
+            # pero SOLO si está encendido (LEAD_ENGINE_ENABLED). No-op cuando está
+            # apagado; protegido para no romper la ingesta pase lo que pase. ===
+            try:
+                from src.services.leads_service import motor_activo, asignar_leads
+                if motor_activo():
+                    _res_leads = asignar_leads(pedido_id)
+                    print(f"   🎯 Motor de leads: {_res_leads.get('total', 0)} candidatos")
+            except Exception as _e_leads:
+                print(f"   ⚠️ Motor de leads falló (ignorado): {_e_leads}")
+
             # === AUTO-RESPUESTA: solo si cumple criterios y esta habilitado ===
             auto_enabled = self._is_auto_responder_enabled()
             if (auto_enabled and presupuesto and presupuesto >= self._PRESUPUESTO_MIN_AUTO

@@ -72,6 +72,23 @@ def crear_promesa(property_id, agente_telefono: str, comprador: Dict[str, Any],
         """, (share_id, p["id"], agente_telefono, __import__("json").dumps(datos, ensure_ascii=False, default=str)))
         db.conn.commit()
 
+        # D1 · Señal PASIVA de cierre (Capa 2 anti-salto): generar la promesa es
+        # evidencia de que el negocio se está cerrando dentro de Fynder. Solo
+        # dejamos el evento; NO cerramos ninguna interacción automáticamente (no
+        # sabemos con certeza cuál corresponde y una atribución errónea es peor).
+        db.log_evento(
+            tipo_evento="promesa_compraventa_generada",
+            agente_telefono=agente_telefono,
+            propiedad_id=p["id"],
+            datos_evento={
+                "senal": "cierre",
+                "share_id": share_id,
+                "comprador": (comprador or {}).get("nombre"),
+                "vendedor": (vendedor or {}).get("nombre"),
+                "precio": (terminos or {}).get("precio_total") or p.get("precio"),
+            },
+        )
+
     import os
     base = os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
     return {

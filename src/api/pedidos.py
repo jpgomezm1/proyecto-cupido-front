@@ -187,6 +187,47 @@ def set_estado(pedido_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@pedidos_bp.route('/pedidos/<int:pedido_id>/leads', methods=['GET'])
+def get_pedido_leads(pedido_id):
+    """Lista los leads (inmuebles candidatos puntuados) guardados para un pedido."""
+    try:
+        with DatabaseManager() as db:
+            db.cursor.execute("""
+                SELECT l.id, l.propiedad_id, l.score, l.calidad, l.razon, l.estado,
+                       p.codigo_propiedad, p.titulo, p.precio, p.zona, p.ciudad
+                FROM leads l
+                JOIN propiedades p ON p.id = l.propiedad_id
+                WHERE l.pedido_id = %s
+                ORDER BY l.score DESC
+            """, (pedido_id,))
+            rows = [dict(r) for r in db.cursor.fetchall()]
+        return jsonify({'success': True,
+                        'data': {'pedido_id': pedido_id, 'total': len(rows), 'leads': rows}})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@pedidos_bp.route('/pedidos/<int:pedido_id>/leads', methods=['POST'])
+def run_pedido_leads(pedido_id):
+    """
+    Corre el motor de asignación de leads para un pedido y persiste el resultado.
+    Respeta el interruptor LEAD_ENGINE_ENABLED: si está apagado, responde 200 con
+    el aviso (no corre nada, no gasta recursos).
+    """
+    try:
+        from src.services.leads_service import asignar_leads
+        data = request.get_json(silent=True) or {}
+        limit = int(data.get('limit', 10))
+        res = asignar_leads(pedido_id, limit=limit)
+        if res.get('activo') is False:
+            return jsonify({'success': True, 'data': res, 'message': res.get('mensaje')}), 200
+        if res.get('error'):
+            return jsonify({'success': False, 'error': res['error']}), 404
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @pedidos_bp.route('/pedidos/<int:pedido_id>/share', methods=['PATCH'])
 def set_share(pedido_id):
     """Asocia un share_id (link compartible) a un pedido."""

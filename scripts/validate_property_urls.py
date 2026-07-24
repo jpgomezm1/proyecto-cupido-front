@@ -26,41 +26,16 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
+# Fuente única de verdad del chequeo de URLs (compartida con la verificación
+# on-demand del MCP/admin). Ver src/services/disponibilidad_service.py.
+from src.services.disponibilidad_service import check_url, USER_AGENT
+
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 BATCH_SIZE = 100
-DELAY_BETWEEN_REQUESTS = 0.5  # seconds
+DELAY_BETWEEN_REQUESTS = 0.2  # seconds
 DELAY_BETWEEN_BATCHES = 2     # seconds
-REQUEST_TIMEOUT = 20           # seconds
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
-# Patrones en el HTML que indican que la propiedad ya no existe.
-# Los portales devuelven HTTP 200 pero muestran estos mensajes en el contenido.
-CONTENT_NOT_FOUND_PATTERNS = [
-    "no se encontró inmueble",
-    "no se encontro inmueble",
-    "inmueble no encontrado",
-    "propiedad no encontrada",
-    "esta propiedad ya no está disponible",
-    "esta propiedad ya no esta disponible",
-    "no encontramos la propiedad",
-    "property not found",
-    "this property is no longer available",
-    "el inmueble que buscas ya no está disponible",
-    "el inmueble que buscas ya no esta disponible",
-    "este inmueble ya no se encuentra disponible",
-    "publicación no disponible",
-    "publicacion no disponible",
-]
-
-# Wasi a veces redirige al home cuando no existe
-WASI_REDIRECT_PATTERNS = ["wasi.co/es", "wasi.co/en"]
 
 
 class Colors:
@@ -80,71 +55,7 @@ def get_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def check_url(session, url, fuente):
-    """
-    Verifica si una URL sigue activa.
-    Approach principal: leer el contenido HTML y buscar patrones de "no encontrada".
-    Los portales inmobiliarios devuelven HTTP 200 aun cuando la propiedad ya no existe.
-    Returns: (is_active: bool, reason: str, status_code: int|None)
-    """
-    if not url or not url.startswith("http"):
-        return True, "sin_url", None
-
-    try:
-        response = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        status = response.status_code
-        final_url = response.url
-
-        # 410 Gone — definitivamente eliminada
-        if status == 410:
-            return False, "410_gone", status
-
-        # 404 — no existe
-        if status == 404:
-            return False, "404", status
-
-        # Server error (500+) — NO desactivar, es temporal
-        if status >= 500:
-            return True, f"server_error_{status}", status
-
-        # 403 Forbidden — NO desactivar, puede ser rate limit
-        if status == 403:
-            return True, "forbidden_skip", status
-
-        # === DETECCION POR CONTENIDO (approach principal) ===
-        # Los portales devuelven 200 pero muestran "no encontrada" en el HTML
-        if 200 <= status < 400:
-            content_lower = response.text[:8000].lower()
-
-            # Buscar patrones genericos de "no encontrada" en el HTML
-            for pattern in CONTENT_NOT_FOUND_PATTERNS:
-                if pattern in content_lower:
-                    return False, f"content_not_found: {pattern}", status
-
-            # Wasi: a veces redirige al home en vez de mostrar mensaje
-            if fuente and "wasi" in fuente.lower():
-                for pattern in WASI_REDIRECT_PATTERNS:
-                    if pattern in final_url.lower() and "info.wasi.co" not in final_url.lower():
-                        return False, "wasi_redirect_home", status
-
-            return True, "ok", status
-
-        # Cualquier otro status — no desactivar por seguridad
-        return True, f"unknown_{status}", status
-
-    except requests.exceptions.Timeout:
-        # Timeout — NO desactivar, puede ser temporal
-        return True, "timeout_skip", None
-    except requests.exceptions.ConnectionError:
-        # Error de conexion — NO desactivar, puede ser temporal
-        return True, "connection_error_skip", None
-    except requests.exceptions.TooManyRedirects:
-        return False, "too_many_redirects", None
-    except Exception as e:
-        return True, f"error: {str(e)[:50]}", None
-
-
-def run_validation(dry_run=False, limit=None):
+def run_validation(dry_run=False, limit=None, offset=None, min_id=None):
     start_time = datetime.now()
     print(f"\n{Colors.BOLD}{'=' * 70}{Colors.END}")
     print(f"{Colors.BOLD}  VALIDACION DE URLS DE PROPIEDADES{Colors.END}")
@@ -161,10 +72,16 @@ def run_validation(dry_run=False, limit=None):
         SELECT id, url, fuente, titulo
         FROM propiedades
         WHERE activa = TRUE AND url IS NOT NULL AND url != ''
-        ORDER BY id
     """
+    # min_id: reanudar solo desde propiedades con id mayor (checkpoint estable
+    # ante desactivaciones, a diferencia de OFFSET que se corre al desactivar)
+    if min_id:
+        query += f" AND id > {int(min_id)}"
+    query += " ORDER BY id"
     if limit:
         query += f" LIMIT {int(limit)}"
+    if offset:
+        query += f" OFFSET {int(offset)}"
 
     cursor.execute(query)
     properties = cursor.fetchall()
@@ -222,8 +139,8 @@ def run_validation(dry_run=False, limit=None):
 
             status_str = f"{Colors.RED}✗ {reason.upper()}{Colors.END} — {'DESACTIVADA' if not dry_run else 'SERIA DESACTIVADA'}"
 
-        # Progress log
-        print(f"  [{idx:>{len(str(total))}}/{total}] {status_str} {Colors.DIM}{titulo} ({fuente}){Colors.END}")
+        # Progress log (incluye id para poder reanudar por --min-id si se corta)
+        print(f"  [{idx:>{len(str(total))}}/{total}] {status_str} {Colors.DIM}#{prop_id} {titulo} ({fuente}){Colors.END}")
 
         # Rate limiting
         if idx % BATCH_SIZE == 0 and idx < total:
@@ -261,6 +178,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Validador de URLs de propiedades")
     parser.add_argument("--dry-run", action="store_true", help="Solo verificar, no desactivar")
     parser.add_argument("--limit", type=int, help="Limitar cantidad de propiedades a verificar")
+    parser.add_argument("--offset", type=int, help="Saltar las primeras N propiedades (reanudar validacion)")
+    parser.add_argument("--min-id", type=int, dest="min_id", help="Solo verificar propiedades con id mayor a este (reanudar por checkpoint estable)")
     args = parser.parse_args()
 
-    run_validation(dry_run=args.dry_run, limit=args.limit)
+    run_validation(dry_run=args.dry_run, limit=args.limit, offset=args.offset, min_id=args.min_id)

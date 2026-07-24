@@ -40,6 +40,16 @@ _ESTADOS_VALIDOS = {
     "disponible":  {"activa": True,  "estado": "Disponible"},
 }
 
+# Campos editables vía MCP (C2). El precio/descr./estado tienen sus propias tools
+# con preview enriquecido; este set cubre el resto de la ficha.
+_CAMPOS_EDITABLES = {
+    "titulo": "text", "descripcion": "text", "tipo_propiedad": "text",
+    "ciudad": "text", "zona": "text", "direccion_completa": "text",
+    "amenidades_internas": "text", "amenidades_externas": "text",
+    "habitaciones": "int", "banos": "int", "parqueaderos": "int",
+    "estrato": "int", "administracion": "int", "area_construida": "float",
+}
+
 
 class WriteError(Exception):
     """Error de negocio en una operación de escritura (ownership, validación)."""
@@ -195,6 +205,35 @@ def propose_status_update(agent, property_id, nuevo_estado: str) -> Dict[str, An
     }
 
 
+def propose_fields_update(agent, property_id, campos: Dict[str, Any]) -> Dict[str, Any]:
+    """Propone editar varios campos de la ficha (área, alcobas, amenidades, etc.)."""
+    if not isinstance(campos, dict) or not campos:
+        raise WriteError("Envía un objeto 'campos' con lo que quieres cambiar (ej. {\"habitaciones\": 3}).")
+    limpios: Dict[str, Any] = {}
+    for k, v in campos.items():
+        t = _CAMPOS_EDITABLES.get(k)
+        if not t:
+            raise WriteError(f"Campo no editable: '{k}'. Editables: {sorted(_CAMPOS_EDITABLES)}.")
+        if t == "text":
+            limpios[k] = (str(v).strip() if v is not None else "") or None
+        else:
+            try:
+                limpios[k] = int(float(v)) if t == "int" else float(v)
+            except (TypeError, ValueError):
+                raise WriteError(f"'{k}' debe ser un número.")
+    with get_db() as db:
+        prop = _require_owned(db.cursor, property_id, agent.telefono_10)
+    token = _make_token({"action": "fields", "property_id": prop["id"],
+                         "owner": agent.telefono_10, "campos": limpios})
+    return {
+        "accion": "editar_campos",
+        "propiedad": {"id": prop["id"], "slug": prop["slug"], "titulo": prop["titulo"]},
+        "preview": {"campos": limpios},
+        "confirmation_token": token,
+        "instruccion": "Para confirmar, llama apply_change con este confirmation_token.",
+    }
+
+
 def register_buyer_match(agent, property_id, comprador_telefono: str,
                          notas: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -278,6 +317,42 @@ def apply_change(agent, confirmation_token: str) -> Dict[str, Any]:
             """, (cfg["activa"], cfg["estado"], property_id, owner_10))
             resumen = {"campo": "estado", "estado": cfg["estado"], "activa": cfg["activa"]}
 
+        elif action == "fields":
+            campos = payload.get("campos") or {}
+            cols = [c for c in campos if c in _CAMPOS_EDITABLES]
+            if not cols:
+                raise WriteError("No hay campos válidos que aplicar.")
+            set_parts = [f"{c} = %({c})s" for c in cols]
+            vals = {c: campos[c] for c in cols}
+            if "descripcion" in vals:
+                set_parts.append("descripcion_length = %(descripcion_length)s")
+                vals["descripcion_length"] = len(vals["descripcion"]) if vals["descripcion"] else None
+            vals["_pid"] = property_id
+            vals["_own"] = owner_10
+            db.cursor.execute(f"""
+                UPDATE propiedades SET {', '.join(set_parts)}, fecha_actualizacion = NOW()
+                WHERE id = %(_pid)s
+                  AND RIGHT(REGEXP_REPLACE(agente_captador_telefono,'[^0-9]','','g'),10) = %(_own)s
+                RETURNING id
+            """, vals)
+            row = db.cursor.fetchone()
+            if row and ("amenidades_internas" in cols or "amenidades_externas" in cols):
+                db.cursor.execute("""
+                    UPDATE propiedades SET total_amenidades = (
+                        COALESCE(array_length(string_to_array(NULLIF(amenidades_internas,''),'|'),1),0)
+                      + COALESCE(array_length(string_to_array(NULLIF(amenidades_externas,''),'|'),1),0)
+                    ) WHERE id = %s
+                """, (property_id,))
+            resumen = {"campo": "varios", "campos": cols}
+            # `row` ya está leído arriba; saltamos el fetch genérico de más abajo.
+            if not row:
+                db.conn.rollback()
+                raise WriteError("No se aplicó el cambio: la propiedad no existe o no es tuya.")
+            db.conn.commit()
+            db.log_evento(tipo_evento="mcp_fields_update", agente_telefono=agent.telefono,
+                          propiedad_id=property_id, datos_evento={"origen": "mcp", **resumen})
+            return {"ok": True, "propiedad_id": property_id, "aplicado": resumen}
+
         else:
             raise WriteError(f"Acción desconocida en el token: {action}")
 
@@ -350,6 +425,18 @@ def register_write_tools(mcp) -> None:
         `apply_change`.
         """
         return _wrap(propose_status_update, property_id, nuevo_estado)
+
+    @mcp.tool()
+    def propose_fields_update_tool(property_id: str, campos: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        PROPONE editar varios campos de una propiedad PROPIA a la vez (los que no
+        cubren las otras tools): título, tipo, ubicación (ciudad/zona/dirección),
+        habitaciones, baños, parqueaderos, estrato, administración, área y
+        amenidades (internas/externas, separadas por '|'). Pásalos en `campos`,
+        p. ej. {"habitaciones": 3, "estrato": 5}. Devuelve preview +
+        confirmation_token; aplica con `apply_change`. Solo sobre inmuebles propios.
+        """
+        return _wrap(propose_fields_update, property_id, campos)
 
     @mcp.tool()
     def register_buyer_match_tool(property_id: str, comprador_telefono: str,

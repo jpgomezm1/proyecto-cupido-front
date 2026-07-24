@@ -21,6 +21,35 @@ def get_db():
     return db
 
 
+@agents_bp.route('/provisionar', methods=['POST'])
+def provisionar_agente():
+    """
+    C1 — Provisiona (o refresca) la cuenta del portal para un captador, ya
+    asociada a su inventario. Body JSON: { telefono (req), email?, nombre?,
+    reset_password? }. Devuelve el acceso (email + clave temporal + login_url)
+    para que Matías lo entregue por WhatsApp.
+    """
+    try:
+        from src.services.acquisition_service import provisionar_captador
+        data = request.get_json(silent=True) or {}
+        telefono = (data.get('telefono') or '').strip()
+        if not telefono:
+            return jsonify({'success': False, 'error': 'telefono requerido'}), 400
+        res = provisionar_captador(
+            telefono,
+            email=(data.get('email') or None),
+            nombre=(data.get('nombre') or None),
+            reset_password=bool(data.get('reset_password')),
+        )
+        if res.get('error'):
+            return jsonify({'success': False, 'error': res['error']}), 400
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        print(f"❌ Error en provisionar_agente: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @agents_bp.route('', methods=['GET'])
 def get_agents():
     """

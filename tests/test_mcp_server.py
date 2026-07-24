@@ -30,9 +30,12 @@ EXPECTED_TOOLS = {
     "reporte_zona_captacion",
     # Documentos de cierre
     "generar_promesa_compraventa",
+    # Flujo interés → PUNTAS → Hernán (Bloque A)
+    "solicitar_visita",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
-    "propose_status_update_tool", "register_buyer_match_tool", "apply_change",
+    "propose_status_update_tool", "propose_fields_update_tool",
+    "register_buyer_match_tool", "apply_change",
 }
 
 

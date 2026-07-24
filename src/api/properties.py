@@ -893,6 +893,147 @@ def health_check():
             db.disconnect()
 
 
+@api_bp.route('/properties/<int:property_id>/interes', methods=['POST'])
+def registrar_interes_endpoint(property_id: int):
+    """
+    A4 — Punto de entrada de Matías (admin): registra el interés de un agente
+    comprador sobre este inmueble y dispara el flujo interés → verificar → PUNTAS
+    a Hernán. Cuerpo JSON: { comprador_telefono (req), cliente_ref?, preguntas?,
+    pedido_id? }. No devuelve contactos (solo confirmación).
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_tel = (data.get('comprador_telefono') or '').strip()
+        if not raw_tel:
+            return jsonify({'success': False, 'error': 'comprador_telefono requerido'}), 400
+
+        comprador_telefono = normalize_colombia_phone(raw_tel)
+        if not comprador_telefono:
+            return jsonify({'success': False,
+                            'error': f'Teléfono inválido: {raw_tel}'}), 400
+
+        # Import local para no cargar el stack de servicios si el endpoint no se usa.
+        from src.services import interes_service as interes
+        res = interes.orquestar_solicitud(
+            propiedad_ref=property_id,
+            comprador_telefono=comprador_telefono,
+            cliente_ref=(data.get('cliente_ref') or None),
+            preguntas=(data.get('preguntas') or None),
+            pedido_id=data.get('pedido_id'),
+            fuente='WhatsApp',
+        )
+        if not res.get('ok'):
+            return jsonify({'success': False,
+                            'error': res.get('mensaje') or res.get('error') or
+                            'No se pudo registrar el interés'}), 400
+        return jsonify({'success': True, 'data': res, 'message': res.get('mensaje')}), 200
+
+    except Exception as e:
+        print(f"❌ Error en registrar_interes_endpoint: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/properties/<int:property_id>/verificar', methods=['POST'])
+def verificar_property(property_id: int):
+    """
+    B1/B2 — Re-scrapea el link del inmueble on-demand y devuelve si sigue
+    disponible ({ activo, estado, status_code, motivo, verificado_en }). Si está
+    caído, marca la propiedad como inactiva. Usado por el botón "verificar ahora".
+    """
+    try:
+        from src.services.disponibilidad_service import verificar_disponibilidad
+        res = verificar_disponibilidad(property_id)
+        if res.get('error'):
+            return jsonify({'success': False, 'error': res['error']}), 404
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        print(f"❌ Error en verificar_property: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/properties/<int:property_id>', methods=['PATCH'])
+def update_property_fields(property_id: int):
+    """
+    C2 — Edición general de campos del inmueble (desde la ficha admin). Solo
+    actualiza campos de una allowlist, recalcula derivados (largo de descripción,
+    total de amenidades) y deja auditoría en eventos_log.
+    """
+    EDIT_INT = {'precio', 'habitaciones', 'banos', 'parqueaderos', 'estrato', 'administracion'}
+    EDIT_FLOAT = {'area_construida'}
+    EDIT_TXT = {'titulo', 'descripcion', 'tipo_propiedad', 'tipo_negocio', 'ciudad', 'zona',
+                'direccion_completa', 'amenidades_internas', 'amenidades_externas'}
+    db = None
+    try:
+        data = request.get_json(silent=True) or {}
+        sets, params, cambios = [], [], {}
+        for k, v in data.items():
+            if k in EDIT_INT:
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    continue
+                try:
+                    v = int(float(v))
+                except (TypeError, ValueError):
+                    return jsonify({'success': False, 'error': f"'{k}' debe ser un número"}), 400
+                sets.append(f"{k} = %s"); params.append(v); cambios[k] = v
+            elif k in EDIT_FLOAT:
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    continue
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    return jsonify({'success': False, 'error': f"'{k}' debe ser un número"}), 400
+                sets.append(f"{k} = %s"); params.append(v); cambios[k] = v
+            elif k in EDIT_TXT:
+                v = (str(v).strip() if v is not None else '') or None
+                sets.append(f"{k} = %s"); params.append(v); cambios[k] = v
+
+        if not sets:
+            return jsonify({'success': False, 'error': 'No hay campos válidos para actualizar'}), 400
+
+        if 'descripcion' in cambios:
+            sets.append("descripcion_length = %s")
+            params.append(len(cambios['descripcion']) if cambios['descripcion'] else None)
+        sets.append("fecha_actualizacion = CURRENT_TIMESTAMP")
+
+        db = get_db()
+        db.cursor.execute(
+            f"UPDATE propiedades SET {', '.join(sets)} WHERE id = %s RETURNING id, codigo_propiedad, titulo",
+            params + [property_id])
+        row = db.cursor.fetchone()
+        if not row:
+            return jsonify({'success': False, 'error': 'Propiedad no encontrada'}), 404
+
+        # Recalcular total de amenidades si cambiaron.
+        if 'amenidades_internas' in cambios or 'amenidades_externas' in cambios:
+            db.cursor.execute("""
+                UPDATE propiedades SET total_amenidades = (
+                    COALESCE(array_length(string_to_array(NULLIF(amenidades_internas, ''), '|'), 1), 0)
+                  + COALESCE(array_length(string_to_array(NULLIF(amenidades_externas, ''), '|'), 1), 0)
+                ) WHERE id = %s
+            """, (property_id,))
+        db.conn.commit()
+
+        try:
+            db.log_evento(tipo_evento='property_edit', propiedad_id=property_id,
+                          datos_evento={'campos': list(cambios.keys()), 'origen': 'admin_ui'})
+        except Exception:
+            pass
+
+        return jsonify({'success': True, 'data': dict(row), 'campos_actualizados': list(cambios.keys())}), 200
+
+    except Exception as e:
+        if db and db.conn:
+            db.conn.rollback()
+        print(f"❌ Error en update_property_fields: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if db:
+            db.disconnect()
+
+
 @api_bp.route('/properties/<int:property_id>/status', methods=['PUT'])
 def update_property_status(property_id: int):
     """
