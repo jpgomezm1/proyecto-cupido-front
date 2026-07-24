@@ -9,6 +9,8 @@ WhatsApp. Reutiliza el hashing bcrypt de pgcrypto, igual que chat_users.
 """
 
 import os
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from src.services.db import get_db, fetch_one, fetch_all
@@ -17,6 +19,35 @@ from src.services.textutils import normalize_phone, FRONTEND_URL
 # Clave compartida de las cuentas pre-cargadas (pilotaje: fácil de entregar por
 # WhatsApp). Sobreescribible con DEFAULT_AGENT_PASSWORD en el entorno.
 DEFAULT_PASSWORD = os.getenv("DEFAULT_AGENT_PASSWORD", "Fynder2026*")
+
+# Dominio de los usuarios de login (no es un buzón real; es el identificador).
+EMAIL_DOMAIN = os.getenv("AGENT_EMAIL_DOMAIN", "fynder.co")
+
+
+def _slug_nombre(nombre: Optional[str]) -> str:
+    """Convierte un nombre en un slug tipo 'ricardo.hernandez' (nombre.apellido)."""
+    s = unicodedata.normalize("NFKD", str(nombre or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c))  # quita acentos
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)                          # solo letras/dígitos/espacios
+    partes = [p for p in s.split() if p][:2]                    # nombre + apellido
+    return ".".join(partes)
+
+
+def _email_friendly(cur, nombre: Optional[str], tel10: str, exclude_id: Optional[int] = None) -> str:
+    """
+    Genera un email de login amigable y ÚNICO: 'nombre.apellido@dominio'. Sin
+    nombre usable → 'agente.<tel10>@dominio'. Ante colisión, agrega un número.
+    """
+    base = _slug_nombre(nombre) or f"agente.{tel10}"
+    email = f"{base}@{EMAIL_DOMAIN}"
+    n = 1
+    while True:
+        row = fetch_one(cur, "SELECT id FROM chat_users WHERE lower(email) = lower(%s)", (email,))
+        if not row or (exclude_id is not None and row["id"] == exclude_id):
+            return email
+        n += 1
+        email = f"{base}{n}@{EMAIL_DOMAIN}"
 
 
 def provisionar_captador(telefono: str, email: Optional[str] = None,
@@ -81,10 +112,13 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
             db.conn.commit()
             email_final = existente["email"]
         else:
-            email_final = (email or f"{tel10}@agentes.fynder.co").strip().lower()
-            dup = fetch_one(db.cursor, "SELECT id FROM chat_users WHERE lower(email) = lower(%s)", (email_final,))
-            if dup:
-                return {"error": f"Ya existe una cuenta con el email {email_final}. Usa otro email."}
+            if email:
+                email_final = email.strip().lower()
+                dup = fetch_one(db.cursor, "SELECT id FROM chat_users WHERE lower(email) = lower(%s)", (email_final,))
+                if dup:
+                    return {"error": f"Ya existe una cuenta con el email {email_final}. Usa otro email."}
+            else:
+                email_final = _email_friendly(db.cursor, nombre, tel10)
             db.cursor.execute("""
                 INSERT INTO chat_users (email, nombre, password_hash, telefono, activo, origen, acceso_entregado)
                 VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE, 'provision', FALSE)
@@ -134,6 +168,27 @@ def set_acceso(user_id: int, entregado: bool) -> Dict[str, Any]:
             return {"error": "Cuenta no encontrada o no es pre-cargada."}
         db.conn.commit()
     return {"ok": True, "id": row["id"], "acceso_entregado": row["acceso_entregado"]}
+
+
+def renombrar_emails_friendly() -> Dict[str, Any]:
+    """
+    Regenera el email (usuario de login) de TODAS las cuentas pre-cargadas al
+    formato amigable 'nombre.apellido@dominio'. Idempotente y sin colisiones.
+    """
+    cambiadas, muestra = 0, []
+    with get_db() as db:
+        rows = fetch_all(db.cursor,
+            "SELECT id, nombre, telefono, email FROM chat_users WHERE origen = 'provision' ORDER BY id")
+        for r in rows:
+            tel10 = re.sub(r"[^0-9]", "", r.get("telefono") or "")[-10:]
+            nuevo = _email_friendly(db.cursor, r.get("nombre"), tel10, exclude_id=r["id"])
+            if nuevo.lower() != (r.get("email") or "").lower():
+                db.cursor.execute("UPDATE chat_users SET email = %s WHERE id = %s", (nuevo, r["id"]))
+                cambiadas += 1
+                if len(muestra) < 10:
+                    muestra.append({"nombre": r.get("nombre"), "email": nuevo})
+        db.conn.commit()
+    return {"ok": True, "actualizadas": cambiadas, "total": len(rows), "muestra": muestra}
 
 
 def provisionar_lote(limit: int = 50) -> Dict[str, Any]:
