@@ -63,7 +63,8 @@ def termometro_de_interes(cur, property_id, dias: int = 30) -> Dict[str, Any]:
     funnel = _interes_de_propiedad(cur, base["id"], dias)
     return {
         "propiedad": {"id": base["id"], "slug": base["slug"], "titulo": base["titulo"],
-                      "precio_legible": base["precio_legible"], "zona": base["zona"]},
+                      "precio_legible": base["precio_legible"], "zona": base["zona"],
+                      "link_compartir": base.get("link_compartir")},
         "ventana_dias": dias,
         "interes": funnel,
         **_lectura(funnel),

@@ -27,6 +27,14 @@ SENSITIVE_KEYS = {
     "phone", "celular", "whatsapp",
 }
 
+# Claves que exponen el PORTAL de origen (link original). Nunca deben salir del
+# MCP (el link válido es 'link_compartir', de Fynder). Ojo: NO se incluye "url"
+# aquí porque las tools de fotos usan {posicion, url} con la imagen; el link de
+# portal del inmueble se quita en el propio serializer.
+PROVENANCE_KEYS = {"source_url", "url_original", "link_original", "enlace_original"}
+
+_DROP_KEYS = SENSITIVE_KEYS | PROVENANCE_KEYS
+
 # Teléfonos colombianos. Se es AGRESIVO con celulares (el riesgo real). Ante la
 # duda, redactar: un teléfono filtrado es inaceptable.
 # Patrones SIEMPRE (aplican a todo, incluso campos estructurados): solo el
@@ -46,6 +54,12 @@ _PHONE_PATTERNS_TEXTO = _PHONE_PATTERNS + [
     re.compile(r"(?<!\d)\d{7}(?!\d)"),                            # fijo de 7 dígitos
 ]
 _REDACTED = "[contacto oculto]"
+
+# URLs dentro de texto libre de pedidos (agentes pegan links de metrocuadrado,
+# fincaraiz, etc.). Se redactan SOLO en el texto de pedidos (cut_signatures),
+# nunca en el sanitize general, para no tocar las URLs de imágenes.
+_URL_PATTERN = re.compile(r"https?://\S+")
+_URL_REDACTED = "[enlace oculto]"
 
 # Marcadores de firma de agente en el texto de un pedido. Desde el primero que
 # aparezca, se corta el resto del texto (ahí van nombre + teléfono del agente).
@@ -118,6 +132,9 @@ def redact_phones(text: str, cut_signatures: bool = False) -> str:
     patrones = _PHONE_PATTERNS_TEXTO if cut_signatures else _PHONE_PATTERNS
     for pat in patrones:
         out = pat.sub(_REDACTED, out)
+    # Links de portales pegados en el pedido: solo en texto de pedidos.
+    if cut_signatures:
+        out = _URL_PATTERN.sub(_URL_REDACTED, out)
     return out
 
 
@@ -129,8 +146,8 @@ def sanitize(obj: Any) -> Any:
     if isinstance(obj, dict):
         clean = {}
         for k, v in obj.items():
-            if isinstance(k, str) and k.lower() in SENSITIVE_KEYS:
-                continue  # se elimina por completo
+            if isinstance(k, str) and k.lower() in _DROP_KEYS:
+                continue  # se elimina por completo (contacto o portal de origen)
             clean[k] = sanitize(v)
         return clean
     if isinstance(obj, (list, tuple)):

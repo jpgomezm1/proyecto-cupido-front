@@ -246,6 +246,8 @@ def diagnose_property(cur, property_id) -> Dict[str, Any]:
             "precio_m2": base["precio_m2"], "area_construida": base["area_construida"],
             "habitaciones": base["habitaciones"], "total_imagenes": base["total_imagenes"],
             "dias_en_inventario": base["dias_en_inventario"],
+            "link_compartir": base.get("link_compartir"),
+            "disponibilidad": base.get("disponibilidad"),
         },
         "veredicto": veredicto,
         "nivel_comparacion": comp_data["nivel_comparacion"],
@@ -254,6 +256,7 @@ def diagnose_property(cur, property_id) -> Dict[str, Any]:
             "percentil_precio_m2": round(pct_m2 * 100) if pct_m2 is not None else None,
             "percentil_precio": round(pct_precio * 100) if pct_precio is not None else None,
             "precio_m2_mediana_zona": zona.get("precio_m2_mediana"),
+            "precio_m2_mediana_zona_legible": format_cop(zona.get("precio_m2_mediana")),
             "dias_inventario_mediana_zona": dias_med,
         },
         "demanda": {

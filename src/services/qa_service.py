@@ -71,6 +71,7 @@ def dossier_inmueble(cur, property_id) -> Dict[str, Any]:
             "id": p["id"], "slug": p["slug"], "titulo": p["titulo"],
             "precio_legible": p["precio_legible"], "tipo": p["tipo_propiedad"],
             "ciudad": p["ciudad"], "zona": p["zona"], "direccion": p.get("direccion"),
+            "link_compartir": p.get("link_compartir"), "disponibilidad": p.get("disponibilidad"),
         },
         "caracteristicas": {
             "area_m2": p.get("area_construida"),
