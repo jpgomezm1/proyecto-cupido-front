@@ -10,21 +10,28 @@ Los docstrings de cada tool son la interfaz que ve Claude: describen QUÉ hace y
 CUÁNDO usarla.
 """
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from typing import Any, Dict, List, Optional
-
 from urllib.parse import urlparse
 
+import anyio
+import httpx
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.auth.settings import (
     AuthSettings, ClientRegistrationOptions, RevocationOptions,
 )
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 
-from functools import wraps
-
-from src.mcp_server.identity_context import require_agent, current_agent, AuthError
+from src.mcp_server.identity_context import (
+    require_agent, current_agent, bind_agent, unbind_agent, AuthError,
+)
 from src.mcp_server.oauth_provider import FynderOAuthProvider, public_base_url, DEFAULT_SCOPES
 from src.services.redact import sanitize as _sanitize
+from src.services.textutils import normalize_phone
+from src.services import mcp_uso_service as uso
 from src.services import property_service as ps
 from src.services import market_service as ms
 from src.services import diagnosis_service as ds
@@ -115,42 +122,86 @@ mcp = FastMCP(
 )
 
 # ---------------------------------------------------------------------------
-# BLINDAJE DE PRIVACIDAD (obligatorio): ninguna tool puede entregar datos de
-# contacto de agentes. Se envuelve `mcp.tool` para que la salida de TODA tool
-# (actual o futura) pase por `sanitize()`. Imposible de saltar por descuido.
+# WRAPPER CENTRAL de `mcp.tool`: TODA tool (actual o futura) pasa por aquí, así
+# nada de esto se puede saltar por descuido:
+#   1. Corre en un hilo (anyio): las tools son síncronas (BD, Claude, httpx) y,
+#      ejecutadas en el event loop, una búsqueda congelaba el servidor entero.
+#   2. Exige un agente autenticado y lo liga a la llamada (`current_agent()`).
+#   3. BLINDAJE DE PRIVACIDAD (obligatorio): la salida pasa por `sanitize()`;
+#      ninguna tool puede entregar datos de contacto de agentes.
+#   4. Registra el uso (tool, agente, duración, error) en `mcp_tool_calls`.
 # ---------------------------------------------------------------------------
 _orig_tool = mcp.tool
+
+
+def _codigo_error(result: Any) -> Optional[str]:
+    """Código de error de negocio de una respuesta de tool, si lo hay."""
+    if isinstance(result, dict) and result.get("error"):
+        return str(result["error"])
+    return None
 
 
 def _tool_saneada(*t_args, **t_kwargs):
     deco = _orig_tool(*t_args, **t_kwargs)
 
     def wrapper(fn):
+        nombre = t_kwargs.get("name") or fn.__name__
+
+        def ejecutar(kwargs: Dict[str, Any]) -> Any:
+            inicio = time.monotonic()
+            agent, error = None, None
+            try:
+                try:
+                    agent = require_agent()
+                except AuthError as e:
+                    error = "no_autorizado"
+                    return {"error": "no_autorizado", "mensaje": str(e)}
+                cv = bind_agent(agent)
+                try:
+                    result = fn(**kwargs)
+                finally:
+                    unbind_agent(cv)
+                error = _codigo_error(result)
+                return _sanitize(result)
+            except Exception as e:
+                error = type(e).__name__
+                raise
+            finally:
+                uso.registrar(nombre, agent.user_id if agent else None,
+                              (time.monotonic() - inicio) * 1000, error, kwargs.keys())
+
         @wraps(fn)
-        def envuelta(*args, **kwargs):
-            return _sanitize(fn(*args, **kwargs))
+        async def envuelta(**kwargs):
+            return await anyio.to_thread.run_sync(ejecutar, kwargs)
         return deco(envuelta)
     return wrapper
 
 
 mcp.tool = _tool_saneada
 
+# Anotaciones MCP: le dicen al cliente (Claude) qué tools solo leen y cuáles
+# escriben, envían mensajes o sobrescriben datos.
+_LECTURA = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+_LECTURA_EXTERNA = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 
-def _agent_or_error() -> Optional[Dict[str, Any]]:
-    """Helper: valida auth y devuelve un dict de error si falla (o None si ok)."""
-    try:
-        require_agent()
-        return None
-    except AuthError as e:
-        return {"error": "no_autorizado", "mensaje": str(e)}
+
+def _escritura(*, destructiva: bool = False, idempotente: bool = False,
+               externa: bool = False) -> ToolAnnotations:
+    return ToolAnnotations(readOnlyHint=False, destructiveHint=destructiva,
+                           idempotentHint=idempotente, openWorldHint=externa)
+
+
+def _es_propia(prop: Dict[str, Any]) -> bool:
+    """¿La propiedad la captó el agente autenticado?"""
+    return normalize_phone(prop.get("owner_phone")) == current_agent().telefono_10
 
 
 # =========================================================================
 # BÚSQUEDA Y FICHA
 # =========================================================================
 
-@mcp.tool()
-def search_properties(query: str, limit: int = 10) -> Dict[str, Any]:
+@mcp.tool(title="Buscar propiedades", annotations=_LECTURA)
+def search_properties(query: str, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
     """
     Busca propiedades en el inventario de Fynder usando lenguaje natural.
 
@@ -162,58 +213,31 @@ def search_properties(query: str, limit: int = 10) -> Dict[str, Any]:
     Args:
         query: La búsqueda en lenguaje natural del agente.
         limit: Máximo de resultados (por defecto 10).
+        offset: Cuántos resultados saltar, para pedir la siguiente página con la
+            MISMA query (ej. offset=10 trae los resultados 11-20).
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
-    return ps.search(query=query, limit=limit,
-                     telefono=agent.telefono if agent else None,
-                     agente_id=agent.user_id if agent else None)
+    return ps.search(query=query, limit=limit, offset=offset,
+                     telefono=agent.telefono, agente_id=agent.user_id)
 
 
-@mcp.tool()
+@mcp.tool(title="Ficha de una propiedad", annotations=_LECTURA)
 def get_property(id_or_slug: str) -> Dict[str, Any]:
     """
     Obtiene la ficha completa de una propiedad por su id numérico o su slug
     (código de propiedad). Incluye precio, área, precio/m², specs, amenidades,
-    número de fotos, descripción y días en inventario.
+    descripción, días en inventario y las URLs de sus fotos (`imagenes_urls`).
+    Para VER las fotos de una propiedad propia, usa `revisar_fotos`.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     prop = ps.get_property_public(id_or_slug)
     return prop or {"error": "no_encontrada", "mensaje": f"No existe la propiedad {id_or_slug}"}
-
-
-@mcp.tool()
-def get_property_images(id_or_slug: str, limit: int = 8) -> Dict[str, Any]:
-    """
-    Devuelve las URLs de las imágenes de una propiedad (hasta `limit`), para que
-    el agente o Claude las revisen. Útil para evaluar calidad y cantidad de
-    fotos, un factor clave de rotación.
-    """
-    err = _agent_or_error()
-    if err:
-        return err
-    prop = ps.get_property_public(id_or_slug)
-    if not prop:
-        return {"error": "no_encontrada", "mensaje": f"No existe la propiedad {id_or_slug}"}
-    imgs = prop.get("imagenes_urls", [])[:limit]
-    return {
-        "propiedad_id": prop["id"],
-        "total_imagenes": prop.get("total_imagenes"),
-        "imagenes_hd": prop.get("imagenes_hd"),
-        "imagen_principal": prop.get("imagen_principal"),
-        "imagenes": imgs,
-    }
 
 
 # =========================================================================
 # MERCADO: ZONA, DEMANDA Y BALANCE
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Oferta de una zona", annotations=_LECTURA)
 def get_zone_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
                    tipo_propiedad: Optional[str] = None,
                    tipo_negocio: str = "Venta") -> Dict[str, Any]:
@@ -225,13 +249,10 @@ def get_zone_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
     Úsala para responder "¿cómo está el mercado en El Poblado?" o "¿cuál es el
     precio/m² típico de apartamentos en Laureles?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ms.get_zone_stats(ciudad, zona, tipo_propiedad, tipo_negocio)
 
 
-@mcp.tool()
+@mcp.tool(title="Demanda de una zona", annotations=_LECTURA)
 def get_demand_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
                      tipo_propiedad: Optional[str] = None, dias: int = 90) -> Dict[str, Any]:
     """
@@ -240,13 +261,10 @@ def get_demand_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
 
     Úsala para "¿hay demanda para apartaestudios en El Poblado?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ms.get_demand_stats(ciudad, zona, tipo_propiedad, dias)
 
 
-@mcp.tool()
+@mcp.tool(title="Balance oferta vs demanda", annotations=_LECTURA)
 def get_supply_demand_balance(ciudad: Optional[str] = None, zona: Optional[str] = None,
                               tipo_propiedad: Optional[str] = None,
                               tipo_negocio: str = "Venta", dias: int = 90) -> Dict[str, Any]:
@@ -257,9 +275,6 @@ def get_supply_demand_balance(ciudad: Optional[str] = None, zona: Optional[str] 
 
     Úsala para "¿está caliente o fría la zona X?" o para decidir dónde captar.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias)
 
 
@@ -267,7 +282,7 @@ def get_supply_demand_balance(ciudad: Optional[str] = None, zona: Optional[str] 
 # PREGUNTAR SOBRE UN INMUEBLE
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Preguntar sobre un inmueble", annotations=_LECTURA)
 def preguntar_sobre_inmueble(property_id: str, pregunta: str) -> Dict[str, Any]:
     """
     Responde preguntas sobre un inmueble ("¿tiene piscina?", "¿de qué año es?",
@@ -281,9 +296,6 @@ def preguntar_sobre_inmueble(property_id: str, pregunta: str) -> Dict[str, Any]:
 
     Úsala para cualquier duda puntual sobre una propiedad específica.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     d = qa.dossier_public(property_id)
     if isinstance(d, dict):
         d["pregunta"] = pregunta
@@ -294,20 +306,17 @@ def preguntar_sobre_inmueble(property_id: str, pregunta: str) -> Dict[str, Any]:
 # COMPARATIVAS Y ESTIMACIÓN
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Comparables de mercado", annotations=_LECTURA)
 def find_comparables(property_id: str, limit: int = 20) -> Dict[str, Any]:
     """
     Encuentra los comparables de mercado de una propiedad (mismo tipo/zona,
     habitaciones ±1, área ±30%). Base para entender dónde está parada frente a
     inmuebles similares.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.get_comparables_public(property_id, limit)
 
 
-@mcp.tool()
+@mcp.tool(title="Comparar propiedades", annotations=_LECTURA)
 def compare_properties(property_ids: List[str]) -> Dict[str, Any]:
     """
     Compara 2 o más propiedades específicas lado a lado (precio, precio/m²,
@@ -317,13 +326,10 @@ def compare_properties(property_ids: List[str]) -> Dict[str, Any]:
     Úsala cuando el agente quiere decidir entre varias opciones o mostrarle
     alternativas a un comprador.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.compare_public(property_ids)
 
 
-@mcp.tool()
+@mcp.tool(title="Estimar precio de captación", annotations=_LECTURA)
 def estimate_price(ciudad: Optional[str] = None, zona: Optional[str] = None,
                    tipo_propiedad: Optional[str] = None,
                    area_construida: Optional[float] = None,
@@ -336,9 +342,6 @@ def estimate_price(ciudad: Optional[str] = None, zona: Optional[str] = None,
 
     Úsala para "¿a cuánto debería captar un apto de 80m² en Sabaneta?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.estimate_price_public(
         ciudad=ciudad, zona=zona, tipo_propiedad=tipo_propiedad,
         area_construida=area_construida, habitaciones=habitaciones,
@@ -350,7 +353,7 @@ def estimate_price(ciudad: Optional[str] = None, zona: Optional[str] = None,
 # DIAGNÓSTICO Y DEMANDA MATCHEADA (la joya)
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Diagnosticar por qué no rota", annotations=_LECTURA)
 def diagnose_property(property_id: str) -> Dict[str, Any]:
     """
     Diagnostica por qué una propiedad NO ROTA (no se vende). Analiza su posición
@@ -361,13 +364,10 @@ def diagnose_property(property_id: str) -> Dict[str, Any]:
     Úsala cuando el agente pregunta "¿por qué no se me vende esta propiedad?" o
     "¿qué le pasa a mi inmueble?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ds.diagnose_public(property_id)
 
 
-@mcp.tool()
+@mcp.tool(title="Compradores para una propiedad", annotations=_LECTURA)
 def find_buyers_for_property(property_id: str, dias: int = 120,
                              limit: int = 15) -> Dict[str, Any]:
     """
@@ -381,9 +381,6 @@ def find_buyers_for_property(property_id: str, dias: int = 120,
 
     Úsala para "¿hay compradores buscando algo como esto?" tras un diagnóstico.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ds.find_buyers_public(property_id, dias, limit)
 
 
@@ -391,7 +388,7 @@ def find_buyers_for_property(property_id: str, dias: int = 120,
 # CAZADOR: DÓNDE CAPTAR
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Dónde captar", annotations=_LECTURA)
 def donde_captar(ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
                  dias: int = 90) -> Dict[str, Any]:
     """
@@ -401,9 +398,6 @@ def donde_captar(ciudad: Optional[str] = None, tipo_propiedad: str = "apartament
 
     Úsala para "¿dónde debería captar?" o "¿en qué zona hay demanda sin oferta?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ms.donde_captar_public(ciudad, tipo_propiedad, dias)
 
 
@@ -411,7 +405,7 @@ def donde_captar(ciudad: Optional[str] = None, tipo_propiedad: str = "apartament
 # CALIFICADOR: CAPACIDAD DE COMPRA
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Capacidad de compra", annotations=_LECTURA)
 def capacidad_de_compra(ingreso_mensual: float, cuota_inicial: float = 0,
                         tasa_mensual: float = 0.011, plazo_anos: int = 20,
                         ciudad: Optional[str] = None, zona: Optional[str] = None,
@@ -424,9 +418,6 @@ def capacidad_de_compra(ingreso_mensual: float, cuota_inicial: float = 0,
     Úsala para pre-calificar: "gana $8 millones y tiene $150 millones de inicial,
     ¿para cuánto le da y qué hay en Envigado?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.capacidad_de_compra_public(
         ingreso_mensual=ingreso_mensual, cuota_inicial=cuota_inicial,
         tasa_mensual=tasa_mensual, plazo_anos=plazo_anos,
@@ -438,7 +429,7 @@ def capacidad_de_compra(ingreso_mensual: float, cuota_inicial: float = 0,
 # CERRADOR: FICHA / PITCH PARA WHATSAPP + INTERÉS REAL
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Pitch de venta (texto para el agente)", annotations=_LECTURA)
 def ficha_venta(property_id: str, perfil_comprador: Optional[str] = None) -> Dict[str, Any]:
     """
     Devuelve los puntos de venta de una propiedad (precio, si está barato/caro
@@ -448,15 +439,12 @@ def ficha_venta(property_id: str, perfil_comprador: Optional[str] = None) -> Dic
 
     Úsala para "hazme el mensaje de WhatsApp para venderle esta al cliente X".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     return ps.ficha_venta_public(property_id, perfil_comprador,
-                                 agente_id=agent.user_id if agent else None)
+                                 agente_id=agent.user_id)
 
 
-@mcp.tool()
+@mcp.tool(title="Costo total mensual", annotations=_LECTURA)
 def costo_total_mensual(property_id: str, cuota_inicial: Optional[float] = None,
                         tasa_mensual: float = 0.011, plazo_anos: int = 20) -> Dict[str, Any]:
     """
@@ -468,13 +456,10 @@ def costo_total_mensual(property_id: str, cuota_inicial: Optional[float] = None,
     Úsala para "¿en cuánto le sale vivir ahí al mes?" o para comparar el costo
     mensual de dos propiedades.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.costo_total_mensual_public(property_id, cuota_inicial, tasa_mensual, plazo_anos)
 
 
-@mcp.tool()
+@mcp.tool(title="Encaje con un comprador", annotations=_LECTURA)
 def match_comprador(property_id: str, presupuesto_max: Optional[float] = None,
                     habitaciones_min: Optional[int] = None,
                     parqueaderos_min: Optional[int] = None,
@@ -492,9 +477,6 @@ def match_comprador(property_id: str, presupuesto_max: Optional[float] = None,
     esta familia?" pasando lo que necesitan (habitaciones, presupuesto,
     parqueaderos, amenidades como ['piscina','gimnasio'], zonas, etc.).
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ps.match_comprador_public(
         property_id, presupuesto_max=presupuesto_max, habitaciones_min=habitaciones_min,
         parqueaderos_min=parqueaderos_min, estrato_min=estrato_min, area_min=area_min,
@@ -502,7 +484,7 @@ def match_comprador(property_id: str, presupuesto_max: Optional[float] = None,
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Termómetro de interés", annotations=_LECTURA)
 def termometro_de_interes(property_id: str, dias: int = 30) -> Dict[str, Any]:
     """
     Muestra el interés REAL de una propiedad: cuántas veces la vieron, cuántos
@@ -512,13 +494,10 @@ def termometro_de_interes(property_id: str, dias: int = 30) -> Dict[str, Any]:
 
     Úsala para "¿mi propiedad X está generando interés?" o "¿por qué no llaman?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return es.termometro_public(property_id, dias)
 
 
-@mcp.tool()
+@mcp.tool(title="Mis propiedades más calientes", annotations=_LECTURA)
 def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
     """
     Rankea TUS propiedades por interés real (vistas + contactos) en los últimos
@@ -526,9 +505,6 @@ def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
 
     Úsala para "¿cuáles de mis propiedades están calientes?".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"total": 0, "listings": [],
@@ -540,7 +516,7 @@ def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
 # UBICACIÓN: QUÉ HAY CERCA
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Qué hay cerca", annotations=_LECTURA_EXTERNA)
 def que_hay_cerca(property_id: str) -> Dict[str, Any]:
     """
     Dice qué hay ALREDEDOR de una propiedad: colegios, universidades, estaciones
@@ -550,9 +526,6 @@ def que_hay_cerca(property_id: str) -> Dict[str, Any]:
     Úsala para "¿qué hay cerca del #X?", "¿tiene colegios cerca?", "¿queda cerca
     del Metro?". (Requiere que la propiedad tenga ubicación cargada.)
     """
-    err = _agent_or_error()
-    if err:
-        return err
     return ls.que_hay_cerca_public(property_id)
 
 
@@ -560,7 +533,7 @@ def que_hay_cerca(property_id: str) -> Dict[str, Any]:
 # CREAR LISTING (publicar propiedad nativa en Fynder)
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Publicar propiedad", annotations=_escritura())
 def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
                   ciudad: Optional[str] = None, zona: Optional[str] = None,
                   habitaciones: Optional[int] = None, banos: Optional[int] = None,
@@ -610,9 +583,6 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
 
     Úsala cuando el agente diga "publica/crea/sube una propiedad/listing".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"error": "sin_telefono",
@@ -637,7 +607,7 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
 # PIEZAS PARA EL CLIENTE FINAL: comparativa y brochure
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Comparativa para el cliente (link)", annotations=_LECTURA)
 def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
     """
     Genera una COMPARATIVA visual de 2 o más inmuebles para enviarle al CLIENTE
@@ -648,9 +618,6 @@ def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
     Úsala cuando el agente diga "arma/mándame una comparativa de X, Y, Z para mi
     cliente". Requiere al menos 2 propiedades.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     ids = []
     for x in property_ids:
         p = ps.get_property_public(x)
@@ -667,7 +634,7 @@ def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Reporte de zona para un dueño (link)", annotations=_LECTURA)
 def reporte_zona_captacion(ciudad: Optional[str] = None, zona: Optional[str] = None,
                            tipo_propiedad: str = "apartamento") -> Dict[str, Any]:
     """
@@ -680,9 +647,6 @@ def reporte_zona_captacion(ciudad: Optional[str] = None, zona: Optional[str] = N
     Úsala cuando el agente diga "arma un reporte de [zona] para mandarle a un
     dueño / para captar".
     """
-    err = _agent_or_error()
-    if err:
-        return err
     if not ciudad and not zona:
         return {"error": "falta_zona", "mensaje": "Dime la ciudad o el barrio de la zona."}
     return {
@@ -692,7 +656,7 @@ def reporte_zona_captacion(ciudad: Optional[str] = None, zona: Optional[str] = N
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Ficha visual para el cliente (link)", annotations=_LECTURA)
 def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
     """
     Genera una FICHA/BROCHURE visual de UN inmueble para enviarle al CLIENTE
@@ -703,9 +667,6 @@ def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
     propiedad a un cliente". (Distinta de `ficha_venta`, que arma el pitch de
     texto para el agente; esta es la página visual para el cliente.)
     """
-    err = _agent_or_error()
-    if err:
-        return err
     p = ps.get_property_public(property_id)
     if not p:
         return {"error": "no_encontrada"}
@@ -720,7 +681,7 @@ def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
 # DOCUMENTOS DE CIERRE: promesa de compraventa (BORRADOR)
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Borrador de promesa de compraventa", annotations=_escritura())
 def generar_promesa_compraventa(
     property_id: str,
     comprador_nombre: Optional[str] = None, comprador_cedula: Optional[str] = None,
@@ -749,9 +710,6 @@ def generar_promesa_compraventa(
     La respuesta trae `campos_faltantes` si algo quedó sin completar: díselos al
     agente para que los consiga.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     prop = ps.get_property_public(property_id)
     if not prop:
@@ -781,7 +739,7 @@ def generar_promesa_compraventa(
 # ORDENAR FOTOS DE UN LISTING (apalancando la visión del LLM)
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Ver fotos de mi propiedad", annotations=_LECTURA_EXTERNA)
 def revisar_fotos(property_id: str):
     """
     Devuelve las FOTOS de una propiedad propia como imágenes numeradas para que
@@ -792,44 +750,43 @@ def revisar_fotos(property_id: str):
     luego llama `ordenar_fotos` con las posiciones en el orden que elegiste.
     Solo funciona sobre propiedades que el agente captó.
     """
-    err = _agent_or_error()
-    if err:
-        return err
-    agent = current_agent()
-    # Verificar ownership.
     prop = ps.get_property_public(property_id)
     if not prop:
         return {"error": "no_encontrada"}
-    from src.services.textutils import normalize_phone
-    if normalize_phone(prop.get("owner_phone")) != agent.telefono_10:
+    if not _es_propia(prop):
         return {"error": "no_es_tuya", "mensaje": "Solo puedes ordenar fotos de propiedades que tú captaste."}
 
     data = lst.listar_fotos(prop["id"])
     if data.get("total", 0) == 0:
         return {"mensaje": "La propiedad no tiene fotos todavía."}
 
-    import httpx
     salida = [
         f"Fotos de la propiedad #{prop['id']} — {data.get('titulo') or ''}. "
         f"Son {data['total']}, numeradas 1 a {data['total']}. Míralas, decide el "
         f"mejor orden de presentación y luego llama ordenar_fotos con las posiciones "
         f"en ese orden (la primera será la portada)."
     ]
-    for foto in data["fotos"]:
+    # Descarga en paralelo: en serie, 20 fotos podían tardar decenas de segundos.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        imagenes = list(pool.map(_descargar_foto, [f["url"] for f in data["fotos"]]))
+    for foto, img in zip(data["fotos"], imagenes):
         salida.append(f"— Foto {foto['posicion']}:")
-        try:
-            r = httpx.get(foto["url"], timeout=15, follow_redirects=True)
-            if r.status_code == 200:
-                fmt = "png" if "png" in r.headers.get("content-type", "").lower() else "jpeg"
-                salida.append(Image(data=r.content, format=fmt))
-            else:
-                salida.append(f"(no se pudo cargar la foto {foto['posicion']})")
-        except Exception:
-            salida.append(f"(no se pudo cargar la foto {foto['posicion']})")
+        salida.append(img or f"(no se pudo cargar la foto {foto['posicion']})")
     return salida
 
 
-@mcp.tool()
+def _descargar_foto(url: str) -> Optional[Image]:
+    try:
+        r = httpx.get(url, timeout=15, follow_redirects=True)
+        if r.status_code != 200:
+            return None
+        fmt = "png" if "png" in r.headers.get("content-type", "").lower() else "jpeg"
+        return Image(data=r.content, format=fmt)
+    except Exception:
+        return None
+
+
+@mcp.tool(title="Reordenar fotos de mi propiedad", annotations=_escritura(idempotente=True))
 def ordenar_fotos(property_id: str, orden: List[int]) -> Dict[str, Any]:
     """
     Reordena las fotos de una propiedad PROPIA. `orden` es la lista de POSICIONES
@@ -839,15 +796,10 @@ def ordenar_fotos(property_id: str, orden: List[int]) -> Dict[str, Any]:
     Primero usa `revisar_fotos` para ver las imágenes y decidir el orden ideal
     (portada atractiva, luego áreas sociales, habitaciones, y exteriores).
     """
-    err = _agent_or_error()
-    if err:
-        return err
-    agent = current_agent()
     prop = ps.get_property_public(property_id)
     if not prop:
         return {"error": "no_encontrada"}
-    from src.services.textutils import normalize_phone
-    if normalize_phone(prop.get("owner_phone")) != agent.telefono_10:
+    if not _es_propia(prop):
         return {"error": "no_es_tuya", "mensaje": "Solo puedes ordenar fotos de propiedades que tú captaste."}
     try:
         return lst.reordenar_fotos(prop["id"], orden)
@@ -859,16 +811,13 @@ def ordenar_fotos(property_id: str, orden: List[int]) -> Dict[str, Any]:
 # INVENTARIO PROPIO
 # =========================================================================
 
-@mcp.tool()
+@mcp.tool(title="Mis propiedades", annotations=_LECTURA)
 def list_my_properties(limit: int = 50) -> Dict[str, Any]:
     """
     Lista las propiedades que captó el agente autenticado (su inventario
     propio), con su estado de actividad y días en inventario. Punto de partida
     para diagnosticar o actualizar sus inmuebles.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"total": 0, "propiedades": [],
@@ -876,7 +825,7 @@ def list_my_properties(limit: int = 50) -> Dict[str, Any]:
     return ps.list_my_properties_public(agent.telefono_10, limit)
 
 
-@mcp.tool()
+@mcp.tool(title="Solicitar visita (avisa a Hernán)", annotations=_escritura(idempotente=True, externa=True))
 def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None) -> Dict[str, Any]:
     """
     Dispara una solicitud de VISITA para un inmueble (por su código). Con esto,
@@ -892,9 +841,6 @@ def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None
     Importante: Fynder coordina por ti; NO se entregan datos de contacto de la
     otra parte. Al terminar, dile al agente que Hernán le confirmará la visita.
     """
-    err = _agent_or_error()
-    if err:
-        return err
     agent = current_agent()
     if not agent.telefono:
         return {"error": "sin_telefono",

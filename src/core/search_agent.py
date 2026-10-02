@@ -419,8 +419,15 @@ TÉRMINOS COLOMBIANOS:
 - "Recursos propios" = nota sobre forma de pago
 - "Admon", "administración" = administracion_max si menciona valor máximo
 - "No mayor a X años", "máximo X años de construido" = antiguedad_max
-{previous_context}
-Responde SOLO con un JSON válido, sin texto adicional ni markdown."""
+"""
+
+        # Prompt caching: la parte estática (~3-4k tokens de reglas y zonas) se
+        # cachea; el contexto de la búsqueda previa va DESPUÉS del breakpoint para
+        # no invalidar el prefijo en los refinamientos.
+        system_blocks = [
+            {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": f"{previous_context}\nResponde SOLO con un JSON válido, sin texto adicional ni markdown."},
+        ]
 
         user_message = f"""Analiza este mensaje de un agente inmobiliario y extrae los criterios de búsqueda:
 
@@ -435,7 +442,7 @@ Responde SOLO con el JSON de criterios."""
 
             message = self._messages_create_with_fallback(
                 max_tokens=1024,
-                system=system_prompt,
+                system=system_blocks,
                 messages=[
                     {"role": "user", "content": user_message}
                 ]

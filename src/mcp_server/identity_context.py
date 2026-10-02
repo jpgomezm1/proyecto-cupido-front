@@ -22,9 +22,12 @@ _current_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "fynder_mcp_token", default=None
 )
 
-# Cache simple token->identidad para no golpear la BD en cada tool call del mismo
-# request. Se limpia por token; suficiente para el ciclo de vida de un request.
-_identity_cache: dict = {}
+# Identidad ya resuelta para la tool call en curso. La fija el wrapper central de
+# tools (`bind_agent`) y vive solo durante esa llamada: no hay caché global, así
+# que un token revocado o un cambio de teléfono se reflejan de inmediato.
+_bound_agent: contextvars.ContextVar[Optional[AgentIdentity]] = contextvars.ContextVar(
+    "fynder_mcp_agent", default=None
+)
 
 
 class AuthError(Exception):
@@ -61,17 +64,15 @@ def _agent_from_oauth_context() -> Optional[AgentIdentity]:
     at = get_access_token()
     if not at or not getattr(at, "subject", None):
         return None
-    cache_key = f"sub:{at.subject}"
-    if cache_key in _identity_cache:
-        return _identity_cache[cache_key]
-    agent = resolve_agent_by_id(at.subject)
-    if agent is not None:
-        _identity_cache[cache_key] = agent
-    return agent
+    return resolve_agent_by_id(at.subject)
 
 
 def current_agent() -> Optional[AgentIdentity]:
     """Devuelve el agente autenticado del request, o None si no hay identidad."""
+    # 0) Ya resuelto para esta tool call (ver bind_agent).
+    bound = _bound_agent.get()
+    if bound is not None:
+        return bound
     # 1) OAuth (Claude remoto): identidad validada por el SDK.
     agent = _agent_from_oauth_context()
     if agent is not None:
@@ -80,12 +81,7 @@ def current_agent() -> Optional[AgentIdentity]:
     token = _active_token()
     if not token:
         return None
-    if token in _identity_cache:
-        return _identity_cache[token]
-    agent = resolve_agent(token)
-    if agent is not None:
-        _identity_cache[token] = agent
-    return agent
+    return resolve_agent(token)
 
 
 def require_agent() -> AgentIdentity:
@@ -99,5 +95,10 @@ def require_agent() -> AgentIdentity:
     return agent
 
 
-def clear_identity_cache() -> None:
-    _identity_cache.clear()
+def bind_agent(agent: AgentIdentity) -> contextvars.Token:
+    """Fija la identidad para el resto de la tool call en curso."""
+    return _bound_agent.set(agent)
+
+
+def unbind_agent(cv_token: contextvars.Token) -> None:
+    _bound_agent.reset(cv_token)

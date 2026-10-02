@@ -23,6 +23,8 @@ import secrets
 import time
 from typing import List, Optional
 
+import anyio
+
 from mcp.server.auth.provider import (
     OAuthAuthorizationServerProvider,
     AuthorizationParams,
@@ -174,15 +176,9 @@ class FynderOAuthProvider(
 
     # ---------------- Access token (validación en cada request) ----------------
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
-        with get_db() as db:
-            row = fetch_one(db.cursor, """
-                SELECT s.user_id, s.oauth_client_id, s.fecha_expiracion
-                FROM chat_user_sessions s
-                JOIN chat_users u ON u.id = s.user_id
-                WHERE s.token = %s AND s.tipo = 'mcp' AND s.activa = TRUE
-                  AND (s.fecha_expiracion IS NULL OR s.fecha_expiracion > NOW())
-                  AND u.activo = TRUE
-            """, (token,))
+        # Corre en CADA request a /mcp: la consulta va a un hilo para no
+        # bloquear el event loop mientras responde la BD.
+        row = await anyio.to_thread.run_sync(_buscar_sesion_mcp, token)
         if not row:
             return None
         exp = row.get("fecha_expiracion")
@@ -202,6 +198,19 @@ class FynderOAuthProvider(
             db.cursor.execute(
                 "DELETE FROM oauth_refresh_tokens WHERE token = %s", (tok,))
             db.conn.commit()
+
+
+def _buscar_sesion_mcp(token: str) -> Optional[dict]:
+    """Sesión MCP activa y vigente de un usuario activo, o None."""
+    with get_db() as db:
+        return fetch_one(db.cursor, """
+                SELECT s.user_id, s.oauth_client_id, s.fecha_expiracion
+                FROM chat_user_sessions s
+                JOIN chat_users u ON u.id = s.user_id
+                WHERE s.token = %s AND s.tipo = 'mcp' AND s.activa = TRUE
+                  AND (s.fecha_expiracion IS NULL OR s.fecha_expiracion > NOW())
+                  AND u.activo = TRUE
+            """, (token,))
 
 
 # --------------------------------------------------------------------------

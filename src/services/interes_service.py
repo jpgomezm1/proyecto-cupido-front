@@ -397,6 +397,40 @@ def enviar_puntas(interaccion_id, disponibilidad: Optional[Dict[str, Any]] = Non
 # A1/A4 · Orquestación: interés → verificar → PUNTAS
 # =========================================================================
 
+# Si un envío reclamado no se completa (p. ej. el proceso murió a mitad), se
+# puede volver a reclamar pasado este tiempo.
+_RECLAMO_VENCE_MIN = 5
+
+
+def _reclamar_envio(interaccion_id) -> bool:
+    """
+    Marca atómicamente la interacción como "enviando PUNTAS". Dos solicitudes
+    simultáneas del mismo comprador sobre el mismo inmueble caen en la misma
+    interacción (idempotencia de registrar_interes); solo la que gane este
+    UPDATE escala a Hernán, así no le llegan mensajes duplicados.
+    """
+    with get_db() as db:
+        db.cursor.execute(f"""
+            UPDATE interacciones SET fecha_puntas_enviadas = NOW()
+            WHERE id = %s AND estado = %s
+              AND (fecha_puntas_enviadas IS NULL
+                   OR fecha_puntas_enviadas < NOW() - INTERVAL '{_RECLAMO_VENCE_MIN} minutes')
+            RETURNING id
+        """, (interaccion_id, ESTADO_SELECCIONADO))
+        ganado = db.cursor.fetchone() is not None
+        db.conn.commit()
+    return ganado
+
+
+def _liberar_envio(interaccion_id) -> None:
+    """Deshace el reclamo si no se llegó a enviar (inmueble caído o error)."""
+    with get_db() as db:
+        db.cursor.execute("""
+            UPDATE interacciones SET fecha_puntas_enviadas = NULL
+            WHERE id = %s AND estado = %s
+        """, (interaccion_id, ESTADO_SELECCIONADO))
+        db.conn.commit()
+
 def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
                         cliente_ref=None, preguntas=None, fuente="MCP",
                         pedido_id=None, solicitud_mercado_id=None,
@@ -427,6 +461,12 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
                 "propiedad": prop_min,
                 "mensaje": "Ya habíamos pasado esta solicitud a Hernán; está en curso."}
 
+    # Si solo vamos a registrar (enviar=False) no hay nada que reclamar.
+    if enviar and not _reclamar_envio(iid):
+        return {"ok": True, "interaccion_id": iid, "escalado": True, "ya_existia": True,
+                "propiedad": prop_min,
+                "mensaje": "Esta solicitud ya se está pasando a Hernán; está en curso."}
+
     disp = {"estado": None, "activo": True}
     if verificar:
         disp = verificar_disponibilidad(prop["id"])
@@ -435,6 +475,7 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
 
     # Inmueble caído → no molestar a Hernán, avisar al agente.
     if not disp.get("activo", True):
+        _liberar_envio(iid)
         with get_db() as db:
             db.cursor.execute(
                 "UPDATE interacciones SET disponibilidad_estado=%s, fecha_cambio_estado=NOW() WHERE id=%s",
@@ -454,6 +495,7 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
 
     env = enviar_puntas(iid, disponibilidad=disp)
     if env.get("error"):
+        _liberar_envio(iid)  # permitir reintentar
         return {"ok": False, "interaccion_id": iid, "error": env.get("error"),
                 "mensaje": env.get("mensaje", "No se pudo avisar a Hernán; intenta de nuevo."),
                 "disponibilidad": disp.get("estado")}

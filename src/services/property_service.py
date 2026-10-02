@@ -354,19 +354,24 @@ def _get_search_agent():
 
 
 def search(query: str, limit: int = 10, telefono: Optional[str] = None,
-           agente_id: Optional[int] = None) -> Dict[str, Any]:
+           agente_id: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
     """
     Búsqueda en lenguaje natural sobre el inventario, reutilizando el
     `PropertySearchAgent` (extracción de criterios con Claude + SQL + ranking +
     vector). Devuelve una forma compacta y estable para el MCP.
     """
+    limit = max(1, min(int(limit or 10), 50))
+    offset = max(0, int(offset or 0))
     agent = _get_search_agent()
-    resp = agent.search(query=query, limit=limit, sender=telefono) or {}
+    # El buscador rankea desde el inicio: se piden offset+limit y se recorta la
+    # página pedida (la extracción de criterios es la misma para ambas).
+    resp = agent.search(query=query, limit=offset + limit, sender=telefono) or {}
 
     # PropertySearchAgent.search devuelve las filas bajo la clave 'results'
     # (con 'total_found' y 'criteria'). Antes se leía 'resultados'/'properties'
     # (claves inexistentes) => siempre 0 resultados.
-    resultados = resp.get("results") or []
+    ranking = resp.get("results") or []
+    resultados = ranking[offset:offset + limit]
     propiedades = []
     for r in resultados:
         precio = r.get("precio")
@@ -397,6 +402,9 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None,
         "propiedades": propiedades,
         # Si el buscador no encontró nada, pasa el motivo/sugerencias para que
         # Claude lo comunique como "sin coincidencias", no como un error.
+        "offset": offset,
+        # Página llena => probablemente hay más (pedir con offset + limit).
+        "hay_mas": len(propiedades) == limit,
         "sin_resultados": len(propiedades) == 0,
         "mensaje": resp.get("mensaje_usuario"),
         "sugerencias": resp.get("sugerencias"),

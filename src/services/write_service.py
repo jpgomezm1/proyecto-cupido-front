@@ -234,47 +234,6 @@ def propose_fields_update(agent, property_id, campos: Dict[str, Any]) -> Dict[st
     }
 
 
-def register_buyer_match(agent, property_id, comprador_telefono: str,
-                         notas: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Registra un match con un comprador (crea una interacción y la audita). Es
-    aditivo (no muta datos existentes), así que se ejecuta directo, pero scoped:
-    solo sobre inmuebles propios.
-    """
-    comprador_10 = normalize_phone(comprador_telefono)
-    if not comprador_10:
-        raise WriteError("Teléfono de comprador inválido")
-
-    with get_db() as db:
-        prop = _require_owned(db.cursor, property_id, agent.telefono_10)
-        db.cursor.execute("""
-            INSERT INTO interacciones (
-                agente_comprador_telefono, propiedad_id,
-                agente_vendedor_telefono, estado, notas_estado
-            ) VALUES (%s, %s, %s, %s, %s)
-            RETURNING id
-        """, (comprador_telefono, prop["id"], agent.telefono, "Seleccionado", notas))
-        interaccion_id = db.cursor.fetchone()["id"]
-        db.conn.commit()
-
-        db.log_evento(
-            tipo_evento="mcp_match_registrado",
-            agente_telefono=agent.telefono,
-            propiedad_id=prop["id"],
-            interaccion_id=interaccion_id,
-            datos_evento={"comprador_telefono": comprador_telefono, "notas": notas,
-                          "origen": "mcp"},
-        )
-
-    return {
-        "ok": True,
-        "interaccion_id": interaccion_id,
-        "propiedad_id": prop["id"],
-        "comprador_telefono": comprador_telefono,
-        "mensaje": "Match registrado. Aparecerá en el pipeline de interacciones.",
-    }
-
-
 # =========================================================================
 # APPLY
 # =========================================================================
@@ -379,25 +338,26 @@ def apply_change(agent, confirmation_token: str) -> Dict[str, Any]:
 # =========================================================================
 
 def register_write_tools(mcp) -> None:
-    """Registra las herramientas de escritura en la instancia FastMCP."""
-    from src.mcp_server.identity_context import require_agent, AuthError
+    """Registra las herramientas de escritura en la instancia FastMCP.
 
-    def _guard():
-        try:
-            return require_agent(), None
-        except AuthError as e:
-            return None, {"error": "no_autorizado", "mensaje": str(e)}
+    La autenticación, el registro de uso y el saneo de la salida los aplica el
+    wrapper central de `mcp.tool` (server.py); aquí solo se traduce WriteError.
+    """
+    from mcp.types import ToolAnnotations
+    from src.mcp_server.identity_context import current_agent
+
+    # Los propose_* no mutan nada (solo devuelven preview + token).
+    propuesta = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    aplicar = ToolAnnotations(readOnlyHint=False, destructiveHint=True,
+                              idempotentHint=True, openWorldHint=False)
 
     def _wrap(fn, *args):
-        agent, err = _guard()
-        if err:
-            return err
         try:
-            return fn(agent, *args)
+            return fn(current_agent(), *args)
         except WriteError as e:
             return {"error": "escritura_rechazada", "mensaje": str(e)}
 
-    @mcp.tool()
+    @mcp.tool(title="Proponer cambio de precio", annotations=propuesta)
     def propose_price_update_tool(property_id: str, nuevo_precio: int) -> Dict[str, Any]:
         """
         PROPONE cambiar el precio de una propiedad PROPIA. Devuelve un preview
@@ -407,7 +367,7 @@ def register_write_tools(mcp) -> None:
         """
         return _wrap(propose_price_update, property_id, nuevo_precio)
 
-    @mcp.tool()
+    @mcp.tool(title="Proponer nueva descripción", annotations=propuesta)
     def propose_description_update_tool(property_id: str, nueva_descripcion: str) -> Dict[str, Any]:
         """
         PROPONE reemplazar la descripción de una propiedad PROPIA por una mejor
@@ -416,7 +376,7 @@ def register_write_tools(mcp) -> None:
         """
         return _wrap(propose_description_update, property_id, nueva_descripcion)
 
-    @mcp.tool()
+    @mcp.tool(title="Proponer cambio de estado", annotations=propuesta)
     def propose_status_update_tool(property_id: str, nuevo_estado: str) -> Dict[str, Any]:
         """
         PROPONE cambiar el estado de una propiedad PROPIA. Estados válidos:
@@ -426,7 +386,7 @@ def register_write_tools(mcp) -> None:
         """
         return _wrap(propose_status_update, property_id, nuevo_estado)
 
-    @mcp.tool()
+    @mcp.tool(title="Proponer edición de campos", annotations=propuesta)
     def propose_fields_update_tool(property_id: str, campos: Dict[str, Any]) -> Dict[str, Any]:
         """
         PROPONE editar varios campos de una propiedad PROPIA a la vez (los que no
@@ -438,28 +398,15 @@ def register_write_tools(mcp) -> None:
         """
         return _wrap(propose_fields_update, property_id, campos)
 
-    @mcp.tool()
-    def register_buyer_match_tool(property_id: str, comprador_telefono: str,
-                                  notas: str = None) -> Dict[str, Any]:
-        """
-        Registra un match entre una propiedad PROPIA y un comprador (crea una
-        interacción en el pipeline). Úsala tras `find_buyers_for_property` cuando
-        el agente decide contactar/avanzar con un comprador.
-        """
-        return _wrap(register_buyer_match, property_id, comprador_telefono, notas)
-
-    @mcp.tool()
+    @mcp.tool(title="Aplicar cambio confirmado", annotations=aplicar)
     def apply_change(confirmation_token: str) -> Dict[str, Any]:
         """
         APLICA un cambio previamente propuesto, usando el confirmation_token que
         devolvió una tool `propose_*`. Este es el paso que efectivamente escribe
         en la base de datos. El token expira a los 10 minutos.
         """
-        agent, err = _guard()
-        if err:
-            return err
         try:
-            return apply_change_impl(agent, confirmation_token)
+            return apply_change_impl(current_agent(), confirmation_token)
         except WriteError as e:
             return {"error": "escritura_rechazada", "mensaje": str(e)}
 

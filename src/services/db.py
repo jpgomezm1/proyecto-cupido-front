@@ -38,7 +38,9 @@ def _get_pool() -> pg_pool.ThreadedConnectionPool:
                 dsn = os.getenv("DATABASE_URL")
                 if not dsn:
                     raise RuntimeError("DATABASE_URL no está definida")
-                maxconn = int(os.getenv("FYNDER_DB_POOL_MAX", "4"))
+                # Las tools del MCP corren en hilos concurrentes: el pool debe
+                # cubrir varias a la vez (si se agota, ver _borrow).
+                maxconn = int(os.getenv("FYNDER_DB_POOL_MAX", "8"))
                 _pool = pg_pool.ThreadedConnectionPool(
                     minconn=1, maxconn=maxconn, dsn=dsn,
                     cursor_factory=RealDictCursor,
@@ -65,7 +67,12 @@ def _borrow():
     p = _get_pool()
     last_err = None
     for _ in range(3):
-        conn = p.getconn()
+        try:
+            conn = p.getconn()
+        except pg_pool.PoolError:
+            # Pool agotado (picos de concurrencia): conexión directa en vez de
+            # fallar la tool. get_db() la cierra al salir en lugar de devolverla.
+            break
         if _healthy(conn):
             return conn
         # Conexión muerta: descartarla del pool y reintentar.

@@ -21,7 +21,7 @@ Agente en Claude.ai/Desktop ──Bearer token──▶ Fynder MCP (Streamable H
 ```
 
 - `src/services/` — lógica de dominio reutilizable, sin Flask, testeable sola.
-- `src/mcp_server/server.py` — 17 herramientas FastMCP.
+- `src/mcp_server/server.py` — 33 herramientas FastMCP.
 - `src/mcp_server/run_stdio.py` — local (Claude Desktop).
 - `src/mcp_server/run_http.py` — remoto (Claude.ai), ASGI + auth por bearer.
 
@@ -29,16 +29,34 @@ Agente en Claude.ai/Desktop ──Bearer token──▶ Fynder MCP (Streamable H
 
 | Categoría | Tools |
 |-----------|-------|
-| Búsqueda/ficha | `search_properties`, `get_property`, `get_property_images` |
+| Búsqueda/ficha | `search_properties` (paginable con `offset`), `get_property` (incluye `imagenes_urls`) |
 | Mercado | `get_zone_stats`, `get_demand_stats`, `get_supply_demand_balance` |
 | Comparación | `find_comparables`, `compare_properties`, `estimate_price` |
 | Diagnóstico | `diagnose_property`, `find_buyers_for_property` |
 | Inventario | `list_my_properties` |
-| Escritura (propose→apply, scoped) | `propose_price_update_tool`, `propose_description_update_tool`, `propose_status_update_tool`, `register_buyer_match_tool`, `apply_change` |
+| Escritura (propose→apply, scoped) | `propose_price_update_tool`, `propose_description_update_tool`, `propose_status_update_tool`, `propose_fields_update_tool`, `apply_change` |
+
+La tabla no es exhaustiva: la lista completa está en `server.py` y en
+`tests/test_mcp_server.py` (`EXPECTED_TOOLS`).
 
 Las escrituras solo afectan inmuebles que el agente captó, siguen el patrón
 propose→apply (con `confirmation_token` firmado, expira a los 10 min) y quedan en
-`eventos_log`.
+`eventos_log`. Para registrar interés de compra se usa `solicitar_visita` (el
+contacto de la contraparte nunca se entrega; Hernán es el canal).
+
+## Wrapper central de tools
+
+Toda tool registrada con `@mcp.tool(...)` pasa por `_tool_saneada` (server.py),
+que:
+
+1. la ejecuta en un hilo (`anyio.to_thread`), para no bloquear el event loop;
+2. exige un agente autenticado y lo liga a la llamada (`current_agent()`);
+3. sanea la salida (`redact.sanitize`: nunca datos de contacto de agentes);
+4. registra el uso en `mcp_tool_calls` (migración 039; solo nombres de
+   argumentos, nunca valores).
+
+Al agregar una tool: no repitas el chequeo de auth, y pásale `title` y
+`annotations` (`_LECTURA`, `_LECTURA_EXTERNA` o `_escritura(...)`).
 
 ## Entorno (venv 3.11)
 
