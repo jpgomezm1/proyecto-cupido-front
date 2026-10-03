@@ -15,6 +15,7 @@ from src.core.search_agent import PropertySearchAgent
 from src.core.search_context import merge_criteria, generate_conversation_name
 from src.core.search_config import normalizar_texto_busqueda
 from src.api.chat_auth import require_chat_auth, get_current_user
+from src.api.access import sin_contacto, uso_justo
 
 # v2.4: Nuevos módulos para sistema de fases
 from src.core.search_state import (
@@ -333,7 +334,8 @@ def get_conversation(conversation_id):
                             msg['response_type'] = sr['response_type']
                 mensajes.append(msg)
 
-            conversation['mensajes'] = mensajes
+            # Los resultados guardados pueden traer contactos (filas viejas).
+            conversation['mensajes'] = sin_contacto(mensajes)
 
             return jsonify({
                 'success': True,
@@ -458,7 +460,8 @@ def get_public_conversation(conversation_id):
                             msg['response_type'] = sr['response_type']
                 mensajes.append(msg)
 
-            conversation['mensajes'] = mensajes
+            # Los resultados guardados pueden traer contactos (filas viejas).
+            conversation['mensajes'] = sin_contacto(mensajes)
 
             return jsonify({
                 'success': True,
@@ -578,6 +581,7 @@ def delete_conversation(conversation_id):
 
 @conversations_bp.route('/<int:conversation_id>/messages', methods=['POST'])
 @require_chat_auth
+@uso_justo
 def send_message(conversation_id):
     """
     Envía un mensaje a la conversación y ejecuta búsqueda con contexto
@@ -1260,6 +1264,9 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
             db.conn.rollback()
         except:
             pass
+
+    # El contacto del captador es lo que se cobra: ni se guarda ni se devuelve aquí.
+    results = sin_contacto(results)
 
     # Guardar mensaje del asistente
     # v2.11: Incluir search_type, relaxation_applied, alignment_info

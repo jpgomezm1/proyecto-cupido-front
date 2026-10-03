@@ -120,8 +120,10 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
             else:
                 email_final = _email_friendly(db.cursor, nombre, tel10)
             db.cursor.execute("""
-                INSERT INTO chat_users (email, nombre, password_hash, telefono, activo, origen, acceso_entregado)
-                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE, 'provision', FALSE)
+                INSERT INTO chat_users (email, nombre, password_hash, telefono, activo, origen,
+                                        acceso_entregado, telefono_verificado, telefono_verificado_at)
+                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s, TRUE, 'provision', FALSE,
+                        TRUE, NOW())
             """, (email_final, nombre, password, tel_full))
             db.conn.commit()
 

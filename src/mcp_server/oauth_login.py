@@ -12,6 +12,8 @@ Rutas:
 
 import html
 
+import anyio
+
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.routing import Route
@@ -22,10 +24,12 @@ from src.mcp_server.oauth_provider import (
 
 
 def _page(rid: str, error: str = "") -> str:
+    from src.services.suscripcion_service import url_terminos
     err_html = (
         f'<div class="error">{html.escape(error)}</div>' if error else ''
     )
-    return _LOGIN_HTML.replace("__RID__", html.escape(rid)).replace("__ERROR__", err_html)
+    return (_LOGIN_HTML.replace("__RID__", html.escape(rid)).replace("__ERROR__", err_html)
+            .replace("__URL_TERMINOS__", html.escape(url_terminos())))
 
 
 async def login_get(request: Request) -> HTMLResponse:
@@ -47,6 +51,10 @@ async def login_post(request: Request):
     user = authenticate_chat_user(email, password)
     if not user:
         return HTMLResponse(_page(rid, "Correo o contraseña incorrectos."), status_code=401)
+    if not form.get("acepta_terminos"):
+        return HTMLResponse(_page(rid, "Para conectar Fynder debes aceptar los términos."), status_code=400)
+    from src.services.suscripcion_service import aceptar_terminos
+    await anyio.to_thread.run_sync(aceptar_terminos, user["id"])
 
     redirect_url = complete_login(rid, user["id"])
     if not redirect_url:
@@ -94,6 +102,9 @@ _BASE_STYLE = """
   button{ width:100%; margin-top:22px; padding:14px; border:none; border-radius:12px; cursor:pointer;
           font-weight:700; font-size:16px; color:#04120a; font-family:inherit;
           background:linear-gradient(150deg,#5DFAAB,var(--green)); box-shadow:0 10px 30px rgba(42,227,140,.25); }
+  label.chk{ display:flex; gap:10px; align-items:flex-start; font-weight:500; line-height:1.45; margin-top:18px; }
+  label.chk input{ width:18px; height:18px; margin-top:2px; flex:none; accent-color:#2AE38C; padding:0; }
+  label.chk a{ color:var(--green); }
   .error{ background:rgba(255,92,92,.08); border:1px solid rgba(255,92,92,.35); color:#ffb4bd;
           padding:11px 14px; border-radius:11px; font-size:14px; margin-top:16px; text-align:center; }
   .foot{ text-align:center; color:var(--text-3); font-size:12.5px; margin-top:18px; line-height:1.6; }
@@ -131,6 +142,8 @@ _LOGIN_HTML = f"""<!doctype html>
     <input name="email" type="email" placeholder="tucorreo@fynder.com" autocomplete="email" required autofocus>
     <label>Contraseña</label>
     <input name="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+    <label class="chk"><input type="checkbox" name="acepta_terminos" value="1" required>
+      <span>Acepto los <a href="__URL_TERMINOS__" target="_blank" rel="noopener">términos de uso y el tratamiento de mis datos</a> de Fynder</span></label>
     <button type="submit">Iniciar sesión y autorizar</button>
     <div class="lock">🔒 Conexión segura · solo autorizas el acceso a tus datos</div>
     <div class="foot">Al autorizar, tu asistente de IA podrá consultar Fynder en tu nombre.<br>Puedes revocar el acceso cuando quieras.</div>

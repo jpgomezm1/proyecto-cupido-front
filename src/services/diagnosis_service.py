@@ -81,18 +81,24 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
     if precio:
         params = params[:-1] + [int(precio), int(precio), limit]
     rows = fetch_all(cur, f"""
-        SELECT id, agente_telefono, agente_nombre, texto_pedido,
-               presupuesto_estimado, fecha_captura, grupo_id, canal
+        SELECT id, texto_pedido, presupuesto_estimado, fecha_captura, grupo_id, canal,
+               -- Desbloqueable: quien pidió es usuario Fynder activo, verificado y con
+               -- términos aceptados, y el pedido tiene menos de 60 días.
+               (fecha_captura > NOW() - INTERVAL '60 days' AND EXISTS (
+                   SELECT 1 FROM chat_users u
+                   WHERE u.activo AND u.telefono_verificado AND u.terminos_aceptados_at IS NOT NULL
+                     AND RIGHT(REGEXP_REPLACE(COALESCE(u.telefono,''),'[^0-9]','','g'),10)
+                       = RIGHT(REGEXP_REPLACE(COALESCE(pedidos.agente_telefono,''),'[^0-9]','','g'),10)
+               )) AS desbloqueable
         FROM pedidos
         WHERE {where}
         ORDER BY {orden}
         LIMIT %s
     """, params)
 
-    # PRIVACIDAD: nunca se devuelve el contacto (teléfono/nombre) del agente que
-    # puso el pedido. Solo la señal de demanda: qué busca y su presupuesto. El
-    # texto del pedido se redacta por si trae teléfonos. La conexión con el
-    # comprador se maneja dentro de Fynder, no entregando datos por el MCP.
+    # El contacto de quien hizo el pedido NO sale aquí: se desbloquea con
+    # `ver_contacto_pedido` (cuesta un crédito) si `desbloqueable` es True. El
+    # texto se redacta por si trae teléfonos o la firma del agente.
     from src.services.redact import redact_phones
     compradores = [{
         "pedido_id": r["id"],
@@ -102,14 +108,16 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
         "presupuesto_legible": format_cop(r["presupuesto_estimado"]) if r["presupuesto_estimado"] else None,
         "fecha": r["fecha_captura"].isoformat() if r.get("fecha_captura") else None,
         "canal": r.get("canal"),
+        "desbloqueable": bool(r.get("desbloqueable")),
     } for r in rows]
 
     return {
         "propiedad_id": base["id"],
         "zona_buscada": term,
         "total_compradores": len(compradores),
-        "nota": "Fynder no comparte el contacto de otros agentes. Muestra la demanda; "
-                "el match con el comprador se gestiona dentro de Fynder.",
+        "nota": "Para hablar con quien hizo un pedido, desbloquea su contacto con "
+                "ver_contacto_pedido (solo los marcados desbloqueable=true). Si no es "
+                "desbloqueable, Fynder puede conectarte con solicitar_visita.",
         "compradores": compradores,
     }
 

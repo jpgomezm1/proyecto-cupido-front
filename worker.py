@@ -3,6 +3,7 @@ Worker para procesar jobs de Redis Queue.
 Ejecutar con: python worker.py
 """
 import os
+from datetime import datetime
 import redis
 from rq import Worker, Queue
 import sentry_sdk
@@ -33,6 +34,26 @@ if __name__ == '__main__':
 
     # Crear la cola con la conexión
     queue = Queue('captures', connection=conn)
+
+    # Revalidación continua del inventario (acuerdo de frescura ≤ 8 días).
+    # Corre en un hilo del proceso padre; los jobs de RQ van en procesos hijos.
+    if os.getenv('REVALIDACION_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services.disponibilidad_service import revalidar_lote
+
+        def _revalidar():
+            try:
+                print(f"[REVALIDACION] {revalidar_lote()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                print(f"[REVALIDACION] Error: {e}")
+
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(_revalidar, 'interval',
+                          minutes=int(os.getenv('REVALIDACION_INTERVALO_MIN', '30')),
+                          id='revalidacion', next_run_time=datetime.now(),
+                          max_instances=1, coalesce=True)
+        scheduler.start()
+        print("[WORKER] Revalidación de inventario programada")
 
     # Crear worker con la conexión (API moderna de RQ)
     worker = Worker([queue], connection=conn)

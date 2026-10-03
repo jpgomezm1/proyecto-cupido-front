@@ -10,6 +10,7 @@ existente vía import perezoso, para no arrastrar el monolito (ni sus deps de
 Flask/IA) al importar este módulo.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.services.db import get_db, fetch_all, fetch_one
@@ -60,10 +61,24 @@ _PROPERTY_COLUMNS = """
     p.activa,
     p.fecha_creacion,
     p.fecha_actualizacion,
+    p.fecha_ultima_validacion,
     EXTRACT(DAY FROM NOW() - p.fecha_creacion)::int AS dias_en_inventario,
     CASE WHEN p.area_construida > 0
          THEN p.precio / p.area_construida END       AS precio_m2
 """
+
+
+# Meta de frescura del acuerdo de servicio: inventario verificado cada ≤ 8 días.
+DIAS_FRESCURA = 8
+
+
+def frescura(fecha_ultima_validacion) -> Dict[str, Any]:
+    """Hace cuántos días se verificó que el inmueble sigue publicado."""
+    if not fecha_ultima_validacion:
+        return {"verificada_hace_dias": None, "verificacion_vencida": True}
+    ahora = datetime.now(fecha_ultima_validacion.tzinfo) if fecha_ultima_validacion.tzinfo else datetime.now()
+    dias = max(0, (ahora - fecha_ultima_validacion).days)
+    return {"verificada_hace_dias": dias, "verificacion_vencida": dias > DIAS_FRESCURA}
 
 
 def _row_to_property(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -110,6 +125,7 @@ def _row_to_property(row: Dict[str, Any]) -> Dict[str, Any]:
         "activa": row.get("activa"),
         "disponibilidad": "disponible" if row.get("activa") else "NO DISPONIBLE (inactiva/vendida)",
         "dias_en_inventario": row.get("dias_en_inventario"),
+        **frescura(row.get("fecha_ultima_validacion")),
         # Link compartible listo para enviar al cliente (portal de Fynder).
         "link_compartir": build_share_link(row["id"], row.get("titulo")),
     }
@@ -372,6 +388,15 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None,
     # (claves inexistentes) => siempre 0 resultados.
     ranking = resp.get("results") or []
     resultados = ranking[offset:offset + limit]
+    # El buscador no trae la fecha de verificación: una consulta para la página.
+    validaciones: Dict[Any, Any] = {}
+    ids = [r.get("id") for r in resultados if r.get("id") is not None]
+    if ids:
+        with get_db() as db:
+            for v in fetch_all(db.cursor, """
+                SELECT id, fecha_ultima_validacion FROM propiedades WHERE id = ANY(%s)
+            """, (ids,)):
+                validaciones[v["id"]] = v["fecha_ultima_validacion"]
     propiedades = []
     for r in resultados:
         precio = r.get("precio")
@@ -392,6 +417,7 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None,
             "precio_m2": round(precio_m2) if precio_m2 else None,
             "precio_m2_legible": format_cop(precio_m2) if precio_m2 else None,
             "link_compartir": build_share_link(r.get("id"), r.get("titulo") or r.get("title"), agente_id),
+            **frescura(validaciones.get(r.get("id"))),
             "score": r.get("match_score") or r.get("alignment_score"),
         })
 

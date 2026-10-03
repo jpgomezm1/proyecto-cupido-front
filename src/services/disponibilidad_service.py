@@ -1,20 +1,27 @@
 """
-Verificación de disponibilidad on-demand (Bloque B del plan de desarrollo).
+Verificación de disponibilidad de propiedades (re-scrape del link original).
 
-Re-scrapea (HTTP) el link original de una propiedad para saber si sigue viva
-ANTES de escalar a Hernán (no tiene sentido desgastarlo con un inmueble que ya
-salió del mercado). Consumido por A1 (tool MCP) y A4 (admin).
+Tres usos:
+  - On-demand: antes de cobrar un desbloqueo de contacto (suscripcion_service) o
+    de escalar una visita a Hernán (interes_service).
+  - Revalidación continua (`revalidar_lote`), que corre en el worker cada 30 min
+    y recorre todo el inventario activo en ~7 días (acuerdo de frescura ≤ 8 días).
+  - Batch manual (`scripts/validate_property_urls.py`), que importa `check_url`.
 
-Este módulo es la ÚNICA fuente de verdad del chequeo de URLs: el batch nocturno
-(`scripts/validate_property_urls.py`) importa `check_url` desde aquí.
+Este módulo es la ÚNICA fuente de verdad del chequeo de URLs. La verificación
+on-demand no retiene una conexión de BD durante el HTTP (puede tardar hasta
+20 s); la revalidación del worker sí, porque necesita su lock de sesión.
 """
 
+import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import requests
 
-from src.services.db import get_db, fetch_one
+from src.services.db import get_db, fetch_one, fetch_all, scalar
 
 REQUEST_TIMEOUT = 20  # segundos
 USER_AGENT = (
@@ -112,6 +119,35 @@ def _estado_desde_reason(is_active: bool, reason: str) -> str:
     return "desconocido"
 
 
+def _persistir_resultado(cur, propiedad_id: int, is_active: bool, estado: str) -> None:
+    """
+    Semántica de escritura (conservadora, igual que el batch):
+      - Muerta (404/410/contenido) → activa=FALSE, +1 fallo, sella fecha.
+      - Viva → sella fecha y resetea el contador de fallos (no reactiva a la fuerza).
+      - Temporal/desconocida (5xx/403/timeout/sin_url) → solo sella la fecha.
+    """
+    if not is_active:
+        cur.execute("""
+            UPDATE propiedades
+            SET activa = FALSE,
+                fecha_ultima_validacion = NOW(),
+                validaciones_fallidas_consecutivas = COALESCE(validaciones_fallidas_consecutivas, 0) + 1,
+                fecha_actualizacion = NOW()
+            WHERE id = %s
+        """, (propiedad_id,))
+    elif estado == "disponible":
+        cur.execute("""
+            UPDATE propiedades
+            SET fecha_ultima_validacion = NOW(),
+                validaciones_fallidas_consecutivas = 0
+            WHERE id = %s
+        """, (propiedad_id,))
+    else:  # temporal / desconocida: solo dejamos constancia del intento
+        cur.execute(
+            "UPDATE propiedades SET fecha_ultima_validacion = NOW() WHERE id = %s",
+            (propiedad_id,))
+
+
 def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str, Any]:
     """
     Verifica una propiedad puntual y (por defecto) persiste el resultado.
@@ -122,42 +158,20 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str,
         estado: 'disponible' | '404' | 'no_disponible' | 'desconocido',
         status_code, motivo, verificado_en (ISO)
       }
-
-    Semántica de escritura (conservadora, igual que el batch):
-      - Muerta (404/410/contenido) → activa=FALSE, +1 fallo, sella fecha.
-      - Viva → sella fecha y resetea el contador de fallos (no reactiva a la fuerza).
-      - Temporal/desconocida (5xx/403/timeout/sin_url) → solo sella la fecha.
     """
+    # 1) Lectura corta; 2) HTTP sin conexión retenida; 3) escritura corta.
     with get_db() as db:
         prop = fetch_one(db.cursor,
             "SELECT id, url, fuente, activa FROM propiedades WHERE id = %s", (propiedad_id,))
-        if not prop:
-            return {"error": f"Propiedad {propiedad_id} no encontrada"}
+    if not prop:
+        return {"error": f"Propiedad {propiedad_id} no encontrada"}
 
-        is_active, reason, status = check_url(build_session(), prop["url"], prop["fuente"])
-        estado = _estado_desde_reason(is_active, reason)
+    is_active, reason, status = check_url(build_session(), prop["url"], prop["fuente"])
+    estado = _estado_desde_reason(is_active, reason)
 
-        if actualizar:
-            if not is_active:
-                db.cursor.execute("""
-                    UPDATE propiedades
-                    SET activa = FALSE,
-                        fecha_ultima_validacion = NOW(),
-                        validaciones_fallidas_consecutivas = COALESCE(validaciones_fallidas_consecutivas, 0) + 1,
-                        fecha_actualizacion = NOW()
-                    WHERE id = %s
-                """, (prop["id"],))
-            elif estado == "disponible":
-                db.cursor.execute("""
-                    UPDATE propiedades
-                    SET fecha_ultima_validacion = NOW(),
-                        validaciones_fallidas_consecutivas = 0
-                    WHERE id = %s
-                """, (prop["id"],))
-            else:  # temporal / desconocida: solo dejamos constancia del intento
-                db.cursor.execute(
-                    "UPDATE propiedades SET fecha_ultima_validacion = NOW() WHERE id = %s",
-                    (prop["id"],))
+    if actualizar:
+        with get_db() as db:
+            _persistir_resultado(db.cursor, prop["id"], is_active, estado)
             db.conn.commit()
 
     return {
@@ -168,3 +182,66 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str,
         "motivo": reason,
         "verificado_en": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# =========================================================================
+# Revalidación continua (worker)
+# =========================================================================
+
+# Lock de sesión para que solo una instancia del worker revalide a la vez.
+_LOCK_REVALIDACION = 7102
+
+
+def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int) -> int:
+    """Cuántas propiedades revisar por corrida para cubrir todas en `dias_objetivo`."""
+    corridas = max(1, (dias_objetivo * 24 * 60) // max(1, intervalo_min))
+    return max(1, math.ceil(activas / corridas))
+
+
+def _chequear(prop: Dict[str, Any]) -> Tuple[int, bool, str]:
+    is_active, reason, _ = check_url(build_session(), prop["url"], prop["fuente"])
+    return prop["id"], is_active, _estado_desde_reason(is_active, reason)
+
+
+def revalidar_lote(n: Optional[int] = None, hilos: int = 4) -> Dict[str, Any]:
+    """
+    Revalida las `n` propiedades activas con la validación más vieja (las nunca
+    validadas primero). Si `n` es None, lo calcula para recorrer todo el
+    inventario activo en REVALIDACION_DIAS_OBJETIVO días.
+
+    Devuelve un resumen {revisadas, desactivadas, desconocidas} o
+    {omitido: True} si otra instancia ya está corriendo.
+    """
+    dias = int(os.getenv("REVALIDACION_DIAS_OBJETIVO", "7"))
+    intervalo = int(os.getenv("REVALIDACION_INTERVALO_MIN", "30"))
+
+    with get_db() as db:
+        # Lock de sesión: se libera al final (o si la conexión se cierra).
+        if not scalar(db.cursor, "SELECT pg_try_advisory_lock(%s)", (_LOCK_REVALIDACION,)):
+            return {"omitido": True}
+        try:
+            if n is None:
+                activas = scalar(db.cursor, "SELECT COUNT(*) FROM propiedades WHERE activa") or 0
+                n = tamano_lote(activas, dias, intervalo)
+            props = fetch_all(db.cursor, """
+                SELECT id, url, fuente FROM propiedades
+                WHERE activa AND url IS NOT NULL AND url <> ''
+                ORDER BY fecha_ultima_validacion NULLS FIRST, id
+                LIMIT %s
+            """, (n,))
+            db.conn.commit()
+
+            with ThreadPoolExecutor(max_workers=hilos) as pool:
+                resultados = list(pool.map(_chequear, props))
+
+            desactivadas = desconocidas = 0
+            for pid, is_active, estado in resultados:
+                _persistir_resultado(db.cursor, pid, is_active, estado)
+                desactivadas += not is_active
+                desconocidas += estado == "desconocido"
+            db.conn.commit()
+        finally:
+            db.cursor.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_REVALIDACION,))
+            db.conn.commit()
+
+    return {"revisadas": len(props), "desactivadas": desactivadas, "desconocidas": desconocidas}

@@ -7,7 +7,9 @@ opacos `secrets.token_urlsafe(64)`). No toca el JWT de administrador: el MCP es
 exclusivamente para usuarios con acceso al chat (agentes), nunca para el admin.
 
 El scoping de "mis propiedades" y de las escrituras se hace por los últimos 10
-dígitos del teléfono del agente (== `agente_captador_telefono` normalizado).
+dígitos del teléfono del agente (== `agente_captador_telefono` normalizado), y
+SOLO si ese teléfono está verificado: un teléfono auto-declarado no puede dar
+control sobre los inmuebles de otro agente.
 """
 
 from dataclasses import dataclass
@@ -24,7 +26,8 @@ class AgentIdentity:
     email: Optional[str]
     nombre: Optional[str]
     telefono: Optional[str]
-    telefono_10: Optional[str]  # últimos 10 dígitos (llave de scoping)
+    telefono_10: Optional[str]  # últimos 10 dígitos (llave de scoping); None si no está verificado
+    telefono_verificado: bool = False
 
     @property
     def has_inventory_scope(self) -> bool:
@@ -36,7 +39,7 @@ class AgentIdentity:
 # Consulta idéntica en espíritu a chat_auth.get_current_user, pero desacoplada
 # del request de Flask: recibe el token directamente (el MCP no usa Flask).
 _RESOLVE_SQL = """
-    SELECT u.id, u.email, u.nombre, u.telefono
+    SELECT u.id, u.email, u.nombre, u.telefono, u.telefono_verificado
     FROM chat_users u
     JOIN chat_user_sessions s ON s.user_id = u.id
     WHERE s.token = %s
@@ -45,6 +48,18 @@ _RESOLVE_SQL = """
       AND u.activo = TRUE
     LIMIT 1
 """
+
+def _identity(row) -> AgentIdentity:
+    verificado = bool(row.get("telefono_verificado"))
+    return AgentIdentity(
+        user_id=row["id"],
+        email=row.get("email"),
+        nombre=row.get("nombre"),
+        telefono=row.get("telefono"),
+        telefono_10=normalize_phone(row.get("telefono")) if verificado else None,
+        telefono_verificado=verificado,
+    )
+
 
 _TOUCH_SQL = "UPDATE chat_user_sessions SET ultimo_uso = NOW() WHERE token = %s"
 
@@ -77,17 +92,11 @@ def resolve_agent(token: Optional[str], touch: bool = True) -> Optional[AgentIde
                 except Exception:
                     pass
 
-    return AgentIdentity(
-        user_id=row["id"],
-        email=row.get("email"),
-        nombre=row.get("nombre"),
-        telefono=row.get("telefono"),
-        telefono_10=normalize_phone(row.get("telefono")),
-    )
+    return _identity(row)
 
 
 _RESOLVE_BY_ID_SQL = """
-    SELECT id, email, nombre, telefono
+    SELECT id, email, nombre, telefono, telefono_verificado
     FROM chat_users
     WHERE id = %s AND activo = TRUE
     LIMIT 1
@@ -109,10 +118,4 @@ def resolve_agent_by_id(user_id) -> Optional[AgentIdentity]:
         row = fetch_one(db.cursor, _RESOLVE_BY_ID_SQL, (user_id,))
     if not row:
         return None
-    return AgentIdentity(
-        user_id=row["id"],
-        email=row.get("email"),
-        nombre=row.get("nombre"),
-        telefono=row.get("telefono"),
-        telefono_10=normalize_phone(row.get("telefono")),
-    )
+    return _identity(row)

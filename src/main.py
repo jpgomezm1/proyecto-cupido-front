@@ -20,7 +20,6 @@ import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
 from src.core.whatsapp_bot import WhatsAppBot
 from src.api.properties import api_bp
 from src.api.analytics import analytics_bp
@@ -50,6 +49,7 @@ from src.api.alerts import alerts_bp
 from src.api.share_analytics import share_analytics_bp
 from src.api.feedback import feedback_bp
 from src.api.platform_costs import platform_costs_bp
+from src.api.suscripciones import suscripciones_chat_bp, suscripciones_admin_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -138,6 +138,29 @@ limiter = Limiter(
 )
 print("[OK] Rate limiter inicializado")
 
+# Blueprints de administración: exigen el JWT del admin (traen contactos de
+# agentes, que es lo que Fynder cobra). Va ANTES de registrarlos. Las rutas en
+# `publicos` las usan páginas públicas / del chat o no pueden mandar headers
+# (EventSource, links de descarga). Escape: ADMIN_GUARD_ENFORCE=false (solo log).
+from src.api.access import proteger_admin
+for _bp, _publicos in (
+    (agents_bp, ()),
+    (analytics_bp, ('get_market_prices',)),
+    (activity_bp, ()),
+    (dashboard_bp, ()),
+    (deals_bp, ()),
+    (system_health_bp, ()),
+    (whatsapp_groups_bp, ()),
+    (pedidos_bp, ()),
+    (ai_costs_bp, ()),
+    (alerts_bp, ()),
+    (platform_costs_bp, ()),
+    (bulk_bp, ('get_progress', 'get_status', 'download_template_propias',
+               'download_template_externas')),
+    (share_analytics_bp, ('track_event',)),
+):
+    proteger_admin(_bp, _publicos)
+
 # Registrar blueprints de la API
 app.register_blueprint(api_bp)
 app.register_blueprint(analytics_bp)
@@ -167,6 +190,8 @@ app.register_blueprint(alerts_bp)
 app.register_blueprint(share_analytics_bp)
 app.register_blueprint(feedback_bp)
 app.register_blueprint(platform_costs_bp)
+app.register_blueprint(suscripciones_chat_bp)
+app.register_blueprint(suscripciones_admin_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
@@ -406,57 +431,6 @@ def search():
         }), 500
 
 
-def ejecutar_validacion_propiedades():
-    """
-    Ejecuta el script de validación de propiedades
-    Se ejecuta automáticamente según VALIDACION_HORARIOS
-    """
-    print("\n🔍 Iniciando validación automática de propiedades...")
-    try:
-        from validar_propiedades_activas import PropertyValidator
-        validator = PropertyValidator()
-        validator.validar_todas_las_propiedades()
-    except Exception as e:
-        print(f"❌ Error en validación automática: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-def iniciar_scheduler():
-    """
-    Inicializa el scheduler de tareas programadas
-
-    Returns:
-        BackgroundScheduler o None si está deshabilitado
-    """
-    enabled = os.getenv('VALIDACION_ENABLED', 'true').lower() == 'true'
-
-    if not enabled:
-        print("ℹ️  Validación automática deshabilitada (VALIDACION_ENABLED=false)")
-        return None
-
-    horarios = os.getenv('VALIDACION_HORARIOS', '3,15')
-    horas = [int(h.strip()) for h in horarios.split(',')]
-
-    scheduler = BackgroundScheduler()
-
-    for hora in horas:
-        scheduler.add_job(
-            func=ejecutar_validacion_propiedades,
-            trigger='cron',
-            hour=hora,
-            minute=0,
-            id=f'validacion_{hora}h',
-            name=f'Validación Propiedades {hora}:00'
-        )
-        print(f"⏰ Tarea programada: Validación de propiedades a las {hora}:00")
-
-    scheduler.start()
-    print("✅ Scheduler iniciado correctamente\n")
-
-    return scheduler
-
-
 if __name__ == '__main__':
     print("=" * 80)
     print("  🤖 WHATSAPP BOT SERVER - TU360 PROPERTY SEARCH")
@@ -478,19 +452,11 @@ if __name__ == '__main__':
     print("   • serveo.net")
     print("=" * 80 + "\n")
 
-    # Inicializar scheduler de validación automática
-    scheduler = iniciar_scheduler()
-
     # Obtener puerto de variable de entorno o usar 5050 por defecto
     port = int(os.environ.get('PORT', 5050))
 
     # Correr servidor
     # debug mode controlado por variable de entorno (seguro para produccion)
     DEBUG_MODE = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
-    try:
-        app.run(host='0.0.0.0', port=port, debug=DEBUG_MODE)
-    finally:
-        # Detener scheduler al cerrar servidor
-        if scheduler:
-            scheduler.shutdown()
-            print("\n⏹️  Scheduler detenido")
+    # La revalidación de inventario corre en el worker (worker.py), no aquí.
+    app.run(host='0.0.0.0', port=port, debug=DEBUG_MODE)

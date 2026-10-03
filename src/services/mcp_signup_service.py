@@ -9,6 +9,10 @@ y emite el token sobre `chat_user_sessions` (tipo='mcp').
 
 Gate opcional por código de invitación vía `MCP_SIGNUP_CODE`. Si la variable
 `MCP_SIGNUP_ENABLED` está en 'false', el alta se desactiva.
+
+Seguridad: un correo que ya existe NUNCA recibe un token por aquí (se conecta con
+OAuth, con su clave). El celular declarado queda SIN verificar: no da acceso al
+inventario de nadie ni créditos de prueba hasta que Fynder lo verifique.
 """
 
 import hashlib
@@ -19,6 +23,7 @@ from typing import Any, Dict, Optional
 
 from src.services.db import get_db, fetch_one
 from src.services.textutils import normalize_phone
+from src.services.suscripcion_service import TERMINOS_VERSION
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -39,11 +44,12 @@ def _placeholder_password_hash() -> str:
 
 def self_register(nombre: str, email: str, telefono: Optional[str] = None,
                   invite_code: Optional[str] = None,
+                  acepta_terminos: bool = False,
                   label: str = "Auto-registro MCP") -> Dict[str, Any]:
     """
-    Crea (o reutiliza) un usuario y emite un token MCP. Devuelve el token y datos
-    del usuario. Idempotente por email: si el email ya existe y está activo, se
-    le emite un token nuevo (re-onboarding).
+    Crea un usuario NUEVO y emite un token MCP. Si el correo ya existe, falla:
+    emitir un token sin contraseña permitiría que cualquiera que conozca un
+    correo gaste los desbloqueos de otro.
     """
     if not _signup_enabled():
         raise SignupError("El auto-registro está temporalmente deshabilitado.")
@@ -59,11 +65,15 @@ def self_register(nombre: str, email: str, telefono: Optional[str] = None,
     if not _EMAIL_RE.match(email):
         raise SignupError("Ingresa un correo electrónico válido.")
 
+    if not acepta_terminos:
+        raise SignupError("Debes aceptar los términos de Fynder para continuar.")
+
     tel_norm = None
     if telefono:
         tel_norm = normalize_phone(telefono)
-        if not tel_norm:
-            raise SignupError("El teléfono no es válido (usa solo dígitos).")
+        if not tel_norm or len(tel_norm) != 10:
+            raise SignupError("El celular no es válido (10 dígitos).")
+        telefono = "+57" + tel_norm  # formato canónico de chat_users
 
     token = secrets.token_urlsafe(64)
 
@@ -72,23 +82,19 @@ def self_register(nombre: str, email: str, telefono: Optional[str] = None,
             "SELECT id, nombre, telefono, activo FROM chat_users WHERE email = %s", (email,))
 
         if existing:
-            if not existing["activo"]:
-                raise SignupError(
-                    "Tu cuenta está inactiva. Contacta a Fynder para reactivarla.")
-            user_id = existing["id"]
-            is_new = False
-            # Completar teléfono si no lo tenía y ahora lo dan.
-            if telefono and not existing.get("telefono"):
-                db.cursor.execute(
-                    "UPDATE chat_users SET telefono = %s WHERE id = %s", (telefono, user_id))
-        else:
-            db.cursor.execute("""
-                INSERT INTO chat_users (email, password_hash, nombre, telefono, activo)
-                VALUES (%s, %s, %s, %s, TRUE)
-                RETURNING id
-            """, (email, _placeholder_password_hash(), nombre, telefono))
-            user_id = db.cursor.fetchone()["id"]
-            is_new = True
+            raise SignupError(
+                "Ya tienes una cuenta con este correo. Conecta Fynder desde tu IA con "
+                "\"Iniciar sesión\" (tu correo y tu clave de Fynder). Si no recuerdas tu "
+                "clave, escríbenos y te ayudamos.")
+
+        db.cursor.execute("""
+            INSERT INTO chat_users (email, password_hash, nombre, telefono, activo,
+                                    telefono_verificado, terminos_aceptados_at, terminos_version)
+            VALUES (%s, %s, %s, %s, TRUE, FALSE, NOW(), %s)
+            RETURNING id
+        """, (email, _placeholder_password_hash(), nombre, telefono, TERMINOS_VERSION))
+        user_id = db.cursor.fetchone()["id"]
+        is_new = True
 
         db.cursor.execute("""
             INSERT INTO chat_user_sessions (token, user_id, tipo, label, activa, fecha_expiracion)
@@ -102,7 +108,9 @@ def self_register(nombre: str, email: str, telefono: Optional[str] = None,
         "user_id": user_id,
         "nombre": nombre,
         "email": email,
-        "tiene_scope_inventario": bool(tel_norm),
+        # El celular queda pendiente de verificación por Fynder.
+        "tiene_scope_inventario": False,
+        "telefono_pendiente_verificacion": bool(tel_norm),
         "is_new": is_new,
     }
 

@@ -9,11 +9,41 @@ from flask import Blueprint, jsonify, request
 from src.db.database import DatabaseManager
 from src.scrapers.utils import PropertyNormalizer
 from src.utils.phone import normalize_colombia_phone
+from src.api.access import es_admin, usuario_chat, para_cliente, requiere_admin_o_chat, uso_justo
+from src.api.auth import token_required
 import traceback
 from typing import Dict, List, Optional
 
 # Crear blueprint para la API
 api_bp = Blueprint('api', __name__, url_prefix='/api')
+
+
+def _salida(props: List[Dict]) -> List[Dict]:
+    """
+    Lo que ve quien llama: el admin, todo; los demás, sin contactos (lo que se
+    cobra). A un usuario del chat se le marca qué contactos ya desbloqueó.
+    """
+    if es_admin():
+        return props
+    user = usuario_chat()
+    if user:
+        from src.services.suscripcion_service import ids_desbloqueados
+        vistos = ids_desbloqueados(user['id'], 'propiedad', [p.get('id') for p in props])
+        tel = ''.join(ch for ch in (user.get('telefono') or '') if ch.isdigit())[-10:]
+        for p in props:
+            p['contacto_desbloqueado'] = p.get('id') in vistos
+            dueno = ''.join(ch for ch in (p.get('owner_phone') or '') if ch.isdigit())[-10:]
+            p['es_propia'] = bool(user.get('telefono_verificado') and tel and dueno == tel)
+    return para_cliente(props)
+
+
+def _telefono_propio_verificado() -> Optional[str]:
+    """Últimos 10 dígitos del teléfono VERIFICADO del usuario del chat, o None."""
+    user = usuario_chat()
+    if not user or not user.get('telefono_verificado'):
+        return None
+    digits = ''.join(ch for ch in (user.get('telefono') or '') if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else None
 
 
 def get_db():
@@ -83,6 +113,10 @@ def get_properties():
         max_price_m2 = request.args.get('max_price_m2')
         below_zone_avg = request.args.get('below_zone_avg')
         owner_phone = request.args.get('owner_phone')
+        if owner_phone and not es_admin():
+            # Filtrar por el teléfono de otro revelaría qué inmuebles tiene cada
+            # agente (eso es lo que se cobra): fuera del admin, solo el propio.
+            owner_phone = _telefono_propio_verificado() or 'sin-telefono'
 
         # Construir condición de estado
         if status == 'all':
@@ -374,7 +408,7 @@ def get_properties():
 
         return jsonify({
             'success': True,
-            'data': properties_list,
+            'data': _salida(properties_list),
             'count': len(properties_list),
             'total_count': total_count,
             'page': page,
@@ -523,7 +557,7 @@ def get_property_by_slug(slug: str):
 
         return jsonify({
             'success': True,
-            'data': prop_dict
+            'data': _salida([prop_dict])[0]
         }), 200
 
     except Exception as e:
@@ -894,6 +928,7 @@ def health_check():
 
 
 @api_bp.route('/properties/<int:property_id>/interes', methods=['POST'])
+@token_required
 def registrar_interes_endpoint(property_id: int):
     """
     A4 — Punto de entrada de Matías (admin): registra el interés de un agente
@@ -935,6 +970,7 @@ def registrar_interes_endpoint(property_id: int):
 
 
 @api_bp.route('/properties/<int:property_id>/verificar', methods=['POST'])
+@token_required
 def verificar_property(property_id: int):
     """
     B1/B2 — Re-scrapea el link del inmueble on-demand y devuelve si sigue
@@ -954,6 +990,7 @@ def verificar_property(property_id: int):
 
 
 @api_bp.route('/properties/<int:property_id>', methods=['PATCH'])
+@token_required
 def update_property_fields(property_id: int):
     """
     C2 — Edición general de campos del inmueble (desde la ficha admin). Solo
@@ -1035,6 +1072,7 @@ def update_property_fields(property_id: int):
 
 
 @api_bp.route('/properties/<int:property_id>/status', methods=['PUT'])
+@requiere_admin_o_chat
 def update_property_status(property_id: int):
     """
     PUT /api/properties/:property_id/status
@@ -1069,6 +1107,17 @@ def update_property_status(property_id: int):
             }), 400
 
         activa = bool(data['activa'])
+
+        if not es_admin():
+            tel10 = _telefono_propio_verificado()
+            db.cursor.execute("""
+                SELECT 1 FROM propiedades
+                WHERE id = %s AND RIGHT(REGEXP_REPLACE(COALESCE(agente_captador_telefono,''),
+                                        '[^0-9]', '', 'g'), 10) = %s
+            """, (property_id, tel10 or 'sin-telefono'))
+            if not db.cursor.fetchone():
+                return jsonify({'success': False,
+                                'error': 'Solo puedes cambiar el estado de tus propios inmuebles'}), 403
 
         db.cursor.execute("""
             UPDATE propiedades
@@ -1108,6 +1157,7 @@ def update_property_status(property_id: int):
 
 
 @api_bp.route('/scrape-wasi', methods=['POST'])
+@requiere_admin_o_chat
 def scrape_wasi():
     """
     POST /api/scrape-wasi
@@ -1187,7 +1237,8 @@ def scrape_wasi():
             print(f"[API] Marcada como propiedad propia")
 
         # Agregar información del agente captador si se proporciona
-        agente_telefono = data.get('agente_telefono')
+        agente_telefono = data.get('agente_telefono') if es_admin() \
+            else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')
 
         telefono_normalizado = normalize_colombia_phone(agente_telefono)
@@ -1289,6 +1340,7 @@ def scrape_wasi():
 
 
 @api_bp.route('/scrape-tu360', methods=['POST'])
+@requiere_admin_o_chat
 def scrape_tu360():
     """
     POST /api/scrape-tu360
@@ -1359,7 +1411,8 @@ def scrape_tu360():
             }), 400
 
         # Agregar información del agente captador si se proporciona
-        agente_telefono = data.get('agente_telefono')
+        agente_telefono = data.get('agente_telefono') if es_admin() \
+            else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')
 
         telefono_normalizado = normalize_colombia_phone(agente_telefono)
@@ -1461,6 +1514,7 @@ def scrape_tu360():
 
 
 @api_bp.route('/scrape-lobbie', methods=['POST'])
+@requiere_admin_o_chat
 def scrape_lobbie():
     """
     POST /api/scrape-lobbie
@@ -1531,7 +1585,8 @@ def scrape_lobbie():
             }), 400
 
         # Agregar información del agente captador si se proporciona
-        agente_telefono = data.get('agente_telefono')
+        agente_telefono = data.get('agente_telefono') if es_admin() \
+            else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')
 
         telefono_normalizado = normalize_colombia_phone(agente_telefono)
@@ -1633,6 +1688,7 @@ def scrape_lobbie():
 
 
 @api_bp.route('/properties/<int:property_id>/captador', methods=['PUT'])
+@token_required
 def update_property_captador(property_id: int):
     """
     PUT /api/properties/:property_id/captador
@@ -1882,7 +1938,7 @@ def get_similar_properties(slug: str):
 
         return jsonify({
             'success': True,
-            'data': properties_list,
+            'data': _salida(properties_list),
             'count': len(properties_list)
         }), 200
 
@@ -1899,6 +1955,8 @@ def get_similar_properties(slug: str):
 
 
 @api_bp.route('/improve-description', methods=['POST'])
+@requiere_admin_o_chat
+@uso_justo
 def improve_description():
     """
     POST /api/improve-description
@@ -2127,6 +2185,8 @@ Los highlights son 3-5 puntos únicos y atractivos (no genéricos como "tiene ba
 
 
 @api_bp.route('/properties/<int:property_id>/opportunity-insight', methods=['POST'])
+@requiere_admin_o_chat
+@uso_justo
 def get_opportunity_insight(property_id):
     """
     POST /api/properties/<id>/opportunity-insight

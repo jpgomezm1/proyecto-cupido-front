@@ -12,6 +12,7 @@ pasos cortos, botones de copiar. Diseño alineado a la identidad de Fynder
 (negro #0A0A0A, verde #2AE38C, tipografías Inter / Playfair Display / JetBrains Mono).
 """
 
+import html
 import os
 
 from starlette.requests import Request
@@ -47,6 +48,7 @@ async def token_endpoint(request: Request) -> JSONResponse:
             email=body.get("email", ""),
             telefono=body.get("telefono") or None,
             invite_code=body.get("invite_code") or None,
+            acepta_terminos=bool(body.get("acepta_terminos")),
         )
     except SignupError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
@@ -69,9 +71,28 @@ async def favicon(request: Request) -> RedirectResponse:
     return RedirectResponse(url=FINDY_ICON, status_code=302)
 
 
+def _resumen_planes() -> str:
+    """'desde $50.000 al mes' con el plan más barato (o un texto neutro)."""
+    try:
+        from src.services.db import get_db
+        from src.services.suscripcion_service import planes_activos
+        with get_db() as db:
+            planes = planes_activos(db.cursor)
+        if planes:
+            p = min(planes, key=lambda x: x["precio_cop"])
+            return f"planes desde ${p['precio_cop']:,.0f}".replace(",", ".") + " al mes"
+    except Exception:
+        pass
+    return "planes mensuales"
+
+
 async def home(request: Request) -> HTMLResponse:
+    from src.services.suscripcion_service import url_terminos
     require_code = bool(os.getenv("MCP_SIGNUP_CODE"))
-    return HTMLResponse(_PAGE.replace("__REQUIRE_CODE__", "true" if require_code else "false"))
+    page = (_PAGE.replace("__REQUIRE_CODE__", "true" if require_code else "false")
+            .replace("__URL_TERMINOS__", html.escape(url_terminos()))
+            .replace("__PLANES__", html.escape(_resumen_planes())))
+    return HTMLResponse(page)
 
 
 def onboarding_routes():
@@ -191,6 +212,9 @@ _PAGE = r"""<!doctype html>
   form{ margin-top:8px; }
   label{ display:block; font-size:13px; color:var(--text-2); margin:18px 0 8px; font-weight:600; }
   label .opt{ color:var(--text-3); font-weight:500; }
+  label.chk{ display:flex; gap:10px; align-items:flex-start; font-weight:500; line-height:1.45; }
+  label.chk input{ width:18px; height:18px; margin-top:2px; flex:none; accent-color:#2AE38C; }
+  label.chk a{ color:#2AE38C; }
   input{ width:100%; padding:14px 15px; border-radius:13px; border:1px solid var(--border-hi);
     background:var(--bg-2); color:var(--white); font-size:16px; font-family:inherit; transition:border-color .15s, box-shadow .15s; }
   input::placeholder{ color:var(--text-4); }
@@ -259,6 +283,9 @@ _PAGE = r"""<!doctype html>
       sobre precios, demanda, comparativas y por qué una propiedad no se vende.
       Te responde con datos reales del mercado.</p>
     <p class="hero-note">⏱️ Toma <b>menos de 2 minutos</b> · sin nada técnico</p>
+    <p class="hero-note">Buscar y analizar es <b>gratis</b>. El contacto de quien tiene un
+      inmueble se desbloquea con tu plan: <b>2 desbloqueos de prueba</b> al verificar tu
+      celular y __PLANES__.</p>
   </div>
 
   <div class="section">
@@ -268,7 +295,7 @@ _PAGE = r"""<!doctype html>
       <div class="tile t-blue"><div class="ic">💰</div><p>¿Cómo está el precio por m² en El Poblado?</p><small>Precios de la zona</small></div>
       <div class="tile t-purple"><div class="ic">⚖️</div><p>Compárame estas 3 propiedades</p><small>Comparativa lado a lado</small></div>
       <div class="tile t-orange"><div class="ic">🔥</div><p>¿Está caliente o fría la zona de Laureles?</p><small>Oferta vs. demanda</small></div>
-      <div class="tile t-yellow"><div class="ic">🙋</div><p>¿Quién está buscando algo como esto?</p><small>Compradores potenciales</small></div>
+      <div class="tile t-yellow"><div class="ic">📞</div><p>Pásame el contacto de quien tiene el código 4521</p><small>Contacto directo · con tu plan</small></div>
       <div class="tile t-red"><div class="ic">🏷️</div><p>¿A cuánto capto un apto de 80m² en Sabaneta?</p><small>Precio sugerido</small></div>
     </div>
   </div>
@@ -282,12 +309,14 @@ _PAGE = r"""<!doctype html>
         <input id="nombre" placeholder="Ej: Lina Roldán" autocomplete="name">
         <label>Tu correo electrónico</label>
         <input id="email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="email">
-        <label>Tu celular <span class="opt">· opcional, para ver “mis propiedades”</span></label>
+        <label>Tu celular <span class="opt">· Fynder lo verifica para darte tus 2 desbloqueos de prueba y mostrarte “mis propiedades”</span></label>
         <input id="telefono" placeholder="Ej: 3122655340" inputmode="tel">
         <div id="code-field" class="hidden">
           <label>Código de invitación</label>
           <input id="invite" placeholder="Te lo entrega Fynder">
         </div>
+        <label class="chk"><input type="checkbox" id="terminos"> Acepto los
+          <a href="__URL_TERMINOS__" target="_blank" rel="noopener">términos de uso y el tratamiento de mis datos</a> de Fynder</label>
         <button class="btn btn-primary" id="btn">Obtener mi código de acceso →</button>
         <div class="error" id="error"></div>
       </form>
@@ -362,8 +391,10 @@ btn.addEventListener('click', async () => {
     email: document.getElementById('email').value.trim(),
     telefono: document.getElementById('telefono').value.trim(),
     invite_code: REQUIRE_CODE ? document.getElementById('invite').value.trim() : null,
+    acepta_terminos: document.getElementById('terminos').checked,
   };
   if(!payload.nombre || !payload.email){ err.innerText='Escribe tu nombre y tu correo.'; err.style.display='block'; return; }
+  if(!payload.acepta_terminos){ err.innerText='Para continuar, acepta los términos de Fynder.'; err.style.display='block'; return; }
   btn.disabled=true; btn.innerText='Generando tu código...';
   try{
     const r = await fetch('/connect/token', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});

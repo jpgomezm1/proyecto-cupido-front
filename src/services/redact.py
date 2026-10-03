@@ -1,9 +1,11 @@
 """
-Saneamiento de salidas del MCP: NUNCA entregar información de contacto de agentes.
+Saneamiento de salidas: el contacto de un agente solo sale por un DESBLOQUEO.
 
-Requisito duro: bajo ninguna circunstancia el MCP puede devolver teléfonos,
-nombres, correos o datos de contacto de agentes (ni del captador, ni de quien
-puso un pedido, ni de terceros).
+El contacto de quien tiene un inmueble (o de quien hizo un pedido) es lo que se
+cobra (suscripción + desbloqueos). Por defecto, ninguna salida del MCP ni de la
+API pública puede contener teléfonos, nombres, correos o datos de contacto de
+agentes. La única excepción es un `ContactoRevelado` emitido por una tool
+registrada explícitamente para revelar (ver server.py `_TOOLS_QUE_REVELAN`).
 
 Dos capas:
 1. Se ELIMINAN claves sensibles de cualquier dict que salga de una tool.
@@ -15,7 +17,8 @@ así ninguna tool nueva puede filtrar por descuido.
 """
 
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 # Claves cuyo valor es información de contacto de un agente. Se comparan en
 # minúsculas; cualquier dict que salga del MCP pierde estas claves.
@@ -138,20 +141,46 @@ def redact_phones(text: str, cut_signatures: bool = False) -> str:
     return out
 
 
-def sanitize(obj: Any) -> Any:
+@dataclass(frozen=True)
+class ContactoRevelado:
+    """
+    Contacto desbloqueado (pagado) por el usuario. Es un TIPO de Python y no una
+    clave de diccionario a propósito: nada que venga de la BD o de un LLM puede
+    producirlo por accidente. `sanitize` solo lo deja pasar con `revelar=True`.
+    """
+    telefono: str
+    nombre: Optional[str] = None
+    agencia: Optional[str] = None
+
+    def as_dict(self) -> dict:
+        digitos = re.sub(r"\D", "", self.telefono or "")[-10:]
+        return {
+            "telefono": self.telefono,
+            "nombre": self.nombre,
+            "agencia": self.agencia,
+            "whatsapp_link": f"https://wa.me/57{digitos}" if len(digitos) == 10 else None,
+        }
+
+
+def sanitize(obj: Any, revelar: bool = False) -> Any:
     """
     Devuelve una copia de `obj` sin claves de contacto de agentes y con los
     teléfonos redactados en los textos. Recorre dicts y listas recursivamente.
+
+    Un `ContactoRevelado` se entrega tal cual (sin redactar) solo si `revelar`
+    es True; si no, se reemplaza por None.
     """
+    if isinstance(obj, ContactoRevelado):
+        return obj.as_dict() if revelar else None
     if isinstance(obj, dict):
         clean = {}
         for k, v in obj.items():
             if isinstance(k, str) and k.lower() in _DROP_KEYS:
                 continue  # se elimina por completo (contacto o portal de origen)
-            clean[k] = sanitize(v)
+            clean[k] = sanitize(v, revelar)
         return clean
     if isinstance(obj, (list, tuple)):
-        return [sanitize(x) for x in obj]
+        return [sanitize(x, revelar) for x in obj]
     if isinstance(obj, str):
         return redact_phones(obj)
     return obj

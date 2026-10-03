@@ -14,6 +14,10 @@ from src.db.database import DatabaseManager
 
 search_bp = Blueprint('search', __name__, url_prefix='/api')
 
+# Solo admin: devuelve filas crudas del buscador (con contactos de captadores).
+from src.api.access import proteger_admin  # noqa: E402
+proteger_admin(search_bp)
+
 # Instancia global del agente (se inicializa lazy)
 _search_agent = None
 

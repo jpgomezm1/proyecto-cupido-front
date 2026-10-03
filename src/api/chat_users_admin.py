@@ -218,10 +218,12 @@ def create_user():
 
             # Crear usuario con password hasheado usando pgcrypto
             db.cursor.execute("""
-                INSERT INTO chat_users (email, nombre, password_hash, telefono)
-                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s)
+                INSERT INTO chat_users (email, nombre, password_hash, telefono,
+                                        telefono_verificado, telefono_verificado_at)
+                VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s,
+                        %s IS NOT NULL, CASE WHEN %s IS NOT NULL THEN NOW() END)
                 RETURNING id, email, nombre, telefono, activo, fecha_creacion
-            """, (email, nombre, password, telefono))
+            """, (email, nombre, password, telefono, telefono, telefono))
 
             user = db.cursor.fetchone()
             db.conn.commit()
@@ -357,8 +359,14 @@ def update_user(user_id):
                 params.append(data['nombre'].strip())
 
             if 'telefono' in data:
+                # El admin carga el teléfono del propio agente: queda verificado.
+                nuevo_tel = normalize_colombia_phone(data['telefono'])
                 updates.append("telefono = %s")
-                params.append(normalize_colombia_phone(data['telefono']))
+                params.append(nuevo_tel)
+                updates.append("telefono_verificado = %s")
+                params.append(nuevo_tel is not None)
+                updates.append("telefono_verificado_at = CASE WHEN %s THEN NOW() END")
+                params.append(nuevo_tel is not None)
 
             if 'activo' in data:
                 updates.append("activo = %s")

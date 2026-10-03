@@ -8,9 +8,10 @@ la propiedad.
 
 Este módulo NO comparte contactos con nadie: solo registra el interés. El envío
 de PUNTAS a Hernán (A2) y la verificación de disponibilidad (B1) se orquestan
-por encima. El campo `vendedor` que devuelve es para uso interno de esa
-orquestación; NUNCA debe retornarse al agente comprador (regla de privacidad:
-el contacto de la contraparte jamás se entrega — Hernán es el canal).
+por encima. El campo `vendedor` que devuelve es para uso interno: este flujo es
+la coordinación por parte de Fynder (red de seguridad cuando no hay contacto
+usable), así que no se lo devuelve al agente. El contacto solo se entrega
+pagado, por `suscripcion_service.desbloquear` (que reusa `cargar_puntas`).
 """
 
 import os
@@ -459,13 +460,13 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
     if reg.get("ya_existia") and reg.get("estado") in (ESTADO_PUNTAS_ENVIADAS, ESTADO_VISITA_AGENDADA):
         return {"ok": True, "interaccion_id": iid, "escalado": True, "ya_existia": True,
                 "propiedad": prop_min,
-                "mensaje": "Ya habíamos pasado esta solicitud a Hernán; está en curso."}
+                "mensaje": "Ya le habíamos pasado esta solicitud al equipo de Fynder; está en curso."}
 
     # Si solo vamos a registrar (enviar=False) no hay nada que reclamar.
     if enviar and not _reclamar_envio(iid):
         return {"ok": True, "interaccion_id": iid, "escalado": True, "ya_existia": True,
                 "propiedad": prop_min,
-                "mensaje": "Esta solicitud ya se está pasando a Hernán; está en curso."}
+                "mensaje": "Esta solicitud ya se le está pasando al equipo de Fynder; está en curso."}
 
     disp = {"estado": None, "activo": True}
     if verificar:
@@ -484,22 +485,22 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
         return {"ok": True, "interaccion_id": iid, "escalado": False,
                 "disponibilidad": disp.get("estado"), "propiedad": prop_min,
                 "mensaje": ("Ojo: el inmueble parece que ya no está publicado "
-                            f"({disp.get('estado')}). No lo escalé a Hernán para no coordinar "
+                            f"({disp.get('estado')}). No la pasé al equipo de Fynder para no coordinar "
                             "una visita a algo caído; confirma con el captador o busquemos "
                             "alternativas.")}
 
     if not enviar:
         return {"ok": True, "interaccion_id": iid, "escalado": False,
                 "disponibilidad": disp.get("estado"), "propiedad": prop_min,
-                "mensaje": "Interés registrado (envío a Hernán diferido)."}
+                "mensaje": "Interés registrado (envío al equipo de Fynder diferido)."}
 
     env = enviar_puntas(iid, disponibilidad=disp)
     if env.get("error"):
         _liberar_envio(iid)  # permitir reintentar
         return {"ok": False, "interaccion_id": iid, "error": env.get("error"),
-                "mensaje": env.get("mensaje", "No se pudo avisar a Hernán; intenta de nuevo."),
+                "mensaje": env.get("mensaje", "No se pudo avisar al equipo de Fynder; intenta de nuevo."),
                 "disponibilidad": disp.get("estado")}
 
     return {"ok": True, "interaccion_id": iid, "escalado": True,
             "disponibilidad": disp.get("estado"), "propiedad": prop_min,
-            "mensaje": "Listo, Hernán de Fynder coordina la visita y te confirma."}
+            "mensaje": "Listo, el equipo de Fynder coordina la visita y te confirma."}

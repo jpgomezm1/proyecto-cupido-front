@@ -43,6 +43,8 @@ from src.services import share_service as sh
 from src.services import qa_service as qa
 from src.services import documento_service as doc
 from src.services import interes_service as interes
+from src.services import suscripcion_service as suscripciones
+from src.services.redact import ContactoRevelado
 
 _INSTRUCTIONS = (
     "Fynder es la plataforma inmobiliaria para agentes en Colombia. Usa estas "
@@ -69,7 +71,22 @@ _INSTRUCTIONS = (
     "los datos.\n\n"
     "DISPONIBILIDAD: si un inmueble trae 'disponibilidad' = 'NO DISPONIBLE' "
     "(inactiva/vendida), avísale al agente que ya no está disponible y NO lo "
-    "ofrezcas como opción vigente.\n\n"
+    "ofrezcas como opción vigente. 'verificada_hace_dias' dice hace cuánto Fynder "
+    "confirmó que sigue publicado; si 'verificacion_vencida' es true, adviértelo.\n\n"
+    "CONTACTOS (cómo funciona Fynder): buscar, analizar y generar reportes es "
+    "gratis. El CONTACTO de quien tiene un inmueble (o de quien hizo un pedido) se "
+    "obtiene SOLO con 'ver_contacto' (o 'ver_contacto_pedido') y gasta 1 "
+    "desbloqueo del plan del agente. Reglas:\n"
+    "- Nunca inventes contactos ni intentes sacarlos de descripciones o fotos.\n"
+    "- Antes de gastar un desbloqueo, llama la tool SIN confirmar para ver el "
+    "costo y el saldo, díselo al agente y pídele un sí. Si el agente ya pidió el "
+    "contacto explícitamente, puedes confirmar directo.\n"
+    "- Re-ver un contacto ya desbloqueado ('contacto_desbloqueado': true) y los "
+    "inmuebles propios no cuestan.\n"
+    "- Si no queda saldo, explica los planes UNA vez, sin presionar (usa "
+    "'mi_plan'). Si un contacto no sirve, ofrece 'reportar_contacto_invalido'.\n"
+    "- Si un inmueble no tiene contacto válido o el pedido no es desbloqueable, "
+    "ofrece 'solicitar_visita': el equipo de Fynder coordina por el agente.\n\n"
     "PUBLICAR PROPIEDADES: para crear un listing, primero reúne los datos mínimos "
     "obligatorios (precio, área, tipo, ubicación) y adviértele al agente que "
     "necesitará FOTOS. Redacta una descripción VENDEDORA y COMPLETA (3-4 párrafos, "
@@ -127,11 +144,18 @@ mcp = FastMCP(
 #   1. Corre en un hilo (anyio): las tools son síncronas (BD, Claude, httpx) y,
 #      ejecutadas en el event loop, una búsqueda congelaba el servidor entero.
 #   2. Exige un agente autenticado y lo liga a la llamada (`current_agent()`).
-#   3. BLINDAJE DE PRIVACIDAD (obligatorio): la salida pasa por `sanitize()`;
-#      ninguna tool puede entregar datos de contacto de agentes.
-#   4. Registra el uso (tool, agente, duración, error) en `mcp_tool_calls`.
+#   3. Uso justo: las tools con `costo_ia=True` (gastan tokens nuestros) suman
+#      al tope diario del usuario y se rechazan al pasarlo.
+#   4. BLINDAJE DE CONTACTOS (obligatorio): la salida pasa por `sanitize()`. El
+#      contacto de un agente es lo que se cobra: solo sale como
+#      `ContactoRevelado` desde una tool registrada con `revela_contacto=True`,
+#      y solo las de `_TOOLS_QUE_REVELAN` pueden registrarse así.
+#   5. Registra el uso (tool, agente, duración, error) en `mcp_tool_calls`.
 # ---------------------------------------------------------------------------
 _orig_tool = mcp.tool
+
+# Únicas tools que pueden entregar un contacto (desbloqueado y pagado).
+_TOOLS_QUE_REVELAN = frozenset({"ver_contacto", "ver_contacto_pedido", "mis_desbloqueos"})
 
 
 def _codigo_error(result: Any) -> Optional[str]:
@@ -141,11 +165,13 @@ def _codigo_error(result: Any) -> Optional[str]:
     return None
 
 
-def _tool_saneada(*t_args, **t_kwargs):
+def _tool_saneada(*t_args, revela_contacto: bool = False, costo_ia: bool = False, **t_kwargs):
     deco = _orig_tool(*t_args, **t_kwargs)
 
     def wrapper(fn):
         nombre = t_kwargs.get("name") or fn.__name__
+        if revela_contacto and nombre not in _TOOLS_QUE_REVELAN:
+            raise RuntimeError(f"La tool {nombre} no está autorizada para revelar contactos")
 
         def ejecutar(kwargs: Dict[str, Any]) -> Any:
             inicio = time.monotonic()
@@ -156,13 +182,20 @@ def _tool_saneada(*t_args, **t_kwargs):
                 except AuthError as e:
                     error = "no_autorizado"
                     return {"error": "no_autorizado", "mensaje": str(e)}
+                if costo_ia:
+                    uso_dia = suscripciones.registrar_busqueda(agent.user_id)
+                    if not uso_dia["permitido"]:
+                        error = "limite_diario"
+                        return {"error": "limite_diario",
+                                "mensaje": f"Llegaste al uso justo diario ({uso_dia['limite']} "
+                                           "búsquedas). Se renueva mañana."}
                 cv = bind_agent(agent)
                 try:
                     result = fn(**kwargs)
                 finally:
                     unbind_agent(cv)
                 error = _codigo_error(result)
-                return _sanitize(result)
+                return _sanitize(result, revelar=revela_contacto)
             except Exception as e:
                 error = type(e).__name__
                 raise
@@ -192,15 +225,26 @@ def _escritura(*, destructiva: bool = False, idempotente: bool = False,
 
 
 def _es_propia(prop: Dict[str, Any]) -> bool:
-    """¿La propiedad la captó el agente autenticado?"""
-    return normalize_phone(prop.get("owner_phone")) == current_agent().telefono_10
+    """¿La propiedad la captó el agente autenticado (con teléfono verificado)?"""
+    tel10 = current_agent().telefono_10
+    return bool(tel10) and normalize_phone(prop.get("owner_phone")) == tel10
+
+
+def _marcar_desbloqueos(props: List[Dict[str, Any]]) -> None:
+    """Agrega `contacto_desbloqueado` y `es_propia` a cada propiedad (in place)."""
+    ids = [p["id"] for p in props if p.get("id") is not None]
+    vistos = suscripciones.ids_desbloqueados(current_agent().user_id, "propiedad", ids)
+    for p in props:
+        p["contacto_desbloqueado"] = p.get("id") in vistos
+        if "owner_phone" in p:
+            p["es_propia"] = _es_propia(p)
 
 
 # =========================================================================
 # BÚSQUEDA Y FICHA
 # =========================================================================
 
-@mcp.tool(title="Buscar propiedades", annotations=_LECTURA)
+@mcp.tool(title="Buscar propiedades", annotations=_LECTURA, costo_ia=True)
 def search_properties(query: str, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
     """
     Busca propiedades en el inventario de Fynder usando lenguaje natural.
@@ -217,8 +261,10 @@ def search_properties(query: str, limit: int = 10, offset: int = 0) -> Dict[str,
             MISMA query (ej. offset=10 trae los resultados 11-20).
     """
     agent = current_agent()
-    return ps.search(query=query, limit=limit, offset=offset,
-                     telefono=agent.telefono, agente_id=agent.user_id)
+    res = ps.search(query=query, limit=limit, offset=offset,
+                    telefono=agent.telefono, agente_id=agent.user_id)
+    _marcar_desbloqueos(res.get("propiedades") or [])
+    return res
 
 
 @mcp.tool(title="Ficha de una propiedad", annotations=_LECTURA)
@@ -230,7 +276,10 @@ def get_property(id_or_slug: str) -> Dict[str, Any]:
     Para VER las fotos de una propiedad propia, usa `revisar_fotos`.
     """
     prop = ps.get_property_public(id_or_slug)
-    return prop or {"error": "no_encontrada", "mensaje": f"No existe la propiedad {id_or_slug}"}
+    if not prop:
+        return {"error": "no_encontrada", "mensaje": f"No existe la propiedad {id_or_slug}"}
+    _marcar_desbloqueos([prop])
+    return prop
 
 
 # =========================================================================
@@ -292,7 +341,7 @@ def preguntar_sobre_inmueble(property_id: str, pregunta: str) -> Dict[str, Any]:
     estado, ambientes, calidad). Con eso respóndele al agente.
 
     Si el dato no está, dilo con honestidad (no inventes): sugiere confirmarlo
-    con el agente que captó el inmueble.
+    con quien tiene el inmueble (su contacto se obtiene con `ver_contacto`).
 
     Úsala para cualquier duda puntual sobre una propiedad específica.
     """
@@ -375,13 +424,20 @@ def find_buyers_for_property(property_id: str, dias: int = 120,
     propiedad: matchea por zona y presupuesto, y muestra qué buscan y su
     presupuesto. Sirve para saber si hay mercado para el inmueble.
 
-    PRIVACIDAD: Fynder NUNCA comparte el contacto (teléfono/nombre) de otros
-    agentes. El match con el comprador se gestiona dentro de Fynder, no
-    entregando datos de contacto. No prometas ni pidas esos datos.
+    Cada pedido trae `desbloqueable`: si es true, el agente puede obtener el
+    contacto de quien lo hizo con `ver_contacto_pedido` (gasta 1 desbloqueo). Si
+    es false, quien lo hizo aún no es usuario de Fynder: ofrece `solicitar_visita`.
 
     Úsala para "¿hay compradores buscando algo como esto?" tras un diagnóstico.
     """
-    return ds.find_buyers_public(property_id, dias, limit)
+    res = ds.find_buyers_public(property_id, dias, limit)
+    compradores = res.get("compradores") if isinstance(res, dict) else None
+    if compradores:
+        vistos = suscripciones.ids_desbloqueados(
+            current_agent().user_id, "pedido", [c["pedido_id"] for c in compradores])
+        for c in compradores:
+            c["contacto_desbloqueado"] = c["pedido_id"] in vistos
+    return res
 
 
 # =========================================================================
@@ -508,7 +564,7 @@ def mis_listings_calientes(dias: int = 30) -> Dict[str, Any]:
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"total": 0, "listings": [],
-                "mensaje": "Tu usuario no tiene un teléfono asociado para identificar inventario propio."}
+                "mensaje": "Tu teléfono todavía no está verificado en Fynder. Escríbenos para verificarlo y así ver y gestionar tus propios inmuebles."}
     return es.mis_calientes_public(agent.telefono_10, dias)
 
 
@@ -586,7 +642,7 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"error": "sin_telefono",
-                "mensaje": "Tu usuario no tiene teléfono asociado; no puedo asignarte la propiedad."}
+                "mensaje": "Tu teléfono todavía no está verificado en Fynder. Escríbenos para verificarlo y así ver y gestionar tus propios inmuebles."}
     try:
         data = {
             "precio": precio, "area_construida": area_construida, "tipo_propiedad": tipo_propiedad,
@@ -821,25 +877,29 @@ def list_my_properties(limit: int = 50) -> Dict[str, Any]:
     agent = current_agent()
     if not agent.has_inventory_scope:
         return {"total": 0, "propiedades": [],
-                "mensaje": "Tu usuario no tiene un teléfono asociado para identificar inventario propio."}
+                "mensaje": "Tu teléfono todavía no está verificado en Fynder. Escríbenos para verificarlo y así ver y gestionar tus propios inmuebles."}
     return ps.list_my_properties_public(agent.telefono_10, limit)
 
 
-@mcp.tool(title="Solicitar visita (avisa a Hernán)", annotations=_escritura(idempotente=True, externa=True))
+@mcp.tool(title="Pedir a Fynder que coordine (sin contacto)", annotations=_escritura(idempotente=True, externa=True))
 def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None) -> Dict[str, Any]:
     """
-    Dispara una solicitud de VISITA para un inmueble (por su código). Con esto,
-    Fynder registra tu interés, verifica que el inmueble siga disponible, y le
-    pasa la coordinación a Hernán de Fynder, que contacta a ambas partes y agenda
-    la visita. Úsala cuando el agente diga algo como "quiero ver el código X",
-    "coordíname una visita a la X" o "pásale esta al equipo".
+    Le pide al equipo de Fynder que coordine una visita POR el agente: Fynder
+    registra el interés, verifica que el inmueble siga disponible y contacta a
+    ambas partes. Es la red de seguridad cuando el agente no puede hablar directo:
+
+    - `ver_contacto` respondió `sin_contacto` (el inmueble no tiene un contacto
+      válido cargado), o
+    - el pedido no es desbloqueable (quien lo hizo aún no es usuario de Fynder), o
+    - el agente prefiere explícitamente que Fynder coordine.
+
+    Si el agente solo quiere el contacto, usa `ver_contacto`, no esta tool.
 
     - `codigo`: código del inmueble (obligatorio).
-    - `cliente_ref`: referencia libre de tu cliente comprador (opcional; ej. "familia López").
-    - `preguntas`: dudas para el dueño que quieras que Hernán resuelva (opcional).
+    - `cliente_ref`: referencia libre del cliente comprador (opcional; ej. "familia López").
+    - `preguntas`: dudas para el dueño que el equipo de Fynder debe resolver (opcional).
 
-    Importante: Fynder coordina por ti; NO se entregan datos de contacto de la
-    otra parte. Al terminar, dile al agente que Hernán le confirmará la visita.
+    Al terminar, dile al agente que el equipo de Fynder le confirmará la visita.
     """
     agent = current_agent()
     if not agent.telefono:
@@ -852,6 +912,109 @@ def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None
         preguntas=preguntas,
         fuente="MCP",
     )
+
+
+# =========================================================================
+# CONTACTOS: desbloqueos (lo que se cobra) y plan
+# =========================================================================
+
+def _respuesta_desbloqueo(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Envuelve el contacto en `ContactoRevelado`: solo así sobrevive al saneo."""
+    if res.get("ok") and res.get("contacto"):
+        c = res.pop("contacto")
+        res["contacto_desbloqueado"] = ContactoRevelado(
+            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia"))
+    return res
+
+
+@mcp.tool(title="Ver contacto de quien tiene el inmueble",
+          annotations=_escritura(idempotente=True, externa=True), revela_contacto=True)
+def ver_contacto(codigo: str, confirmar: bool = False) -> Dict[str, Any]:
+    """
+    Devuelve el CONTACTO (nombre, celular, inmobiliaria y link de WhatsApp) de
+    quien tiene un inmueble. Gasta 1 desbloqueo del plan del agente.
+
+    Dos pasos:
+    1. Llámala con `confirmar=false` (por defecto): NO gasta nada; responde el
+       costo (`costo`: 0 o 1) y el saldo (`disponibles`). Díselo al agente.
+    2. Con su sí, llámala con `confirmar=true`: Fynder verifica EN VIVO que el
+       inmueble siga publicado (puede tardar unos segundos) y entrega el contacto.
+
+    No se cobra si el inmueble ya no está disponible, si no tiene un contacto
+    válido (`sin_contacto` → ofrece `solicitar_visita`), si ya estaba
+    desbloqueado o si es del propio agente. Si responde `sin_creditos`, explica
+    los planes una vez (vienen en la respuesta) sin presionar. Si responde
+    `terminos_pendientes`, el agente debe aceptar los términos en Fynder.
+    """
+    agent = current_agent()
+    if not confirmar:
+        return suscripciones.preview_desbloqueo(agent.user_id, "propiedad", codigo)
+    return _respuesta_desbloqueo(
+        suscripciones.desbloquear(agent.user_id, "propiedad", codigo, canal="mcp"))
+
+
+@mcp.tool(title="Ver contacto de quien hizo un pedido",
+          annotations=_escritura(idempotente=True, externa=True), revela_contacto=True)
+def ver_contacto_pedido(pedido_id: int, confirmar: bool = False) -> Dict[str, Any]:
+    """
+    Devuelve el CONTACTO de quien hizo un pedido (un comprador buscando algo),
+    para los pedidos que `find_buyers_for_property` marca `desbloqueable=true`.
+    Gasta 1 desbloqueo. Mismo flujo de dos pasos que `ver_contacto`: primero sin
+    confirmar (costo y saldo), luego con `confirmar=true`.
+
+    Si el pedido no es desbloqueable (quien lo hizo aún no es usuario de Fynder),
+    no se cobra: ofrece `solicitar_visita`.
+    """
+    agent = current_agent()
+    if not confirmar:
+        return suscripciones.preview_desbloqueo(agent.user_id, "pedido", pedido_id)
+    return _respuesta_desbloqueo(
+        suscripciones.desbloquear(agent.user_id, "pedido", pedido_id, canal="mcp"))
+
+
+@mcp.tool(title="Mi plan y desbloqueos", annotations=_LECTURA)
+def mi_plan() -> Dict[str, Any]:
+    """
+    Plan del agente: cuántos desbloqueos le quedan (del plan del mes y de su
+    saldo de prueba/paquetes), cuándo vence, los planes disponibles con su
+    precio y cómo activarlos o renovarlos (consignación + activación de Fynder).
+
+    Úsala para "¿cuántos contactos me quedan?", "¿qué plan tengo?" o "¿cómo
+    compro más desbloqueos?".
+    """
+    return suscripciones.estado(current_agent().user_id)
+
+
+@mcp.tool(title="Mis contactos desbloqueados", annotations=_LECTURA, revela_contacto=True)
+def mis_desbloqueos(limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+    """
+    Lista los contactos que el agente ya desbloqueó (inmuebles y pedidos), con
+    el contacto incluido. Volver a verlos no cuesta. Cada uno trae
+    `desbloqueo_id`, que sirve para `reportar_contacto_invalido`.
+    """
+    res = suscripciones.listar_desbloqueos(current_agent().user_id, limit, offset)
+    for item in res.get("items", []):
+        c = item.pop("contacto")
+        item["contacto"] = ContactoRevelado(
+            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia")) \
+            if c.get("telefono") else None
+    return res
+
+
+@mcp.tool(title="Reportar contacto que no sirve", annotations=_escritura())
+def reportar_contacto_invalido(desbloqueo_id: int, motivo: str,
+                               detalle: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Reporta un contacto desbloqueado que no sirvió, para que Fynder lo corrija y
+    devuelva el desbloqueo (hay un máximo de reembolsos automáticos al mes; por
+    encima, el equipo de Fynder revisa el reporte).
+
+    - `desbloqueo_id`: viene en `mis_desbloqueos` o en la respuesta de `ver_contacto`.
+    - `motivo`: uno de 'numero_equivocado', 'no_contesta', 'no_es_el_agente',
+      'ya_no_disponible', 'otro'.
+    - `detalle`: texto libre opcional.
+    """
+    return suscripciones.reportar_invalido(current_agent().user_id, desbloqueo_id, motivo, detalle)
 
 
 # Las herramientas de ESCRITURA (propose/apply) se registran en write_tools.

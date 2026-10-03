@@ -29,8 +29,11 @@ EXPECTED_TOOLS = {
     "reporte_zona_captacion",
     # Documentos de cierre
     "generar_promesa_compraventa",
-    # Flujo interés → PUNTAS → Hernán (Bloque A)
+    # Coordinación por Fynder (red de seguridad sin contacto)
     "solicitar_visita",
+    # Suscripción: desbloqueo de contactos y plan
+    "ver_contacto", "ver_contacto_pedido", "mi_plan", "mis_desbloqueos",
+    "reportar_contacto_invalido",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
     "propose_status_update_tool", "propose_fields_update_tool",
@@ -103,3 +106,57 @@ def test_wrapper_binds_agent_sanitizes_and_logs(monkeypatch):
     nombre, user_id, _ms, error, args = registros[0]
     assert (nombre, user_id, error) == ("get_zone_stats", 7, None)
     assert "zona" in list(args)
+
+
+def test_solo_las_tools_autorizadas_revelan_contactos():
+    from src.mcp_server.server import _TOOLS_QUE_REVELAN
+    assert _TOOLS_QUE_REVELAN == {"ver_contacto", "ver_contacto_pedido", "mis_desbloqueos"}
+    with pytest.raises(RuntimeError):
+        @srv.mcp.tool(title="x", revela_contacto=True)
+        def tool_intrusa() -> dict:
+            return {}
+
+
+def _agente_falso(monkeypatch):
+    from types import SimpleNamespace
+    agente = SimpleNamespace(user_id=7, telefono="+573001112233", telefono_10="3001112233")
+    monkeypatch.setattr(srv, "require_agent", lambda: agente)
+    monkeypatch.setattr(srv.uso, "registrar", lambda *a, **k: None)
+    return agente
+
+
+def test_contacto_revelado_sale_solo_por_ver_contacto(monkeypatch):
+    from src.services.redact import ContactoRevelado
+    _agente_falso(monkeypatch)
+    monkeypatch.setattr(srv.suscripciones, "desbloquear", lambda *a, **k: {
+        "ok": True, "contacto": {"telefono": "+573005556677", "nombre": "Ana", "agencia": None}})
+    out = asyncio.run(_tool("ver_contacto").run({"codigo": "4521", "confirmar": True}))
+    assert out["contacto_desbloqueado"]["telefono"] == "+573005556677"
+
+    # Una tool normal que (por error) devuelve un ContactoRevelado no lo entrega.
+    monkeypatch.setattr(srv.ms, "get_zone_stats",
+                        lambda *a: {"fuga": ContactoRevelado("+573005556677", "Ana")})
+    out = asyncio.run(_tool("get_zone_stats").run({}))
+    assert out["fuga"] is None
+
+
+def test_ver_contacto_sin_confirmar_no_cobra(monkeypatch):
+    _agente_falso(monkeypatch)
+    llamadas = []
+    monkeypatch.setattr(srv.suscripciones, "preview_desbloqueo",
+                        lambda *a: llamadas.append("preview") or {"ok": True, "costo": 1})
+    monkeypatch.setattr(srv.suscripciones, "desbloquear",
+                        lambda *a, **k: llamadas.append("desbloquear") or {"ok": True})
+    asyncio.run(_tool("ver_contacto").run({"codigo": "4521"}))
+    assert llamadas == ["preview"]
+
+
+def test_uso_justo_en_busqueda(monkeypatch):
+    _agente_falso(monkeypatch)
+    monkeypatch.setattr(srv.suscripciones, "registrar_busqueda",
+                        lambda uid: {"permitido": False, "usadas": 101, "limite": 100})
+    llamada = []
+    monkeypatch.setattr(srv.ps, "search", lambda **k: llamada.append(1) or {})
+    out = asyncio.run(_tool("search_properties").run({"query": "apto en Laureles"}))
+    assert out["error"] == "limite_diario"
+    assert llamada == []

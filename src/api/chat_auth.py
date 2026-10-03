@@ -33,7 +33,8 @@ def get_current_user():
     try:
         with DatabaseManager() as db:
             query = """
-                SELECT u.id, u.email, u.nombre, u.telefono, u.correo_personal
+                SELECT u.id, u.email, u.nombre, u.telefono, u.correo_personal,
+                       u.telefono_verificado, u.terminos_aceptados_at
                 FROM chat_users u
                 JOIN chat_user_sessions s ON s.user_id = u.id
                 WHERE s.token = %s
@@ -57,6 +58,20 @@ def get_current_user():
     except Exception as e:
         print(f"Error verificando token: {e}")
         return None
+
+
+def user_publico(user) -> dict:
+    """Datos del usuario que se le devuelven a él mismo."""
+    terminos = user.get('terminos_aceptados_at')
+    return {
+        'id': user['id'],
+        'email': user['email'],
+        'nombre': user['nombre'],
+        'telefono': user.get('telefono'),
+        'correo_personal': user.get('correo_personal'),
+        'telefono_verificado': bool(user.get('telefono_verificado')),
+        'terminos_aceptados_at': terminos.isoformat() if terminos else None,
+    }
 
 
 def require_chat_auth(f):
@@ -114,7 +129,8 @@ def login():
         with DatabaseManager() as db:
             # Verificar credenciales
             query = """
-                SELECT id, nombre, email, telefono, correo_personal
+                SELECT id, nombre, email, telefono, correo_personal,
+                       telefono_verificado, terminos_aceptados_at
                 FROM chat_users
                 WHERE email = %s
                   AND password_hash = crypt(%s, password_hash)
@@ -165,13 +181,7 @@ def login():
                 'success': True,
                 'data': {
                     'token': token,
-                    'user': {
-                        'id': user['id'],
-                        'email': user['email'],
-                        'nombre': user['nombre'],
-                        'telefono': user.get('telefono'),
-                        'correo_personal': user.get('correo_personal')
-                    },
+                    'user': user_publico(user),
                     'expires_at': expiration.isoformat()
                 }
             })
@@ -217,13 +227,7 @@ def verify_token():
     return jsonify({
         'success': True,
         'data': {
-            'user': {
-                'id': user['id'],
-                'email': user['email'],
-                'nombre': user['nombre'],
-                'telefono': user.get('telefono'),
-                'correo_personal': user.get('correo_personal')
-            }
+            'user': user_publico(user)
         }
     })
 
@@ -327,10 +331,7 @@ def get_me():
             return jsonify({
                 'success': True,
                 'data': {
-                    'id': user['id'],
-                    'email': user['email'],
-                    'nombre': user['nombre'],
-                    'telefono': user.get('telefono'),
+                    **user_publico(user),
                     'correo_personal': stats.get('correo_personal') if stats else None,
                     'total_sesiones': stats['total_sesiones'] if stats else 0,
                     'total_busquedas': stats['total_busquedas'] if stats else 0,
@@ -373,8 +374,14 @@ def update_profile():
             params.append(nombre)
 
         if 'telefono' in data:
-            updates.append("telefono = %s")
-            params.append(normalize_colombia_phone(data['telefono']))
+            nuevo = normalize_colombia_phone(data['telefono'])
+            if nuevo != user.get('telefono'):
+                # Un teléfono nuevo debe volver a verificarse: si no, cualquiera
+                # podría declararse dueño de los inmuebles de otro agente.
+                updates.append("telefono = %s")
+                params.append(nuevo)
+                updates.append("telefono_verificado = FALSE")
+                updates.append("telefono_verificado_at = NULL")
 
         if 'correo_personal' in data:
             correo = data['correo_personal'].strip() if data['correo_personal'] else None
@@ -393,7 +400,8 @@ def update_profile():
                 UPDATE chat_users
                 SET {', '.join(updates)}
                 WHERE id = %s
-                RETURNING id, email, nombre, telefono, correo_personal
+                RETURNING id, email, nombre, telefono, correo_personal,
+                          telefono_verificado, terminos_aceptados_at
             """
             db.cursor.execute(query, params)
             updated = db.cursor.fetchone()
@@ -405,13 +413,7 @@ def update_profile():
             return jsonify({
                 'success': True,
                 'data': {
-                    'user': {
-                        'id': updated['id'],
-                        'email': updated['email'],
-                        'nombre': updated['nombre'],
-                        'telefono': updated.get('telefono'),
-                        'correo_personal': updated.get('correo_personal')
-                    }
+                    'user': user_publico(updated)
                 }
             })
 
@@ -432,7 +434,7 @@ def get_agent_public_info(user_id: int):
             db.cursor.execute("""
                 SELECT id, nombre, telefono
                 FROM chat_users
-                WHERE id = %s
+                WHERE id = %s AND activo AND telefono_verificado
             """, (user_id,))
 
             user = db.cursor.fetchone()
