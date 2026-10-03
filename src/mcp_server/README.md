@@ -34,6 +34,7 @@ Agente en Claude.ai/Desktop ──Bearer token──▶ Fynder MCP (Streamable H
 | Comparación | `find_comparables`, `compare_properties`, `estimate_price` |
 | Diagnóstico | `diagnose_property`, `find_buyers_for_property` |
 | Inventario | `list_my_properties` |
+| Contactos y plan (lo que se cobra) | `ver_contacto`, `ver_contacto_pedido`, `mi_plan`, `mis_desbloqueos`, `reportar_contacto_invalido` |
 | Escritura (propose→apply, scoped) | `propose_price_update_tool`, `propose_description_update_tool`, `propose_status_update_tool`, `propose_fields_update_tool`, `apply_change` |
 
 La tabla no es exhaustiva: la lista completa está en `server.py` y en
@@ -41,8 +42,19 @@ La tabla no es exhaustiva: la lista completa está en `server.py` y en
 
 Las escrituras solo afectan inmuebles que el agente captó, siguen el patrón
 propose→apply (con `confirmation_token` firmado, expira a los 10 min) y quedan en
-`eventos_log`. Para registrar interés de compra se usa `solicitar_visita` (el
-contacto de la contraparte nunca se entrega; Hernán es el canal).
+`eventos_log`.
+
+## Modelo de negocio: desbloqueo de contactos
+
+Buscar y analizar es gratis (con uso justo diario en `search_properties`). El
+CONTACTO de quien tiene un inmueble o de quien hizo un pedido se obtiene con
+`ver_contacto` / `ver_contacto_pedido` y gasta 1 desbloqueo del plan del agente
+(prueba de 2, Básico 7, Medio 15, Pro 30; activación manual). Las reglas viven
+en `src/services/suscripcion_service.py`: no se cobra si el inmueble no está
+disponible (verificación HTTP en vivo), si no hay contacto usable, si ya estaba
+desbloqueado o si es propio; los pedidos solo se desbloquean si quien pidió es
+usuario Fynder con términos aceptados. `solicitar_visita` (el equipo de Fynder
+coordina) queda como red de seguridad cuando no hay contacto usable.
 
 ## Wrapper central de tools
 
@@ -51,12 +63,22 @@ que:
 
 1. la ejecuta en un hilo (`anyio.to_thread`), para no bloquear el event loop;
 2. exige un agente autenticado y lo liga a la llamada (`current_agent()`);
-3. sanea la salida (`redact.sanitize`: nunca datos de contacto de agentes);
-4. registra el uso en `mcp_tool_calls` (migración 039; solo nombres de
+3. con `costo_ia=True`, cuenta la llamada contra el uso justo diario
+   (`uso_diario`) y la rechaza al pasarse;
+4. sanea la salida (`redact.sanitize`): ningún dato de contacto de agentes, salvo
+   un `ContactoRevelado` devuelto por una tool registrada con
+   `revela_contacto=True` (solo las de `_TOOLS_QUE_REVELAN`; registrar otra con
+   ese flag lanza error);
+5. registra el uso en `mcp_tool_calls` (migración 039; solo nombres de
    argumentos, nunca valores).
 
 Al agregar una tool: no repitas el chequeo de auth, y pásale `title` y
-`annotations` (`_LECTURA`, `_LECTURA_EXTERNA` o `_escritura(...)`).
+`annotations` (`_LECTURA`, `_LECTURA_EXTERNA` o `_escritura(...)`). Si llama a
+Claude, márcala `costo_ia=True`. Nunca devuelvas un contacto en un dict normal.
+
+La identidad (`AgentIdentity.telefono_10`) solo trae el teléfono si está
+VERIFICADO: un teléfono auto-declarado no da acceso a "mis propiedades", a las
+escrituras ni a desbloqueos propios gratis.
 
 ## Entorno (venv 3.11)
 

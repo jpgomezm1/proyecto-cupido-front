@@ -1955,8 +1955,6 @@ def get_similar_properties(slug: str):
 
 
 @api_bp.route('/improve-description', methods=['POST'])
-@requiere_admin_o_chat
-@uso_justo
 def improve_description():
     """
     POST /api/improve-description
@@ -2046,15 +2044,28 @@ def improve_description():
                         print(f"[API] improve-description: usando cache para propiedad {property_id}")
                         return jsonify({
                             'success': True,
-                            'data': {
+                            'data': para_cliente({
                                 'improved_description': row['descripcion_ai'],
                                 'highlights': highlights,
                                 'cached': True
-                            }
+                            })
                         }), 200
             except Exception as e:
                 # Si falla la lectura de cache, continuar con generación
                 print(f"[API] Error al leer cache de descripción AI: {e}")
+
+        # Generar con IA cuesta tokens: la versión guardada es pública (arriba),
+        # pero generarla exige usuario autenticado y dentro del uso justo. Si no,
+        # se devuelve la descripción original.
+        if not es_admin():
+            user = usuario_chat()
+            permitido = False
+            if user:
+                from src.services.suscripcion_service import registrar_busqueda
+                permitido = registrar_busqueda(user['id'])['permitido']
+            if not permitido:
+                return jsonify({'success': True, 'data': para_cliente({
+                    'improved_description': original_description, 'highlights': []})}), 200
 
         # Si la descripción es muy corta, no vale la pena procesarla
         if len(original_description) < 50:
@@ -2168,7 +2179,7 @@ Los highlights son 3-5 puntos únicos y atractivos (no genéricos como "tiene ba
 
         return jsonify({
             'success': True,
-            'data': result
+            'data': para_cliente(result)
         }), 200
 
     except Exception as e:
