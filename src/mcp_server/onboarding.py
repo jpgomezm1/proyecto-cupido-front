@@ -2,14 +2,15 @@
 Onboarding self-service del MCP de Fynder (páginas servidas por la app remota).
 
 Rutas:
-- GET  /            -> página 0-técnica: qué es, qué puedes preguntar, y el
-                       formulario para obtener el "código de acceso".
+- GET  /, /connect  -> página 0-técnica: cómo conectar Fynder a Claude o ChatGPT
+                       (conector personalizado + login OAuth con la cuenta de
+                       Fynder). El "código de acceso" para otros clientes (Claude
+                       Code, Cursor…) queda en una sección plegada.
 - POST /connect/token -> crea/reutiliza usuario y emite el token (JSON).
 - GET  /salud       -> healthcheck simple.
 
 Pensado para agentes inmobiliarios sin conocimientos técnicos: lenguaje simple,
-pasos cortos, botones de copiar. Diseño alineado a la identidad de Fynder
-(negro #0A0A0A, verde #2AE38C, tipografías Inter / Playfair Display / JetBrains Mono).
+pasos cortos, botones de copiar. Marca compartida en src/mcp_server/brand.py.
 """
 
 import html
@@ -19,11 +20,12 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
+from src.mcp_server import brand
 from src.services.mcp_signup_service import self_register, SignupError
 
 # Ícono del servidor/conector: Claude busca el favicon en la raíz al agregar el
 # MCP. Se sirve el logo de Findy para que el conector muestre esa imagen.
-FINDY_ICON = "https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png"
+FINDY_ICON = brand.FINDY
 
 
 def _public_url(request: Request) -> str:
@@ -91,7 +93,8 @@ async def home(request: Request) -> HTMLResponse:
     require_code = bool(os.getenv("MCP_SIGNUP_CODE"))
     page = (_PAGE.replace("__REQUIRE_CODE__", "true" if require_code else "false")
             .replace("__URL_TERMINOS__", html.escape(url_terminos()))
-            .replace("__PLANES__", html.escape(_resumen_planes())))
+            .replace("__PLANES__", html.escape(_resumen_planes()))
+            .replace("__MCP_URL__", html.escape(_public_url(request) + "/mcp")))
     return HTMLResponse(page)
 
 
@@ -106,286 +109,198 @@ def onboarding_routes():
     ]
 
 
+
+
 # ---------------------------------------------------------------------------
-# Página HTML (self-contained salvo Google Fonts). Identidad Fynder.
+# Página HTML (marca compartida: brand.py). Placeholders que llena home():
+# __REQUIRE_CODE__, __URL_TERMINOS__, __PLANES__, __MCP_URL__.
 # ---------------------------------------------------------------------------
 
-_PAGE = r"""<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fynder para tu IA · Conecta tu asistente</title>
-<meta name="description" content="Conecta Fynder a tu asistente de IA y conviértelo en un experto inmobiliario. Sin nada técnico.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#0A0A0A; --bg-1:#0F0F0F; --bg-2:#141414; --bg-3:#1A1A1A;
-    --border:#1F1F1F; --border-hi:#2A2A2A;
-    --white:#FAFAFA; --text:#E5E5E5; --text-2:#A3A3A3; --text-3:#6B6B6B; --text-4:#4A4A4A;
-    --green:#2AE38C; --green-d:#1FC97A; --green-l:#5DFAAB;
-    --green-soft:rgba(42,227,140,.10); --green-glow:rgba(42,227,140,.30);
-    --red:#FF5C5C; --yellow:#F5C842; --blue:#5B9CFF; --purple:#B47BFF; --orange:#FF914D;
-    --r:18px;
-  }
-  *{ margin:0; padding:0; box-sizing:border-box; }
-  html{ font-size:16px; scroll-behavior:smooth; }
-  body{
-    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    background:var(--bg); color:var(--text); line-height:1.6;
-    -webkit-font-smoothing:antialiased; position:relative; min-height:100vh; overflow-x:hidden;
-  }
-  body::before{ content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
-    background:
-      radial-gradient(ellipse 1100px 720px at 15% -5%, rgba(42,227,140,.06), transparent 60%),
-      radial-gradient(ellipse 900px 640px at 90% 10%, rgba(91,156,255,.035), transparent 60%),
-      radial-gradient(ellipse 900px 700px at 50% 115%, rgba(180,123,255,.03), transparent 60%); }
-  body::after{ content:''; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.02;
-    background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    background-size:256px 256px; }
-  ::selection{ background:var(--green-soft); color:var(--green); }
-  .wrap{ position:relative; z-index:2; max-width:940px; margin:0 auto; padding:0 22px 96px; }
+_CSS = """
+.hero{ padding:28px 0 8px; }
+.hero h1{ margin-top:12px; font-size:34px; }
+.hero .lead{ margin-top:12px; }
+.section{ margin-top:28px; }
+.addr-label{ font-size:13px; font-weight:600; color:var(--muted); }
+.codebox{ margin-top:8px; }
+.abrir{ display:inline-block; margin-top:14px; font-weight:600; font-size:14px; text-decoration:none; }
+.abrir:hover{ text-decoration:underline; }
+.ejemplos{ list-style:none; display:grid; gap:8px; margin-top:12px; }
+.ejemplos li{ color:var(--text); font-size:14.5px; padding:10px 14px; border:1px solid var(--border);
+              border-radius:var(--radius-md); background:var(--surface-1); }
+.cuenta{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:14px; }
+.cuenta p{ flex:1 1 260px; }
+details.otros{ margin-top:28px; border:1px solid var(--border); border-radius:var(--radius-xl); background:var(--surface-1); }
+details.otros > summary{ cursor:pointer; list-style:none; padding:18px 20px; font-weight:600; display:flex;
+                         align-items:center; justify-content:space-between; gap:12px; }
+details.otros > summary::-webkit-details-marker{ display:none; }
+details.otros > summary::after{ content:"+"; color:var(--muted); font-size:20px; line-height:1; }
+details.otros[open] > summary::after{ content:"\\2212"; }
+details.otros .inner{ padding:0 20px 22px; }
+.opt{ color:var(--subtle); font-weight:500; }
+.chk a{ color:var(--brand); }
+.ok-badge{ width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:22px; font-weight:800;
+           background:var(--brand); color:var(--brand-ink); margin-bottom:10px; }
+@media (max-width:480px){ .hero h1{ font-size:28px; } }
+"""
 
-  /* Top bar */
-  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:26px 2px 8px; }
-  .brand{ display:flex; align-items:center; gap:11px; }
-  .mark{ width:34px; height:34px; border-radius:9px; display:grid; place-items:center;
-    background:linear-gradient(150deg,var(--green),var(--green-d)); box-shadow:0 6px 22px rgba(42,227,140,.28); }
-  .mark svg{ width:19px; height:19px; display:block; }
-  .brand b{ font-weight:800; letter-spacing:-.02em; font-size:19px; color:var(--white); }
-  .brand b span{ color:var(--green); }
-  .pill{ font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-3);
-    border:1px solid var(--border-hi); border-radius:999px; padding:6px 12px; font-weight:600; }
+_WA_CUENTA = brand.wa_link("Hola, quiero mi cuenta de Fynder (con los 2 desbloqueos de prueba).")
+_WA_AYUDA = brand.wa_link("Hola, necesito ayuda para conectar Fynder a mi IA.")
 
-  /* Hero */
-  .hero{ text-align:center; padding:58px 0 12px; }
-  .eyebrow{ display:inline-flex; align-items:center; gap:8px; font-size:12px; letter-spacing:.24em;
-    text-transform:uppercase; color:var(--green); font-weight:700; margin-bottom:20px; }
-  .eyebrow::before,.eyebrow::after{ content:''; width:26px; height:1px; background:linear-gradient(90deg,transparent,var(--green)); }
-  .eyebrow::after{ background:linear-gradient(90deg,var(--green),transparent); }
-  h1{ font-family:'Playfair Display',serif; font-weight:700; font-size:clamp(34px,6vw,58px);
-    line-height:1.05; letter-spacing:-.015em; color:var(--white); }
-  h1 em{ font-style:italic; background:linear-gradient(90deg,var(--green-l),var(--green));
-    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
-  .lead{ color:var(--text-2); font-size:clamp(16px,2.4vw,19px); max-width:600px; margin:22px auto 0; }
-  .hero-note{ margin-top:16px; font-size:14px; color:var(--text-3); }
-  .hero-note b{ color:var(--green); font-weight:600; }
+_MAIN = """
+<main id="contenido">
+  <section class="hero">
+    <span class="eyebrow">Fynder + tu IA</span>
+    <h1>Lleva a Findy a tu IA</h1>
+    <p class="lead">Conecta Fynder a Claude o ChatGPT y pregúntale en español por precios, demanda,
+      comparativas o por qué una propiedad no se vende. Buscar y analizar es <b>gratis</b>. El contacto
+      de quien tiene un inmueble se desbloquea con tu plan: <b>2 desbloqueos de prueba</b> al verificar
+      tu celular y __PLANES__.</p>
+  </section>
 
-  /* Section */
-  .section{ margin-top:56px; }
-  .kicker{ font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--text-3);
-    font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
-  .kicker::before{ content:''; width:22px; height:2px; border-radius:2px; background:var(--green); }
+  <section class="section card" aria-labelledby="conectar-titulo">
+    <h2 id="conectar-titulo">Conéctalo en 2 minutos</h2>
+    <p class="addr-label" id="mcp-label" style="margin-top:14px">Dirección de Fynder para tu IA</p>
+    <div class="codebox"><code id="mcp-url" aria-labelledby="mcp-label">__MCP_URL__</code>
+      <button type="button" data-copiar="mcp-url" aria-label="Copiar la dirección de Fynder">Copiar</button></div>
 
-  /* Ask tiles */
-  .tiles{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
-  .tile{ border:1px solid var(--border); border-radius:var(--r); padding:18px 18px 20px; position:relative;
-    overflow:hidden; transition:transform .18s ease, border-color .18s ease; }
-  .tile:hover{ transform:translateY(-3px); border-color:var(--border-hi); }
-  .tile .ic{ width:38px; height:38px; border-radius:10px; display:grid; place-items:center; font-size:19px; margin-bottom:12px; }
-  .tile p{ color:var(--white); font-weight:600; font-size:15.5px; line-height:1.4; }
-  .tile small{ color:var(--text-3); font-size:12.5px; display:block; margin-top:6px; font-weight:500; }
-  .t-green{ background:linear-gradient(150deg,rgba(42,227,140,.09),transparent 70%); }
-  .t-green .ic{ background:rgba(42,227,140,.13); }
-  .t-blue{ background:linear-gradient(150deg,rgba(91,156,255,.09),transparent 70%); }
-  .t-blue .ic{ background:rgba(91,156,255,.13); }
-  .t-purple{ background:linear-gradient(150deg,rgba(180,123,255,.09),transparent 70%); }
-  .t-purple .ic{ background:rgba(180,123,255,.13); }
-  .t-orange{ background:linear-gradient(150deg,rgba(255,145,77,.09),transparent 70%); }
-  .t-orange .ic{ background:rgba(255,145,77,.13); }
-  .t-yellow{ background:linear-gradient(150deg,rgba(245,200,66,.09),transparent 70%); }
-  .t-yellow .ic{ background:rgba(245,200,66,.13); }
-  .t-red{ background:linear-gradient(150deg,rgba(255,92,92,.08),transparent 70%); }
-  .t-red .ic{ background:rgba(255,92,92,.12); }
-
-  /* Card */
-  .card{ background:linear-gradient(180deg,var(--bg-1),var(--bg)); border:1px solid var(--border);
-    border-radius:22px; padding:30px; }
-  .step-h{ display:flex; align-items:center; gap:14px; margin-bottom:6px; }
-  .step-n{ width:34px; height:34px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center;
-    font-weight:800; font-size:15px; color:#04120a; background:linear-gradient(150deg,var(--green),var(--green-d)); }
-  .step-h h2{ font-size:21px; font-weight:700; color:var(--white); letter-spacing:-.01em; }
-  .sub{ color:var(--text-2); font-size:14.5px; margin:2px 0 8px 48px; }
-
-  form{ margin-top:8px; }
-  label{ display:block; font-size:13px; color:var(--text-2); margin:18px 0 8px; font-weight:600; }
-  label .opt{ color:var(--text-3); font-weight:500; }
-  label.chk{ display:flex; gap:10px; align-items:flex-start; font-weight:500; line-height:1.45; }
-  label.chk input{ width:18px; height:18px; margin-top:2px; flex:none; accent-color:#2AE38C; }
-  label.chk a{ color:#2AE38C; }
-  input{ width:100%; padding:14px 15px; border-radius:13px; border:1px solid var(--border-hi);
-    background:var(--bg-2); color:var(--white); font-size:16px; font-family:inherit; transition:border-color .15s, box-shadow .15s; }
-  input::placeholder{ color:var(--text-4); }
-  input:focus{ outline:none; border-color:var(--green); box-shadow:0 0 0 4px rgba(42,227,140,.12); }
-
-  .btn{ cursor:pointer; border:none; font-family:inherit; font-weight:700; border-radius:13px; transition:transform .12s, box-shadow .2s, opacity .2s; }
-  .btn-primary{ width:100%; margin-top:24px; padding:16px; font-size:16px; color:#04120a;
-    background:linear-gradient(150deg,var(--green-l),var(--green)); box-shadow:0 10px 30px rgba(42,227,140,.25); }
-  .btn-primary:hover{ transform:translateY(-2px); box-shadow:0 14px 40px rgba(42,227,140,.38); }
-  .btn-primary:disabled{ opacity:.55; transform:none; cursor:default; box-shadow:none; }
-  .btn-copy{ background:var(--bg-3); color:var(--text); border:1px solid var(--border-hi); padding:9px 15px; font-size:13px; }
-  .btn-copy:hover{ border-color:var(--green); color:var(--green); }
-
-  .error{ display:none; margin-top:16px; background:rgba(255,92,92,.08); border:1px solid rgba(255,92,92,.35);
-    color:#ffb4bd; padding:13px 15px; border-radius:12px; font-size:14px; }
-  .hidden{ display:none; }
-
-  /* Success */
-  .exito{ text-align:center; }
-  .badge-ok{ width:64px; height:64px; border-radius:50%; margin:0 auto 8px; display:grid; place-items:center;
-    background:radial-gradient(circle,var(--green-soft),transparent 70%); }
-  .badge-ok div{ width:46px; height:46px; border-radius:50%; display:grid; place-items:center; font-size:24px;
-    background:linear-gradient(150deg,var(--green),var(--green-d)); color:#04120a; box-shadow:0 8px 26px rgba(42,227,140,.4); }
-  .exito h2{ font-family:'Playfair Display',serif; font-size:28px; color:var(--white); font-weight:700; margin-top:8px; }
-  .codebox{ display:flex; gap:10px; align-items:center; background:#050b08; border:1px solid rgba(42,227,140,.35);
-    border-radius:14px; padding:14px 15px; margin-top:12px; box-shadow:inset 0 0 30px rgba(42,227,140,.05); }
-  .codebox code{ font-family:'JetBrains Mono',monospace; font-size:13.5px; word-break:break-all;
-    color:var(--green-l); flex:1; text-align:left; }
-  .tabs{ display:flex; gap:8px; margin:8px 0 16px; }
-  .tab{ flex:1; background:var(--bg-2); border:1px solid var(--border-hi); color:var(--text-2);
-    padding:11px; border-radius:11px; font-size:14px; font-weight:600; cursor:pointer; transition:.15s; }
-  .tab.on{ color:#04120a; background:linear-gradient(150deg,var(--green),var(--green-d)); border-color:transparent; }
-  ol.pasos{ list-style:none; text-align:left; }
-  ol.pasos li{ display:flex; gap:13px; padding:13px 0; border-bottom:1px solid var(--border); color:var(--text); font-size:15px; }
-  ol.pasos li:last-child{ border-bottom:none; }
-  ol.pasos li b{ color:var(--white); }
-  .dot{ flex:0 0 auto; width:24px; height:24px; border-radius:50%; background:var(--green-soft); color:var(--green);
-    font-size:12.5px; font-weight:700; display:grid; place-items:center; margin-top:1px; }
-
-  .foot{ text-align:center; color:var(--text-3); font-size:13px; margin-top:52px; line-height:1.7; }
-  .foot b{ color:var(--text-2); font-weight:600; }
-  a{ color:var(--green); text-decoration:none; }
-
-  @media (max-width:640px){
-    .tiles{ grid-template-columns:1fr; }
-    .card{ padding:22px; }
-    .sub{ margin-left:0; }
-  }
-</style>
-</head>
-<body>
-<div class="wrap">
-
-  <div class="topbar">
-    <div class="brand">
-      <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2C7.9 2 4.5 5.4 4.5 9.5c0 5 7.5 12.5 7.5 12.5s7.5-7.5 7.5-12.5C19.5 5.4 16.1 2 12 2z" fill="#04120a"/><circle cx="12" cy="9.5" r="3" fill="#2AE38C"/></svg></div>
-      <b>Fy<span>nder</span></b>
+    <div class="tabs" role="tablist" aria-label="Elige tu IA" style="margin-top:20px">
+      <button type="button" role="tab" id="tab-claude" aria-selected="true" aria-controls="panel-claude" tabindex="0">Claude</button>
+      <button type="button" role="tab" id="tab-chatgpt" aria-selected="false" aria-controls="panel-chatgpt" tabindex="-1">ChatGPT</button>
     </div>
-    <div class="pill">Para agentes</div>
-  </div>
 
-  <div class="hero">
-    <div class="eyebrow">Fynder + Inteligencia Artificial</div>
-    <h1>Convierte tu IA en un<br><em>experto inmobiliario</em></h1>
-    <p class="lead">Conecta Fynder a tu asistente —como Claude— y pregúntale en español
-      sobre precios, demanda, comparativas y por qué una propiedad no se vende.
-      Te responde con datos reales del mercado.</p>
-    <p class="hero-note">⏱️ Toma <b>menos de 2 minutos</b> · sin nada técnico</p>
-    <p class="hero-note">Buscar y analizar es <b>gratis</b>. El contacto de quien tiene un
-      inmueble se desbloquea con tu plan: <b>2 desbloqueos de prueba</b> al verificar tu
-      celular y __PLANES__.</p>
-  </div>
-
-  <div class="section">
-    <div class="kicker">Lo que le puedes preguntar</div>
-    <div class="tiles">
-      <div class="tile t-green"><div class="ic">📉</div><p>¿Por qué no se me vende este apartamento?</p><small>Diagnóstico de rotación</small></div>
-      <div class="tile t-blue"><div class="ic">💰</div><p>¿Cómo está el precio por m² en El Poblado?</p><small>Precios de la zona</small></div>
-      <div class="tile t-purple"><div class="ic">⚖️</div><p>Compárame estas 3 propiedades</p><small>Comparativa lado a lado</small></div>
-      <div class="tile t-orange"><div class="ic">🔥</div><p>¿Está caliente o fría la zona de Laureles?</p><small>Oferta vs. demanda</small></div>
-      <div class="tile t-yellow"><div class="ic">📞</div><p>Pásame el contacto de quien tiene el código 4521</p><small>Contacto directo · con tu plan</small></div>
-      <div class="tile t-red"><div class="ic">🏷️</div><p>¿A cuánto capto un apto de 80m² en Sabaneta?</p><small>Precio sugerido</small></div>
+    <div role="tabpanel" id="panel-claude" aria-labelledby="tab-claude" tabindex="0">
+      <ol class="steps">
+        <li><div><b>Abre los conectores de Claude</b><br><span class="muted">En claude.ai o en la app:
+          Configuración → Conectores → Agregar conector personalizado.</span></div></li>
+        <li><div><b>Pega la dirección de Fynder</b><br><span class="muted">Ponle de nombre «Fynder», pega
+          la dirección de arriba y toca Agregar.</span></div></li>
+        <li><div><b>Inicia sesión con tu cuenta de Fynder</b><br><span class="muted">Toca Conectar y entra
+          con tu correo y tu clave de Fynder. Listo: pregúntale a Claude.</span></div></li>
+      </ol>
+      <a class="abrir" href="https://claude.ai/settings/connectors" target="_blank" rel="noopener noreferrer">Abrir Claude →</a>
     </div>
-  </div>
 
-  <div class="section" id="form-card">
-    <div class="card">
-      <div class="step-h"><div class="step-n">1</div><h2>Obtén tu código de acceso</h2></div>
-      <p class="sub">Es tu llave personal para conectar Fynder. Guárdala: es solo tuya.</p>
-      <form onsubmit="return false">
-        <label>Tu nombre completo</label>
-        <input id="nombre" placeholder="Ej: Lina Roldán" autocomplete="name">
-        <label>Tu correo electrónico</label>
-        <input id="email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="email">
-        <label>Tu celular <span class="opt">· Fynder lo verifica para darte tus 2 desbloqueos de prueba y mostrarte “mis propiedades”</span></label>
-        <input id="telefono" placeholder="Ej: 3122655340" inputmode="tel">
-        <div id="code-field" class="hidden">
-          <label>Código de invitación</label>
-          <input id="invite" placeholder="Te lo entrega Fynder">
-        </div>
-        <label class="chk"><input type="checkbox" id="terminos"> Acepto los
-          <a href="__URL_TERMINOS__" target="_blank" rel="noopener">términos de uso y el tratamiento de mis datos</a> de Fynder</label>
-        <button class="btn btn-primary" id="btn">Obtener mi código de acceso →</button>
-        <div class="error" id="error"></div>
-      </form>
+    <div class="hidden" role="tabpanel" id="panel-chatgpt" aria-labelledby="tab-chatgpt" tabindex="0">
+      <ol class="steps">
+        <li><div><b>Activa el modo desarrollador</b><br><span class="muted">En ChatGPT: Configuración →
+          Aplicaciones y conectores → Configuración avanzada → Modo desarrollador.</span></div></li>
+        <li><div><b>Crea el conector de Fynder</b><br><span class="muted">Toca Crear, ponle de nombre
+          «Fynder», pega la dirección de arriba y elige autenticación OAuth.</span></div></li>
+        <li><div><b>Inicia sesión con tu cuenta de Fynder</b><br><span class="muted">Entra con tu correo y
+          tu clave de Fynder, y actívalo en el chat desde el menú +.</span></div></li>
+      </ol>
+      <a class="abrir" href="https://chatgpt.com/#settings/Connectors" target="_blank" rel="noopener noreferrer">Abrir ChatGPT →</a>
     </div>
-  </div>
+  </section>
 
-  <div class="section hidden" id="exito">
-    <div class="card exito">
-      <div class="badge-ok"><div>✓</div></div>
-      <h2>¡Listo, <span id="saludo"></span>!</h2>
-      <p class="sub" style="margin-left:0">Este es tu código de acceso. <b style="color:var(--white)">Cópialo ahora</b>: no se vuelve a mostrar.</p>
-      <div class="codebox"><code id="token"></code>
-        <button class="btn btn-copy" onclick="copiar('token',this)">Copiar</button></div>
+  <section class="section card cuenta" aria-labelledby="cuenta-titulo">
+    <p><b id="cuenta-titulo">¿No tienes cuenta? Pídela por WhatsApp</b><br><span class="muted">Te la
+      creamos con tu correo y clave, e incluye 2 desbloqueos de prueba.</span></p>
+    <a class="btn btn-primary" href="__WA_CUENTA__" target="_blank" rel="noopener noreferrer">Pedir mi cuenta</a>
+  </section>
 
-      <div class="step-h" style="margin-top:30px"><div class="step-n">2</div><h2>Conéctalo a tu IA</h2></div>
-      <div class="tabs">
-        <div class="tab on" id="tab-web" onclick="verTab('web')">Claude web / app</div>
-        <div class="tab" id="tab-desk" onclick="verTab('desk')">Claude Desktop</div>
+  <section class="section" aria-labelledby="ejemplos-titulo">
+    <h2 id="ejemplos-titulo">Pregúntale cosas como</h2>
+    <ul class="ejemplos">
+      <li>¿Por qué no se me vende este apartamento?</li>
+      <li>¿Cómo está el precio por m² en El Poblado?</li>
+      <li>Compárame estas 3 propiedades para mi cliente.</li>
+      <li>¿A cuánto capto un apto de 80 m² en Sabaneta?</li>
+    </ul>
+  </section>
+
+  <details class="otros" id="otros">
+    <summary>Otros clientes (Claude Code, Cursor…) — código de acceso</summary>
+    <div class="inner">
+      <div id="form-card">
+        <p class="muted">Si tu cliente de IA no permite iniciar sesión con tu cuenta, genera un código de
+          acceso personal y úsalo como token. Es solo tuyo: guárdalo.</p>
+        <form id="form-token" novalidate>
+          <div class="field"><label for="nombre">Tu nombre completo</label>
+            <input id="nombre" name="nombre" placeholder="Ej: Lina Roldán" autocomplete="name" required aria-describedby="error"></div>
+          <div class="field"><label for="email">Tu correo electrónico</label>
+            <input id="email" name="email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="email" required aria-describedby="error"></div>
+          <div class="field"><label for="telefono">Tu celular <span class="opt">· Fynder lo verifica para darte tus 2 desbloqueos de prueba y mostrarte “mis propiedades”</span></label>
+            <input id="telefono" name="telefono" placeholder="Ej: 3122655340" inputmode="tel" autocomplete="tel"></div>
+          <div class="field hidden" id="code-field"><label for="invite">Código de invitación</label>
+            <input id="invite" name="invite" placeholder="Te lo entrega Fynder" aria-describedby="error"></div>
+          <label class="chk" for="terminos"><input type="checkbox" id="terminos" name="acepta_terminos" aria-describedby="error">
+            <span>Acepto los <a href="__URL_TERMINOS__" target="_blank" rel="noopener">términos de uso y el tratamiento de mis datos</a> de Fynder</span></label>
+          <div class="alert-error hidden" id="error" role="alert"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="btn" style="margin-top:20px">Obtener mi código de acceso</button>
+        </form>
       </div>
 
-      <div id="pane-web">
-        <ol class="pasos">
-          <li><span class="dot">1</span><span>Abre Claude y entra a <b>Configuración → Conectores</b>.</span></li>
-          <li><span class="dot">2</span><span>Toca <b>“Agregar conector personalizado”</b>.</span></li>
-          <li><span class="dot">3</span><span>Pega esta dirección de Fynder:
-            <div class="codebox"><code id="url-web"></code>
-              <button class="btn btn-copy" onclick="copiar('url-web',this)">Copiar</button></div></span></li>
-          <li><span class="dot">4</span><span>Cuando te pida autorizarte, pega tu <b>código de acceso</b> de arriba.</span></li>
-          <li><span class="dot">5</span><span>¡Guarda y listo! Ya puedes preguntarle sobre tus propiedades. 🎉</span></li>
+      <div class="hidden" id="exito" tabindex="-1">
+        <div class="ok-badge" aria-hidden="true">✓</div>
+        <h2>¡Listo, <span id="saludo"></span>!</h2>
+        <p class="muted" style="margin-top:6px">Este es tu código de acceso. <b>Cópialo ahora</b>: no se vuelve a mostrar.</p>
+        <div class="codebox"><code id="token"></code><button type="button" data-copiar="token" aria-label="Copiar el código de acceso">Copiar</button></div>
+        <p class="addr-label" style="margin-top:16px">Dirección del servidor</p>
+        <div class="codebox"><code id="url-token"></code><button type="button" data-copiar="url-token" aria-label="Copiar la dirección del servidor">Copiar</button></div>
+        <ol class="steps">
+          <li><div>En tu cliente (Claude Code, Cursor u otro) agrega un servidor MCP remoto con la dirección de arriba.</div></li>
+          <li><div>Cuando te pida autorización, usa tu <b>código de acceso</b> como token.</div></li>
         </ol>
+        <p class="muted" style="margin-top:14px">¿Perdiste el código? Vuelve a esta página con el mismo correo y genera uno nuevo.</p>
       </div>
-      <div id="pane-desk" class="hidden">
-        <ol class="pasos">
-          <li><span class="dot">1</span><span>Abre <b>Claude Desktop → Configuración → Conectores → Agregar</b>.</span></li>
-          <li><span class="dot">2</span><span>Pega la misma dirección de Fynder:
-            <div class="codebox"><code id="url-desk"></code>
-              <button class="btn btn-copy" onclick="copiar('url-desk',this)">Copiar</button></div></span></li>
-          <li><span class="dot">3</span><span>Ingresa tu <b>código de acceso</b> cuando lo solicite.</span></li>
-          <li><span class="dot">4</span><span>Guarda y empieza a preguntar. 🎉</span></li>
-        </ol>
-      </div>
-      <p class="sub" style="margin-left:0; margin-top:18px">¿Perdiste el código? Vuelve a esta página con el mismo correo y genera uno nuevo.</p>
     </div>
-  </div>
+  </details>
 
-  <div class="foot">
-    <b>Fynder</b> · Tu inteligencia inmobiliaria, ahora dentro de tu IA.<br>
-    ¿Dudas para conectarte? Escríbenos y te ayudamos.
-  </div>
-</div>
+  <p class="muted" style="margin-top:24px; text-align:center">¿Dudas para conectarte?
+    <a href="__WA_AYUDA__" target="_blank" rel="noopener noreferrer">Escríbenos por WhatsApp</a> y te ayudamos.</p>
+</main>
+"""
 
-<script>
+_SCRIPT = r"""<script>
 const REQUIRE_CODE = __REQUIRE_CODE__;
 if (REQUIRE_CODE) document.getElementById('code-field').classList.remove('hidden');
 
-function copiar(id, btn){
-  const t = document.getElementById(id).innerText;
-  navigator.clipboard.writeText(t).then(()=>{ const o=btn.innerText; btn.innerText='¡Copiado!'; setTimeout(()=>btn.innerText=o,1500); });
-}
-function verTab(w){
-  document.getElementById('tab-web').classList.toggle('on', w==='web');
-  document.getElementById('tab-desk').classList.toggle('on', w==='desk');
-  document.getElementById('pane-web').classList.toggle('hidden', w!=='web');
-  document.getElementById('pane-desk').classList.toggle('hidden', w!=='desk');
-}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-copiar]'); if (!b) return;
+  const t = document.getElementById(b.dataset.copiar).innerText;
+  navigator.clipboard.writeText(t).then(() => {
+    const o = b.innerText; b.innerText = '¡Copiado!'; setTimeout(() => b.innerText = o, 1500);
+  });
+});
 
+// Pestañas accesibles (Claude / ChatGPT): clic, flechas, Inicio y Fin.
+const tabs = Array.from(document.querySelectorAll('[role=tab]'));
+function elegir(tab, foco){
+  tabs.forEach((t) => {
+    const on = t === tab;
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute('aria-controls')).classList.toggle('hidden', !on);
+  });
+  if (foco) tab.focus();
+}
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => elegir(t, false));
+  t.addEventListener('keydown', (e) => {
+    let j = null;
+    if (e.key === 'ArrowRight') j = (i + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') j = (i - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = tabs.length - 1;
+    if (j !== null){ e.preventDefault(); elegir(tabs[j], true); }
+  });
+});
+
+// Código de acceso (otros clientes): mismo payload de siempre a /connect/token.
+const form = document.getElementById('form-token');
 const btn = document.getElementById('btn');
-btn.addEventListener('click', async () => {
-  const err = document.getElementById('error'); err.style.display='none';
+const err = document.getElementById('error');
+const TXT_BTN = 'Obtener mi código de acceso';
+function mostrarError(msg, campo){
+  err.innerText = msg; err.classList.remove('hidden');
+  if (campo){ campo.setAttribute('aria-invalid', 'true'); campo.focus(); }
+}
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.classList.add('hidden');
+  form.querySelectorAll('[aria-invalid]').forEach((el) => el.removeAttribute('aria-invalid'));
   const payload = {
     nombre: document.getElementById('nombre').value.trim(),
     email: document.getElementById('email').value.trim(),
@@ -393,26 +308,33 @@ btn.addEventListener('click', async () => {
     invite_code: REQUIRE_CODE ? document.getElementById('invite').value.trim() : null,
     acepta_terminos: document.getElementById('terminos').checked,
   };
-  if(!payload.nombre || !payload.email){ err.innerText='Escribe tu nombre y tu correo.'; err.style.display='block'; return; }
-  if(!payload.acepta_terminos){ err.innerText='Para continuar, acepta los términos de Fynder.'; err.style.display='block'; return; }
-  btn.disabled=true; btn.innerText='Generando tu código...';
+  if (!payload.nombre){ mostrarError('Escribe tu nombre y tu correo.', document.getElementById('nombre')); return; }
+  if (!payload.email){ mostrarError('Escribe tu nombre y tu correo.', document.getElementById('email')); return; }
+  if (!payload.acepta_terminos){ mostrarError('Para continuar, acepta los términos de Fynder.', document.getElementById('terminos')); return; }
+  btn.disabled = true; btn.innerText = 'Generando tu código…';
   try{
     const r = await fetch('/connect/token', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     const data = await r.json();
-    if(!data.ok){ err.innerText = data.error || 'No pudimos generar tu código.'; err.style.display='block'; btn.disabled=false; btn.innerText='Obtener mi código de acceso →'; return; }
+    if (!data.ok){ mostrarError(data.error || 'No pudimos generar tu código.'); btn.disabled = false; btn.innerText = TXT_BTN; return; }
     document.getElementById('token').innerText = data.token;
-    document.getElementById('url-web').innerText = data.mcp_url;
-    document.getElementById('url-desk').innerText = data.mcp_url;
-    document.getElementById('saludo').innerText = (data.nombre.split(' ')[0] || '');
+    document.getElementById('url-token').innerText = data.mcp_url;
+    document.getElementById('saludo').innerText = ((data.nombre || '').split(' ')[0] || '');
     document.getElementById('form-card').classList.add('hidden');
-    const ex = document.getElementById('exito'); ex.classList.remove('hidden');
-    ex.scrollIntoView({behavior:'smooth', block:'start'});
-  }catch(e){
-    err.innerText='Hubo un problema de conexión. Intenta de nuevo.'; err.style.display='block';
-    btn.disabled=false; btn.innerText='Obtener mi código de acceso →';
+    const ex = document.getElementById('exito'); ex.classList.remove('hidden'); ex.focus();
+  }catch(_){
+    mostrarError('Hubo un problema de conexión. Intenta de nuevo.');
+    btn.disabled = false; btn.innerText = TXT_BTN;
   }
 });
-</script>
-</body>
-</html>
-"""
+if (location.hash === '#otros') document.getElementById('otros').open = true;
+</script>"""
+
+
+def _build_page() -> str:
+    body = ('<div class="wrap">' + brand.header("Para agentes")
+            + _MAIN.replace("__WA_CUENTA__", html.escape(_WA_CUENTA)).replace("__WA_AYUDA__", html.escape(_WA_AYUDA))
+            + brand.footer() + "</div>")
+    return brand.page("Conecta Fynder a tu IA · Fynder", body, extra_css=_CSS, scripts=_SCRIPT)
+
+
+_PAGE = _build_page()

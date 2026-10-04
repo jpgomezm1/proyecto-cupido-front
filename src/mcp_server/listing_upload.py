@@ -7,24 +7,45 @@ Storage y se añaden a la propiedad. Así las fotos entran por web (natural) sin
 pasar por el chat.
 
 Rutas:
-- GET  /subir-fotos?t=<token>   -> página con drag-drop (branding Fynder).
+- GET  /subir-fotos?t=<token>   -> página con drag-drop (marca de brand.py).
 - POST /listings/fotos          -> {token, imagenes:[dataURL...]} -> sube y anexa.
+  (la página manda una foto por request para mostrar el estado de cada una).
 """
 
 import html
+import logging
+from typing import Optional
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
+
+from src.mcp_server import brand
 
 from src.services import listing_service as lst
 from src.services import storage_service as store
 from src.services.db import get_db, fetch_one
 from src.services.textutils import build_share_link
 
-FYNDER_LOGO = "https://storage.googleapis.com/cluvi/FYNDER/logo_blanco_fynder_final.png"
-IRRELEVANT_LOGO = "https://storage.googleapis.com/cluvi/nuevo_irre-removebg-preview.png"
 MAX_FOTOS = 20
+
+logger = logging.getLogger(__name__)
+
+
+def _agente_id_por_telefono(cursor, owner_10: Optional[str]) -> Optional[int]:
+    """Id del usuario (chat_users) dueño del celular del token, para atribuir el
+    link de compartir (?a=). Best-effort: si no se encuentra, el link va sin ?a=."""
+    digitos = "".join(ch for ch in str(owner_10 or "") if ch.isdigit())[-10:]
+    if len(digitos) != 10:
+        return None
+    try:
+        row = fetch_one(cursor,
+            "SELECT id FROM chat_users WHERE RIGHT(regexp_replace(COALESCE(telefono,''), '[^0-9]', '', 'g'), 10) = %s "
+            "ORDER BY id LIMIT 1", (digitos,))
+        return int(row["id"]) if row and row.get("id") else None
+    except Exception:
+        logger.debug("No se pudo resolver el agente del token de fotos", exc_info=True)
+        return None
 
 
 async def upload_page(request: Request) -> HTMLResponse:
@@ -41,14 +62,7 @@ async def upload_page(request: Request) -> HTMLResponse:
             (payload["pid"],))
     titulo = html.escape((prop or {}).get("titulo") or "Tu propiedad")
     ya = int((prop or {}).get("total_imagenes") or 0)
-    page = (_PAGE.replace("__STYLE__", _STYLE)
-                 .replace("__MARK__", _MARK)
-                 .replace("__FYNDER_LOGO__", FYNDER_LOGO)
-                 .replace("__IRRELEVANT_LOGO__", IRRELEVANT_LOGO)
-                 .replace("__TOKEN__", html.escape(token))
-                 .replace("__TITULO__", titulo)
-                 .replace("__YA__", str(ya)))
-    return HTMLResponse(page)
+    return HTMLResponse(_build_page(token, titulo, ya))
 
 
 async def upload_endpoint(request: Request) -> JSONResponse:
@@ -88,7 +102,8 @@ async def upload_endpoint(request: Request) -> JSONResponse:
     # Link de Fynder para compartir la propiedad (ya publicada).
     with get_db() as db:
         prop = fetch_one(db.cursor, "SELECT titulo, activa FROM propiedades WHERE id=%s", (int(pid),))
-    link_compartir = build_share_link(int(pid), (prop or {}).get("titulo"))
+        agente_id = payload.get("uid") or _agente_id_por_telefono(db.cursor, payload.get("owner"))
+    link_compartir = build_share_link(int(pid), (prop or {}).get("titulo"), agente_id)
     publicada = bool((prop or {}).get("activa"))
 
     return JSONResponse({"ok": True, "subidas": len(urls), "errores": errores,
@@ -105,232 +120,307 @@ def listing_upload_routes():
 
 
 # ---------------------------------------------------------------------------
-# HTML de la página (identidad Fynder, drag-drop, compresión en el navegador).
+# HTML de la página (marca compartida: brand.py). Compresión en el navegador,
+# reordenar arrastrando (Pointer Events: mouse y touch) o con los botones ←/→,
+# y subida foto por foto para mostrar el estado de cada una.
 # ---------------------------------------------------------------------------
 
-_STYLE = """
-  :root{ --bg:#0A0A0A; --bg-1:#0F0F0F; --bg-2:#141414; --border:#1F1F1F; --border-hi:#2A2A2A;
-         --white:#FAFAFA; --text:#E5E5E5; --text-2:#A3A3A3; --text-3:#6B6B6B; --text-4:#4A4A4A;
-         --green:#2AE38C; --green-d:#1FC97A; --green-l:#5DFAAB; }
-  *{ box-sizing:border-box; margin:0; padding:0; }
-  html{ scroll-behavior:smooth; }
-  body{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:var(--bg);
-        color:var(--text); min-height:100vh; padding:0 18px 48px; -webkit-font-smoothing:antialiased;
-        background-image:radial-gradient(ellipse 900px 620px at 50% -8%, rgba(42,227,140,.08), transparent 60%),
-                         radial-gradient(ellipse 700px 500px at 90% 100%, rgba(91,156,255,.03), transparent 60%); }
-  .wrap{ width:100%; max-width:560px; margin:0 auto; }
-  .top{ display:flex; align-items:center; justify-content:space-between; padding:22px 2px 4px; }
-  .brand{ display:flex; align-items:center; gap:10px; }
-  .brand img.logo{ height:24px; }
-  .findy{ position:relative; }
-  .findy img{ height:34px; width:34px; object-fit:contain; }
-  .findy .dot{ position:absolute; bottom:1px; right:1px; width:9px; height:9px; border-radius:50%;
-               background:var(--green); border:2px solid var(--bg); }
-  .pill{ font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-3);
-         border:1px solid var(--border-hi); border-radius:999px; padding:5px 11px; font-weight:600; }
-
-  .hero{ text-align:center; padding:30px 0 4px; }
-  .hero .kicker{ display:inline-flex; align-items:center; gap:7px; font-size:11px; letter-spacing:.2em;
-                 text-transform:uppercase; color:var(--green); font-weight:700; margin-bottom:14px; }
-  h1{ font-size:26px; color:var(--white); font-weight:800; letter-spacing:-.02em; line-height:1.15; }
-  .prop{ display:inline-block; margin-top:12px; font-size:14px; color:var(--white); font-weight:600;
-         background:linear-gradient(150deg,rgba(42,227,140,.10),transparent 80%);
-         border:1px solid rgba(42,227,140,.22); border-radius:999px; padding:7px 16px; }
-  .prop small{ color:var(--text-3); font-weight:500; }
-
-  .card{ background:linear-gradient(180deg,var(--bg-1),var(--bg)); border:1px solid var(--border);
-         border-radius:24px; padding:22px; margin-top:24px; }
-
-  .drop{ border:2px dashed var(--border-hi); border-radius:18px; padding:40px 18px; text-align:center; cursor:pointer;
-         transition:border-color .18s, background .18s, transform .1s; background:var(--bg-2); display:block; }
-  .drop:hover,.drop.over{ border-color:var(--green); background:rgba(42,227,140,.06); }
-  .drop.over{ transform:scale(1.01); }
-  .drop .ic{ width:56px; height:56px; margin:0 auto 12px; border-radius:16px; display:grid; place-items:center;
-             font-size:26px; background:rgba(42,227,140,.12); }
-  .drop .t{ color:var(--white); font-weight:700; font-size:16px; }
-  .drop .s{ color:var(--text-3); font-size:13px; margin-top:5px; }
-  input[type=file]{ display:none; }
-
-  .count{ display:flex; align-items:center; justify-content:space-between; margin:18px 2px 10px; }
-  .count .n{ font-size:13px; color:var(--text-2); font-weight:600; }
-  .count .n b{ color:var(--green); }
-  .count .add{ font-size:13px; color:var(--green); font-weight:600; cursor:pointer; }
-
-  .grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
-  .thumb{ position:relative; aspect-ratio:1; border-radius:14px; overflow:hidden; border:1px solid var(--border-hi);
-          animation:pop .2s ease; }
-  @keyframes pop{ from{ opacity:0; transform:scale(.9);} to{ opacity:1; transform:scale(1);} }
-  .thumb img{ width:100%; height:100%; object-fit:cover; }
-  .thumb .cover{ position:absolute; bottom:5px; left:5px; font-size:9.5px; font-weight:700; text-transform:uppercase;
-                 letter-spacing:.05em; color:#04120a; background:var(--green); border-radius:6px; padding:2px 7px; }
-  .thumb .rm{ position:absolute; top:5px; right:5px; background:rgba(0,0,0,.65); backdrop-filter:blur(4px);
-              color:#fff; border:none; border-radius:50%; width:24px; height:24px; cursor:pointer; font-size:14px;
-              display:grid; place-items:center; line-height:1; }
-  .thumb .rm:hover{ background:#ff5c5c; }
-  .thumb .setcover{ position:absolute; bottom:5px; left:5px; background:rgba(0,0,0,.65); backdrop-filter:blur(4px);
-              color:#fff; border:none; border-radius:7px; padding:3px 8px; cursor:pointer; font-size:10.5px; font-weight:600; }
-  .thumb .setcover:hover{ background:var(--green); color:#04120a; }
-  .thumb .num{ position:absolute; top:5px; left:5px; background:rgba(0,0,0,.6); color:#fff; border-radius:6px;
-               width:20px; height:20px; display:grid; place-items:center; font-size:11px; font-weight:700; }
-  .thumb.drag{ opacity:.4; } .thumb.dragover{ outline:2px solid var(--green); outline-offset:-2px; }
-  .grid.hint::before{ content:'Arrastra para reordenar · La primera es la portada'; grid-column:1/-1;
-                      font-size:11.5px; color:var(--text-3); margin-bottom:2px; }
-
-  button.go{ width:100%; margin-top:22px; padding:16px; border:none; border-radius:15px; cursor:pointer;
-             font-weight:700; font-size:16px; color:#04120a; font-family:inherit; transition:transform .12s, box-shadow .2s;
-             background:linear-gradient(150deg,var(--green-l),var(--green)); box-shadow:0 12px 34px rgba(42,227,140,.28);
-             display:flex; align-items:center; justify-content:center; gap:8px; }
-  button.go:hover:not(:disabled){ transform:translateY(-2px); box-shadow:0 16px 42px rgba(42,227,140,.4); }
-  button.go:disabled{ opacity:.4; cursor:default; box-shadow:none; }
-  .spinner{ width:16px; height:16px; border:2px solid rgba(4,18,10,.3); border-top-color:#04120a; border-radius:50%;
-            animation:spin .7s linear infinite; }
-  @keyframes spin{ to{ transform:rotate(360deg);} }
-  .msg{ text-align:center; margin-top:14px; font-size:14px; }
-  .ok{ color:var(--green); } .err{ color:#ff8b95; }
-
-  .done{ text-align:center; padding:8px 4px; animation:pop .3s ease; }
-  .done-badge{ width:64px; height:64px; margin:0 auto 6px; border-radius:50%; display:grid; place-items:center;
-               background:radial-gradient(circle,rgba(42,227,140,.16),transparent 70%); }
-  .done-badge div{ width:46px; height:46px; border-radius:50%; display:grid; place-items:center; font-size:24px;
-                   background:linear-gradient(150deg,var(--green),var(--green-d)); box-shadow:0 8px 26px rgba(42,227,140,.4); }
-  .done h2{ color:var(--white); font-size:22px; font-weight:800; margin-top:6px; }
-  .done-sub{ color:var(--text-2); font-size:14.5px; margin:8px 0 16px; }
-  .sharebox{ display:flex; gap:8px; align-items:center; background:#050b08; border:1px solid rgba(42,227,140,.35);
-             border-radius:14px; padding:13px 14px; box-shadow:inset 0 0 30px rgba(42,227,140,.05); }
-  .sharebox code{ flex:1; color:var(--green-l); font-size:12.5px; word-break:break-all; text-align:left; font-family:'JetBrains Mono',monospace; }
-  .sharebox button{ flex:0 0 auto; background:linear-gradient(150deg,var(--green-l),var(--green)); color:#04120a;
-                    border:none; border-radius:10px; padding:9px 15px; font-weight:700; font-size:13px; cursor:pointer; }
-
-  .dev{ display:flex; align-items:center; justify-content:center; gap:8px; margin-top:28px; padding-top:20px;
-        border-top:1px solid #161616; }
-  .dev span{ color:var(--text-4); font-size:12px; } .dev img{ height:16px; opacity:.55; transition:opacity .2s; }
-  .dev:hover img{ opacity:1; }
-  .hidden{ display:none; }
+_CSS = """
+.hero{ text-align:center; padding:18px 0 4px; }
+.hero h1{ margin-top:10px; }
+.prop{ display:inline-block; margin-top:12px; font-size:14px; color:var(--text); font-weight:600;
+       background:var(--brand-soft); border:1px solid rgba(42,227,140,.22); border-radius:999px; padding:7px 16px; }
+.prop small{ color:var(--muted); font-weight:500; }
+.card{ margin-top:22px; }
+.drop{ border:2px dashed var(--input); border-radius:var(--radius-xl); padding:34px 18px; text-align:center; cursor:pointer;
+       background:var(--surface-2); display:block; transition:border-color .15s, background .15s; }
+.drop:hover,.drop.over,.drop:focus-within{ border-color:var(--brand); background:var(--brand-soft); }
+.drop .t{ font-weight:700; font-size:16px; color:var(--text); }
+.drop .s{ color:var(--muted); font-size:13px; margin-top:5px; }
+.drop input{ position:absolute; width:1px; height:1px; opacity:0; }
+.count{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin:18px 2px 8px; font-size:13px; }
+.count .n{ color:var(--muted); font-weight:600; } .count .n b{ color:var(--brand); }
+.linkbtn{ background:none; border:none; color:var(--brand); font:600 13px inherit; font-family:inherit; cursor:pointer; padding:4px; }
+.ayuda{ font-size:12px; color:var(--muted); margin:0 2px 8px; }
+.grid{ list-style:none; display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.thumb{ position:relative; aspect-ratio:1; border-radius:var(--radius-lg); overflow:hidden; border:1px solid var(--input);
+        background:var(--surface-2); }
+.thumb img{ width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; user-select:none; -webkit-user-drag:none; }
+.thumb.arrastrando{ opacity:.35; }
+.thumb.destino{ outline:2px solid var(--brand); outline-offset:-2px; }
+.thumb .ctl{ position:absolute; display:grid; place-items:center; border:none; cursor:pointer; color:#fff;
+             background:rgba(0,0,0,.66); font:700 13px/1 inherit; font-family:inherit; min-width:28px; height:28px; border-radius:8px; }
+.thumb .ctl:hover{ background:var(--brand); color:var(--brand-ink); }
+.thumb .ctl:disabled{ opacity:.35; cursor:default; background:rgba(0,0,0,.66); color:#fff; }
+.thumb .mover{ top:5px; left:5px; padding:0 7px; cursor:grab; touch-action:none; gap:4px; }
+.thumb .mover:active{ cursor:grabbing; }
+.thumb .rm{ top:5px; right:5px; border-radius:50%; font-size:16px; }
+.thumb .rm:hover{ background:var(--danger); color:#fff; }
+.thumb .izq{ bottom:5px; left:5px; } .thumb .der{ bottom:5px; right:5px; }
+.thumb .estrella{ bottom:5px; left:50%; transform:translateX(-50%); }
+.thumb .portada{ position:absolute; bottom:7px; left:5px; font-size:10px; font-weight:700; text-transform:uppercase;
+                 letter-spacing:.04em; border-radius:6px; padding:3px 6px; background:var(--brand); color:var(--brand-ink); }
+.thumb .estado{ position:absolute; inset:0; display:grid; place-items:center; text-align:center; font-size:12px; font-weight:700;
+                background:rgba(10,10,10,.62); color:#fff; padding:6px; }
+.thumb .estado.ok{ background:rgba(4,18,10,.55); color:var(--brand-hi); }
+.thumb .estado.err{ background:rgba(60,10,10,.7); color:#FFB4B4; }
+.spin{ width:18px; height:18px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%;
+       animation:spin .7s linear infinite; margin:0 auto 4px; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+.barra{ height:6px; border-radius:999px; background:var(--surface-3); overflow:hidden; margin-top:16px; }
+.barra div{ height:100%; width:0; background:var(--brand); transition:width .2s; }
+.msg{ text-align:center; margin-top:12px; font-size:14px; color:var(--muted); min-height:1.2em; }
+.msg.err{ color:#FFB4B4; } .msg.ok{ color:var(--brand); }
+.done{ text-align:center; }
+.ok-badge{ width:48px; height:48px; border-radius:50%; display:grid; place-items:center; font-size:24px; font-weight:800;
+           background:var(--brand); color:var(--brand-ink); margin:0 auto 10px; }
+.done .lead{ margin:8px 0 16px; }
+.done .btn{ margin-top:14px; }
+@media (max-width:400px){ .grid{ gap:8px; } .thumb .ctl{ min-width:26px; height:26px; } }
 """
 
-_MARK = ('<span class="findy"><img src="https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png" alt="Findy">'
-         '<span class="dot"></span></span>')
+_MAIN = """
+<main>
+  <div id="form">
+    <section class="hero">
+      <span class="eyebrow">Último paso</span>
+      <h1>Súbele las fotos a tu propiedad</h1>
+      <div class="prop">__TITULO__ &nbsp;·&nbsp; <small>__YA__ ya cargadas</small></div>
+    </section>
 
-_PAGE = """<!doctype html>
-<html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sube las fotos · Fynder</title>
-<link rel="icon" type="image/png" href="https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-<style>__STYLE__</style></head>
-<body>
-  <div class="wrap">
-    <div class="top">
-      <div class="brand">__MARK__<img class="logo" src="__FYNDER_LOGO__" alt="Fynder"></div>
-      <div class="pill">Publicar</div>
-    </div>
+    <div class="card">
+      <label class="drop" id="drop" for="file">
+        <div class="t">Toca para elegir fotos</div>
+        <div class="s">o arrástralas aquí · JPG, PNG o WebP · hasta 20</div>
+        <input type="file" id="file" accept="image/jpeg,image/png,image/webp" multiple>
+      </label>
 
-    <div id="form">
-      <div class="hero">
-        <div class="kicker">✦ Último paso</div>
-        <h1>Súbele las fotos<br>a tu propiedad</h1>
-        <div class="prop">__TITULO__ &nbsp;·&nbsp; <small>__YA__ ya cargadas</small></div>
+      <div class="count hidden" id="count">
+        <span class="n" aria-live="polite"><b id="cn">0</b> foto(s) listas para subir</span>
+        <button type="button" class="linkbtn" id="addmore">+ Agregar más</button>
       </div>
+      <p class="ayuda hidden" id="ayuda">La primera es la portada (★ para elegir otra). Arrastra desde ⠿ o usa ← → para cambiar el orden.</p>
+      <ul class="grid" id="grid" aria-label="Fotos para subir"></ul>
 
-      <div class="card">
-        <label class="drop" id="drop">
-          <div class="ic">📷</div>
-          <div class="t">Toca para elegir fotos</div>
-          <div class="s">o arrástralas aquí · JPG o PNG · hasta 20</div>
-          <input type="file" id="file" accept="image/jpeg,image/png,image/webp" multiple>
-        </label>
-
-        <div class="count hidden" id="count">
-          <span class="n"><b id="cn">0</b> foto(s) listas para subir</span>
-          <span class="add" id="addmore">+ Agregar más</span>
-        </div>
-        <div class="grid" id="grid"></div>
-
-        <button class="go" id="go" disabled>Subir fotos</button>
-        <div class="msg" id="msg"></div>
-      </div>
+      <div class="barra hidden" id="barra" role="progressbar" aria-label="Progreso de la subida"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barra-in"></div></div>
+      <button type="button" class="btn btn-primary btn-block" id="go" disabled style="margin-top:20px">Subir fotos</button>
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
     </div>
-
-    <div class="card hidden" id="done-card">
-      <div class="done" id="done">
-        <div class="done-badge"><div>✓</div></div>
-        <h2>¡Propiedad publicada!</h2>
-        <p class="done-sub">Ya aparece en Fynder. Este es tu link para compartirla con clientes:</p>
-        <div class="sharebox"><code id="share-url"></code>
-          <button id="share-copy" onclick="copiarShare()">Copiar</button></div>
-      </div>
-    </div>
-
-    <div class="dev"><span>Developed by</span><img src="__IRRELEVANT_LOGO__" alt="irrelevant"></div>
   </div>
-<script>
-const TOKEN="__TOKEN__";
-const drop=document.getElementById('drop'), file=document.getElementById('file'),
-      grid=document.getElementById('grid'), go=document.getElementById('go'), msg=document.getElementById('msg'),
-      count=document.getElementById('count'), cn=document.getElementById('cn');
-let fotos=[];
 
-let dragFrom=null;
-function render(){ grid.innerHTML='';
-  grid.classList.toggle('hint', fotos.length>1);
-  fotos.forEach((f,i)=>{ const d=document.createElement('div'); d.className='thumb'; d.draggable=true; d.dataset.i=i;
-    const cover = i===0 ? '<span class="cover">Portada</span>' : '<button class="setcover" onclick="portada('+i+')">\\u2605 Portada</button>';
-    d.innerHTML='<img src="'+f+'"><span class="num">'+(i+1)+'</span>'+cover+'<button class="rm" onclick="quitar('+i+')">\\u00d7</button>';
-    d.addEventListener('dragstart', ()=>{ dragFrom=i; d.classList.add('drag'); });
-    d.addEventListener('dragend', ()=>{ d.classList.remove('drag'); document.querySelectorAll('.thumb').forEach(t=>t.classList.remove('dragover')); });
-    d.addEventListener('dragover', e=>{ e.preventDefault(); d.classList.add('dragover'); });
-    d.addEventListener('dragleave', ()=> d.classList.remove('dragover'));
-    d.addEventListener('drop', e=>{ e.preventDefault(); const to=+d.dataset.i;
-      if(dragFrom!==null && dragFrom!==to){ const m=fotos.splice(dragFrom,1)[0]; fotos.splice(to,0,m); render(); } dragFrom=null; });
-    grid.appendChild(d); });
-  cn.textContent=fotos.length; count.classList.toggle('hidden', fotos.length===0);
-  go.disabled = fotos.length===0;
-  go.innerHTML = fotos.length? ('Subir '+fotos.length+' foto'+(fotos.length>1?'s':'')) : 'Subir fotos'; }
-window.quitar=(i)=>{ fotos.splice(i,1); render(); };
-window.portada=(i)=>{ const m=fotos.splice(i,1)[0]; fotos.unshift(m); render(); };
-document.getElementById('addmore').addEventListener('click', ()=> file.click());
+  <div class="card hidden" id="done-card" tabindex="-1">
+    <div class="done">
+      <div class="ok-badge" aria-hidden="true">✓</div>
+      <h2>¡Propiedad publicada!</h2>
+      <p class="lead">Ya aparece en Fynder. Este es tu link para compartirla con clientes:</p>
+      <div class="codebox"><code id="share-url"></code>
+        <button type="button" id="share-copy" aria-label="Copiar el link para compartir">Copiar</button></div>
+      <a class="btn btn-block" id="share-open" href="#" target="_blank" rel="noopener noreferrer">Ver la propiedad</a>
+    </div>
+  </div>
+</main>
+"""
 
-function comprimir(fileObj){ return new Promise(res=>{ const img=new Image(); const rd=new FileReader();
-  rd.onload=e=>{ img.onload=()=>{ const max=1600; let w=img.width, h=img.height;
-    if(w>max||h>max){ if(w>h){h=h*max/w; w=max;} else {w=w*max/h; h=max;} }
-    const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
-    res(c.toDataURL('image/jpeg',0.8)); }; img.src=e.target.result; }; rd.readAsDataURL(fileObj); }); }
+_SCRIPT = r"""<script>
+const TOKEN = __TOKEN_JSON__;
+const MAX = 20;
+const $ = (id) => document.getElementById(id);
+const drop = $('drop'), file = $('file'), grid = $('grid'), go = $('go'), msg = $('msg'),
+      count = $('count'), cn = $('cn'), ayuda = $('ayuda'), barra = $('barra'), barraIn = $('barra-in');
+// Cada foto: {id, src, estado: 'procesando'|'lista'|'subiendo'|'subida'|'error'}
+let fotos = [];
+let subiendo = false;
+let sec = 0;
 
-async function add(files){ const arr=Array.from(files); for(const f of arr){ if(!f.type.startsWith('image/')) continue;
-  if(fotos.length>=20){ msg.innerHTML='<span class="err">M\\u00e1ximo 20 fotos.</span>'; break; }
-  fotos.push(await comprimir(f)); } render(); }
+function setMsg(t, cls){ msg.textContent = t || ''; msg.className = 'msg' + (cls ? ' ' + cls : ''); }
 
-file.addEventListener('change', async e=>{ const arr=Array.from(e.target.files); await add(arr); file.value=''; });
-drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('over'); });
-drop.addEventListener('dragleave', ()=> drop.classList.remove('over'));
-drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); });
-
-let shareUrl='';
-window.copiarShare=()=>{ navigator.clipboard.writeText(shareUrl); const b=document.getElementById('share-copy'); b.textContent='\\u00a1Copiado!'; setTimeout(()=>b.textContent='Copiar',1500); };
-
-go.addEventListener('click', async ()=>{ go.disabled=true; go.innerHTML='<span class="spinner"></span> Subiendo...'; msg.textContent='';
-  try{ const r=await fetch('/listings/fotos',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({token:TOKEN, imagenes:fotos})});
-    const d=await r.json();
-    if(d.ok){
-      if(d.link_compartir){ shareUrl=d.link_compartir; document.getElementById('share-url').textContent=d.link_compartir;
-        document.getElementById('form').classList.add('hidden');
-        document.getElementById('done-card').classList.remove('hidden');
-        window.scrollTo({top:0,behavior:'smooth'}); }
-      else { msg.innerHTML='<span class="ok">\\u2705 '+d.subidas+' foto(s) subidas.</span>'; fotos=[]; render(); }
+function render(){
+  grid.innerHTML = '';
+  const pendientes = fotos.filter((f) => f.estado !== 'subida');
+  fotos.forEach((f, i) => {
+    const n = i + 1;
+    const li = document.createElement('li');
+    li.className = 'thumb'; li.dataset.i = i;
+    const img = document.createElement('img');
+    if (f.src) img.src = f.src;
+    img.alt = 'Foto ' + n;
+    li.appendChild(img);
+    const editable = !subiendo && (f.estado === 'lista' || f.estado === 'error');
+    if (editable){
+      li.insertAdjacentHTML('beforeend',
+        '<button type="button" class="ctl mover" data-acc="mover" aria-label="Arrastrar para mover la foto ' + n + '">⠿ ' + n + '</button>' +
+        '<button type="button" class="ctl rm" data-acc="quitar" aria-label="Quitar la foto ' + n + '">×</button>' +
+        (i === 0 ? '<span class="portada">Portada</span>'
+                 : '<button type="button" class="ctl izq" data-acc="izq" aria-label="Mover la foto ' + n + ' a la izquierda">←</button>' +
+                   '<button type="button" class="ctl estrella" data-acc="portada" aria-label="Usar la foto ' + n + ' como portada" title="Usar como portada">★</button>') +
+        '<button type="button" class="ctl der" data-acc="der" aria-label="Mover la foto ' + n + ' a la derecha"' + (i === fotos.length - 1 ? ' disabled' : '') + '>→</button>');
     }
-    else{ msg.innerHTML='<span class="err">'+(d.error||'No se pudo subir.')+'</span>'; go.disabled=false; go.textContent='Reintentar'; }
-  }catch(e){ msg.innerHTML='<span class="err">Error de conexi\\u00f3n. Intenta de nuevo.</span>'; go.disabled=false; go.textContent='Reintentar'; }
-});
-</script>
-</body></html>"""
+    const est = {procesando: '<div><div class="spin"></div>Preparando…</div>',
+                 subiendo: '<div><div class="spin"></div>Subiendo…</div>',
+                 subida: '✓ Subida',
+                 error: 'No se pudo subir'}[f.estado];
+    if (est){
+      const d = document.createElement('div');
+      d.className = 'estado' + (f.estado === 'subida' ? ' ok' : f.estado === 'error' ? ' err' : '');
+      d.innerHTML = est;
+      if (f.estado === 'error') d.style.pointerEvents = 'none';
+      li.appendChild(d);
+    }
+    grid.appendChild(li);
+  });
+  cn.textContent = pendientes.length;
+  count.classList.toggle('hidden', fotos.length === 0);
+  ayuda.classList.toggle('hidden', fotos.length < 2 || subiendo);
+  const listas = fotos.filter((f) => f.estado === 'lista' || f.estado === 'error').length;
+  const procesando = fotos.some((f) => f.estado === 'procesando');
+  go.disabled = subiendo || procesando || listas === 0;
+  if (!subiendo) go.textContent = listas ? ('Subir ' + listas + ' foto' + (listas > 1 ? 's' : '')) : 'Subir fotos';
+}
 
-_EXPIRED_HTML = ("""<!doctype html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Link expirado · Fynder</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-<style>__STYLE__</style></head>
-<body><div class="wrap"><div class="top"><div class="brand">__MARK__<img class="logo" src="__FYNDER_LOGO__" alt="Fynder"></div></div>
-<div class="card" style="text-align:center; margin-top:40px"><h1 style="font-size:20px">El link de subida expiró</h1>
-<p class="done-sub" style="margin-top:10px">Pídele a tu asistente que te genere uno nuevo para esta propiedad.</p></div></div></body></html>"""
-    .replace("__STYLE__", _STYLE).replace("__MARK__", _MARK).replace("__FYNDER_LOGO__", FYNDER_LOGO))
+function mover(from, to){
+  if (to < 0 || to >= fotos.length || from === to) return;
+  const m = fotos.splice(from, 1)[0]; fotos.splice(to, 0, m); render();
+}
+
+grid.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-acc]'); if (!b || subiendo) return;
+  const i = +b.closest('.thumb').dataset.i;
+  const acc = b.dataset.acc;
+  if (acc === 'quitar'){ fotos.splice(i, 1); render(); setMsg('Foto ' + (i + 1) + ' quitada.'); }
+  else if (acc === 'izq'){ mover(i, i - 1); enfocar(i - 1, 'izq'); }
+  else if (acc === 'der'){ mover(i, i + 1); enfocar(i + 1, 'der'); }
+  else if (acc === 'portada'){ mover(i, 0); setMsg('La foto ' + (i + 1) + ' ahora es la portada.'); }
+});
+function enfocar(i, acc){
+  const b = grid.querySelector('.thumb[data-i="' + i + '"] [data-acc="' + acc + '"]');
+  if (b && !b.disabled) b.focus();
+  else { const o = grid.querySelector('.thumb[data-i="' + i + '"] [data-acc]'); if (o) o.focus(); }
+}
+
+// Reordenar arrastrando desde ⠿ con Pointer Events (mouse, touch y lápiz).
+let drag = null;
+grid.addEventListener('pointerdown', (e) => {
+  const h = e.target.closest('[data-acc="mover"]'); if (!h || subiendo) return;
+  e.preventDefault();
+  const li = h.closest('.thumb');
+  drag = {from: +li.dataset.i, to: null, li: li, id: e.pointerId};
+  h.setPointerCapture(e.pointerId);
+  li.classList.add('arrastrando');
+});
+grid.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const t = el && el.closest ? el.closest('.thumb') : null;
+  grid.querySelectorAll('.destino').forEach((x) => x.classList.remove('destino'));
+  if (t && t !== drag.li){ t.classList.add('destino'); drag.to = +t.dataset.i; } else drag.to = null;
+});
+function soltar(e){
+  if (!drag || (e && e.pointerId !== drag.id)) return;
+  const d = drag; drag = null;
+  grid.querySelectorAll('.destino').forEach((x) => x.classList.remove('destino'));
+  d.li.classList.remove('arrastrando');
+  if (d.to !== null) mover(d.from, d.to);
+}
+grid.addEventListener('pointerup', soltar);
+grid.addEventListener('pointercancel', soltar);
+
+$('addmore').addEventListener('click', () => file.click());
+
+function comprimir(fileObj){ return new Promise((res, rej) => { const img = new Image(); const rd = new FileReader();
+  rd.onerror = rej; img.onerror = rej;
+  rd.onload = (e) => { img.onload = () => { const max = 1600; let w = img.width, h = img.height;
+    if (w > max || h > max){ if (w > h){ h = h * max / w; w = max; } else { w = w * max / h; h = max; } }
+    const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+    res(c.toDataURL('image/jpeg', 0.8)); }; img.src = e.target.result; }; rd.readAsDataURL(fileObj); }); }
+
+async function add(files){
+  const arr = Array.from(files).filter((f) => f.type && f.type.startsWith('image/'));
+  for (const f of arr){
+    if (fotos.filter((x) => x.estado !== 'subida').length >= MAX){ setMsg('Máximo ' + MAX + ' fotos por vez.', 'err'); break; }
+    const item = {id: ++sec, src: '', estado: 'procesando'};
+    fotos.push(item); render();
+    try { item.src = await comprimir(f); item.estado = 'lista'; }
+    catch(_){ fotos.splice(fotos.indexOf(item), 1); setMsg('No pudimos leer una de las fotos.', 'err'); }
+    render();
+  }
+}
+file.addEventListener('change', async (e) => { const arr = Array.from(e.target.files); file.value = ''; await add(arr); });
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); });
+
+function progreso(hechas, total){
+  const p = total ? Math.round(hechas * 100 / total) : 0;
+  barraIn.style.width = p + '%'; barra.setAttribute('aria-valuenow', p);
+}
+
+let shareUrl = '';
+$('share-copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(shareUrl).then(() => { const b = $('share-copy'); b.textContent = '¡Copiado!'; setTimeout(() => b.textContent = 'Copiar', 1500); });
+});
+
+// Sube foto por foto (en el orden elegido) para mostrar el estado de cada una.
+go.addEventListener('click', async () => {
+  const cola = fotos.filter((f) => f.estado === 'lista' || f.estado === 'error');
+  if (!cola.length) return;
+  subiendo = true; go.disabled = true; go.textContent = 'Subiendo…';
+  barra.classList.remove('hidden'); setMsg('');
+  let hechas = 0, fallidas = 0, ultimo = null;
+  progreso(0, cola.length);
+  for (const f of cola){
+    f.estado = 'subiendo'; render();
+    setMsg('Subiendo foto ' + (hechas + 1) + ' de ' + cola.length + '…');
+    try {
+      const r = await fetch('/listings/fotos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: TOKEN, imagenes: [f.src]})});
+      const d = await r.json();
+      if (d.ok){ f.estado = 'subida'; ultimo = d; }
+      else { f.estado = 'error'; fallidas++; if (r.status === 401){ setMsg(d.error || 'El link expiró.', 'err'); } }
+    } catch(_){ f.estado = 'error'; fallidas++; }
+    hechas++; progreso(hechas, cola.length); render();
+  }
+  subiendo = false;
+  if (fallidas){
+    render();
+    setMsg(fallidas + ' foto' + (fallidas > 1 ? 's' : '') + ' no se pudo subir. Toca “Subir” para reintentar.', 'err');
+    go.textContent = 'Reintentar ' + fallidas;
+    return;
+  }
+  fotos = []; render();
+  if (ultimo && ultimo.link_compartir){
+    shareUrl = ultimo.link_compartir;
+    $('share-url').textContent = shareUrl;
+    $('share-open').href = shareUrl;
+    $('form').classList.add('hidden');
+    const dc = $('done-card'); dc.classList.remove('hidden'); dc.focus();
+    window.scrollTo({top: 0});
+  } else {
+    barra.classList.add('hidden');
+    setMsg('✓ ' + cola.length + ' foto(s) subidas.', 'ok');
+  }
+});
+render();
+</script>"""
+
+
+def _build_page(token: str, titulo: str, ya: int) -> str:
+    import json
+    body = ('<div class="wrap-sm">' + brand.header("Publicar")
+            + _MAIN.replace("__TITULO__", titulo).replace("__YA__", str(ya))
+            + brand.footer() + "</div>")
+    # El token va como literal JSON (seguro dentro de <script>).
+    token_js = json.dumps(token).replace("<", "\\u003c")
+    return brand.page("Sube las fotos · Fynder", body, extra_css=_CSS,
+                      scripts=_SCRIPT.replace("__TOKEN_JSON__", token_js))
+
+
+def _expired_html() -> str:
+    body = (f'<div class="wrap-sm">{brand.header("Publicar")}<main><div class="card" style="text-align:center">'
+            '<h1 style="font-size:22px">El link de subida expiró</h1>'
+            '<p class="lead" style="margin-top:10px">Pídele a tu asistente que te genere uno nuevo para esta propiedad.</p>'
+            f'</div></main>{brand.footer()}</div>')
+    return brand.page("Link expirado · Fynder", body)
+
+
+_EXPIRED_HTML = _expired_html()

@@ -18,18 +18,15 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.routing import Route
 
+from src.mcp_server import brand
+
 from src.mcp_server.oauth_provider import (
     load_pending, authenticate_chat_user, complete_login,
 )
 
 
-def _page(rid: str, error: str = "") -> str:
-    from src.services.suscripcion_service import url_terminos
-    err_html = (
-        f'<div class="error">{html.escape(error)}</div>' if error else ''
-    )
-    return (_LOGIN_HTML.replace("__RID__", html.escape(rid)).replace("__ERROR__", err_html)
-            .replace("__URL_TERMINOS__", html.escape(url_terminos())))
+def _page(rid: str, error: str = "", email: str = "") -> str:
+    return _render_login(rid, error, email)
 
 
 async def login_get(request: Request) -> HTMLResponse:
@@ -50,9 +47,9 @@ async def login_post(request: Request):
 
     user = authenticate_chat_user(email, password)
     if not user:
-        return HTMLResponse(_page(rid, "Correo o contraseña incorrectos."), status_code=401)
+        return HTMLResponse(_page(rid, "Correo o clave incorrectos.", email), status_code=401)
     if not form.get("acepta_terminos"):
-        return HTMLResponse(_page(rid, "Para conectar Fynder debes aceptar los términos."), status_code=400)
+        return HTMLResponse(_page(rid, "Para conectar Fynder debes aceptar los términos.", email), status_code=400)
     from src.services.suscripcion_service import aceptar_terminos
     await anyio.to_thread.run_sync(aceptar_terminos, user["id"])
 
@@ -70,97 +67,93 @@ def oauth_login_routes():
 
 
 # ---------------------------------------------------------------------------
-# HTML (identidad Fynder: negro / verde / Inter).
+# HTML (marca compartida: brand.py).
 # ---------------------------------------------------------------------------
 
-FYNDER_LOGO = "https://storage.googleapis.com/cluvi/FYNDER/logo_blanco_fynder_final.png"
-FINDY_AVATAR = "https://storage.googleapis.com/cluvi/FYNDER/emoji_fynder.png"
-IRRELEVANT_LOGO = "https://storage.googleapis.com/cluvi/nuevo_irre-removebg-preview.png"
-
-_BASE_STYLE = """
-  :root{ --bg:#0A0A0A; --bg-2:#141414; --border:#2A2A2A; --white:#FAFAFA;
-         --text:#E5E5E5; --text-2:#A3A3A3; --text-3:#6B6B6B; --green:#2AE38C; --green-d:#1FC97A; }
-  *{ box-sizing:border-box; margin:0; padding:0; }
-  body{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-        background:var(--bg); color:var(--text); min-height:100vh; display:grid; place-items:center; padding:20px;
-        background-image:radial-gradient(ellipse 900px 600px at 50% -10%, rgba(42,227,140,.07), transparent 60%); }
-  .card{ width:100%; max-width:410px; background:linear-gradient(180deg,#0F0F0F,#0A0A0A);
-         border:1px solid #1F1F1F; border-radius:22px; padding:34px 30px 26px; }
-  .logo{ display:flex; justify-content:center; margin-bottom:22px; }
-  .logo img{ height:30px; width:auto; }
-  .findy{ display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:4px; }
-  .findy-badge{ position:relative; }
-  .findy-badge img{ height:56px; width:56px; object-fit:contain; }
-  .findy-badge .dot{ position:absolute; bottom:2px; right:2px; width:12px; height:12px; border-radius:50%;
-         background:var(--green); border:2px solid #0A0A0A; }
-  h1{ text-align:center; font-size:20px; color:var(--white); margin-top:14px; font-weight:700; }
-  p.sub{ text-align:center; color:var(--text-2); font-size:14px; margin-top:6px; margin-bottom:22px; }
-  label{ display:block; font-size:13px; color:var(--text-2); margin:14px 0 7px; font-weight:600; }
-  input{ width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--border);
-         background:var(--bg-2); color:var(--white); font-size:16px; }
-  input:focus{ outline:none; border-color:var(--green); box-shadow:0 0 0 4px rgba(42,227,140,.12); }
-  button{ width:100%; margin-top:22px; padding:14px; border:none; border-radius:12px; cursor:pointer;
-          font-weight:700; font-size:16px; color:#04120a; font-family:inherit;
-          background:linear-gradient(150deg,#5DFAAB,var(--green)); box-shadow:0 10px 30px rgba(42,227,140,.25); }
-  label.chk{ display:flex; gap:10px; align-items:flex-start; font-weight:500; line-height:1.45; margin-top:18px; }
-  label.chk input{ width:18px; height:18px; margin-top:2px; flex:none; accent-color:#2AE38C; padding:0; }
-  label.chk a{ color:var(--green); }
-  .error{ background:rgba(255,92,92,.08); border:1px solid rgba(255,92,92,.35); color:#ffb4bd;
-          padding:11px 14px; border-radius:11px; font-size:14px; margin-top:16px; text-align:center; }
-  .foot{ text-align:center; color:var(--text-3); font-size:12.5px; margin-top:18px; line-height:1.6; }
-  .lock{ display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:12px; font-weight:600;
-         justify-content:center; width:100%; margin-top:4px; }
-  .dev{ display:flex; align-items:center; justify-content:center; gap:8px; margin-top:24px;
-        padding-top:20px; border-top:1px solid #1A1A1A; }
-  .dev span{ color:var(--text-4,#4A4A4A); font-size:12px; }
-  .dev img{ height:18px; width:auto; opacity:.6; transition:opacity .2s; }
-  .dev:hover img{ opacity:1; }
+_CSS = """
+body{ display:flex; flex-direction:column; }
+main{ flex:1; display:flex; align-items:center; padding:12px 0 8px; }
+.findy{ display:flex; justify-content:center; margin-bottom:12px; }
+.findy img{ height:56px; width:56px; object-fit:contain; }
+.card h1{ text-align:center; font-size:22px; }
+.card .lead{ text-align:center; font-size:14.5px; margin-top:6px; }
+.olvido{ text-align:center; font-size:13.5px; margin-top:14px; }
+.seguro{ text-align:center; color:var(--muted); font-size:12.5px; margin-top:16px; line-height:1.55; }
 """
 
-_DEV_BY = (f'<div class="dev"><span>Developed by</span>'
-           f'<img src="{IRRELEVANT_LOGO}" alt="irrelevant"></div>')
+_WA_CLAVE = brand.wa_link("Hola, olvidé mi clave de Fynder y necesito recuperarla.")
 
-_LOGIN_HTML = f"""<!doctype html>
-<html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Iniciar sesión · Fynder</title>
-<link rel="icon" type="image/png" href="{FINDY_AVATAR}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>{_BASE_STYLE}</style></head>
-<body>
-  <form class="card" method="post" action="/oauth/login">
-    <div class="logo"><img src="{FYNDER_LOGO}" alt="Fynder"></div>
-    <div class="findy">
-      <div class="findy-badge"><img src="{FINDY_AVATAR}" alt="Findy"><span class="dot"></span></div>
-    </div>
-    <h1>Conecta a Findy con tu IA</h1>
-    <p class="sub">Inicia sesión con tu cuenta de Fynder para autorizar la conexión.</p>
+_LOGIN_BODY = """
+<div class="wrap-sm">__HEADER__
+<main>
+  <form class="card" method="post" action="/oauth/login" style="width:100%">
+    <div class="findy"><img src="__FINDY__" alt="Findy, el asistente de Fynder"></div>
+    <h1>Conecta Fynder con tu IA</h1>
+    <p class="lead">Inicia sesión con tu cuenta de Fynder para autorizar la conexión.</p>
     __ERROR__
     <input type="hidden" name="rid" value="__RID__">
-    <label>Correo electrónico</label>
-    <input name="email" type="email" placeholder="tucorreo@fynder.com" autocomplete="email" required autofocus>
-    <label>Contraseña</label>
-    <input name="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
-    <label class="chk"><input type="checkbox" name="acepta_terminos" value="1" required>
+    <div class="field"><label for="email">Correo electrónico</label>
+      <input id="email" name="email" type="email" value="__EMAIL__" placeholder="tucorreo@ejemplo.com"
+             autocomplete="email" required autofocus __DESCRIBED__></div>
+    <div class="field"><label for="password">Clave</label>
+      <div class="pwd">
+        <input id="password" name="password" type="password" placeholder="••••••••"
+               autocomplete="current-password" required __DESCRIBED__>
+        <button type="button" id="ver-clave" aria-controls="password" aria-pressed="false">Mostrar</button>
+      </div></div>
+    <label class="chk" for="acepta_terminos"><input type="checkbox" id="acepta_terminos" name="acepta_terminos" value="1" required>
       <span>Acepto los <a href="__URL_TERMINOS__" target="_blank" rel="noopener">términos de uso y el tratamiento de mis datos</a> de Fynder</span></label>
-    <button type="submit">Iniciar sesión y autorizar</button>
-    <div class="lock">🔒 Conexión segura · solo autorizas el acceso a tus datos</div>
-    <div class="foot">Al autorizar, tu asistente de IA podrá consultar Fynder en tu nombre.<br>Puedes revocar el acceso cuando quieras.</div>
-    {_DEV_BY}
+    <button type="submit" class="btn btn-primary btn-block" style="margin-top:20px">Iniciar sesión y autorizar</button>
+    <p class="olvido">¿Olvidaste tu clave? <a href="__WA_CLAVE__" target="_blank" rel="noopener noreferrer">Escríbenos por WhatsApp</a></p>
+    <p class="seguro">Conexión segura. Al autorizar, tu asistente de IA podrá consultar Fynder en tu nombre.
+      Puedes revocar el acceso cuando quieras.</p>
   </form>
-</body></html>"""
+</main>
+__FOOTER__</div>
+"""
 
-_EXPIRED_HTML = f"""<!doctype html>
-<html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Enlace expirado · Fynder</title>
-<link rel="icon" type="image/png" href="{FINDY_AVATAR}">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-<style>{_BASE_STYLE}</style></head>
-<body><div class="card" style="text-align:center">
-  <div class="logo"><img src="{FYNDER_LOGO}" alt="Fynder"></div>
-  <h1>El enlace de conexión expiró</h1>
-  <p class="sub">Vuelve a tu asistente de IA e intenta agregar el conector de Fynder de nuevo.</p>
-  {_DEV_BY}
-</div></body></html>"""
+_SCRIPT = """<script>
+(function(){
+  var b = document.getElementById('ver-clave'), i = document.getElementById('password');
+  if (!b || !i) return;
+  b.addEventListener('click', function(){
+    var ver = i.type === 'password';
+    i.type = ver ? 'text' : 'password';
+    b.textContent = ver ? 'Ocultar' : 'Mostrar';
+    b.setAttribute('aria-pressed', ver ? 'true' : 'false');
+    i.focus();
+  });
+})();
+</script>"""
+
+
+def _render_login(rid: str, error: str = "", email: str = "") -> str:
+    from src.services.suscripcion_service import url_terminos
+    err_html = (f'<div class="alert-error" id="login-error" role="alert">{html.escape(error)}</div>'
+                if error else "")
+    body = (_LOGIN_BODY
+            .replace("__HEADER__", brand.header())
+            .replace("__FOOTER__", brand.footer())
+            .replace("__FINDY__", brand.FINDY)
+            .replace("__WA_CLAVE__", html.escape(_WA_CLAVE))
+            .replace("__URL_TERMINOS__", html.escape(url_terminos()))
+            .replace("__DESCRIBED__", 'aria-describedby="login-error" aria-invalid="true"' if error else "")
+            .replace("__ERROR__", err_html)
+            # valores del usuario al final, para que no se reinterpreten como placeholders
+            .replace("__EMAIL__", html.escape(email))
+            .replace("__RID__", html.escape(rid)))
+    return brand.page("Iniciar sesión · Fynder", body, extra_css=_CSS, scripts=_SCRIPT)
+
+
+def _expired_html() -> str:
+    body = (f'<div class="wrap-sm">{brand.header()}<main><div class="card" style="text-align:center;width:100%">'
+            f'<div class="findy"><img src="{brand.FINDY}" alt="Findy, el asistente de Fynder"></div>'
+            '<h1>El enlace de conexión expiró</h1>'
+            '<p class="lead">Vuelve a tu asistente de IA e intenta agregar el conector de Fynder de nuevo.</p>'
+            f'<p class="olvido">¿Necesitas ayuda? <a href="{html.escape(brand.wa_link("Hola, necesito ayuda para conectar Fynder a mi IA."))}" '
+            'target="_blank" rel="noopener noreferrer">Escríbenos por WhatsApp</a></p>'
+            f'</div></main>{brand.footer()}</div>')
+    return brand.page("Enlace expirado · Fynder", body, extra_css=_CSS)
+
+
+_EXPIRED_HTML = _expired_html()
