@@ -75,15 +75,27 @@ if sentry_dsn:
 
 app = Flask(__name__)
 
-# Habilitar CORS para permitir peticiones desde el frontend
+# Habilitar CORS para permitir peticiones desde el frontend.
+# El dominio público sale de FYNDER_FRONTEND_URL (con y sin www); el de Netlify
+# se mantiene para que los links viejos sigan funcionando.
+def _origenes_frontend():
+    from src.services.textutils import FRONTEND_URL
+    origenes = {
+        "https://fyndercol.netlify.app",
+        "https://dash-admin-hrjg.netlify.app",
+        "http://localhost:8080",
+        "http://localhost:5173",
+        "http://localhost:4242",
+        FRONTEND_URL,
+    }
+    esquema, _, host = FRONTEND_URL.partition("://")
+    if host:
+        origenes.add(f"{esquema}://{host[4:]}" if host.startswith("www.") else f"{esquema}://www.{host}")
+    return sorted(origenes)
+
+
 CORS(app,
-     origins=[
-         "https://fyndercol.netlify.app",
-         "https://dash-admin-hrjg.netlify.app",
-         "http://localhost:8080",
-         "http://localhost:5173",
-         "http://localhost:4242"
-     ],
+     origins=_origenes_frontend(),
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

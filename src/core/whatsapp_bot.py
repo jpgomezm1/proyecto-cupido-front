@@ -62,7 +62,8 @@ class WhatsAppBot:
         self._cache_ttl = 60  # segundos
 
         # URL base del frontend (para links en WhatsApp)
-        self.frontend_url = 'https://fyndercol.netlify.app'
+        from src.services.textutils import FRONTEND_URL
+        self.frontend_url = FRONTEND_URL
 
         # Cargar grupos activos desde DB
         self._refresh_grupos_activos()
@@ -338,7 +339,7 @@ Mensaje: {texto_pedido[:500]}"""
                 db.conn.commit()
 
             # 5. Construir mensajes (2 mensajes separados)
-            link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
+            link = f"{self.frontend_url}/compartir/propiedades/{share_id}"
             count = len(property_ids)
             message_text = (
                 f"Hola, soy *Hernan Rios*, agente inmobiliario. "

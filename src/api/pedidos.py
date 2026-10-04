@@ -4,6 +4,7 @@ Estados: pendiente → en_proceso → procesado
 """
 
 from flask import Blueprint, request, jsonify, Response
+from src.services.textutils import FRONTEND_URL
 from src.db.database import DatabaseManager
 import csv
 import io
@@ -322,7 +323,7 @@ def enviar_pedido(pedido_id):
                 count = row['share_count'] or 0
 
             # Construir mensajes (2 separados)
-            link = f"https://fyndercol.netlify.app/compartir/propiedades/{share_id}"
+            link = f"{FRONTEND_URL}/compartir/propiedades/{share_id}"
             message_text = (
                 f"Hola, soy *Hernan Rios* de *Fynder* 🏡\n\n"
                 f"Te paso *{count} propiedades* que encontre para tu cliente: _{texto_pedido}_\n\n"
@@ -448,7 +449,7 @@ def export_pedidos():
                 presupuesto = row['presupuesto_estimado']
                 pres_fmt = f"${presupuesto:,.0f}" if presupuesto else ''
                 fecha = row['fecha_captura'].strftime('%Y-%m-%d %H:%M') if row['fecha_captura'] else ''
-                share_link = f"https://fyndercol.netlify.app/compartir/propiedades/{row['share_id']}" if row['share_id'] else ''
+                share_link = f"{FRONTEND_URL}/compartir/propiedades/{row['share_id']}" if row['share_id'] else ''
 
                 writer.writerow([
                     row['id'],
