@@ -8,6 +8,7 @@ API de suscripciones y desbloqueo de contactos.
     POST /desbloqueos/<id>/reportar {motivo, detalle}
     POST /terminos/aceptar {version?}
     GET  /mis-propiedades/resumen       → cuántos inmuebles propios (teléfono verificado)
+    GET  /mcp-estado                    → ¿conectó su IA? y último uso
 
 - Admin (`token_required`), prefijo /api/admin/suscripciones:
     GET  /planes · PUT /planes/<codigo>
@@ -136,6 +137,42 @@ def resumen_mis_propiedades():
         return _ok({"total": row["total"], "activas": row["activas"], "telefono_verificado": True})
     except Exception as e:
         return _fallo(e, 'resumen_mis_propiedades')
+
+
+@suscripciones_chat_bp.route('/mcp-estado', methods=['GET'])
+@require_chat_auth
+def mcp_estado():
+    """
+    ¿El agente ya conectó su IA (Claude/ChatGPT) a Fynder? Conectado = tiene una
+    sesión MCP vigente. `ultimo_uso` = última tool que usó desde su IA.
+    """
+    from src.services.db import get_db, fetch_one
+    user_id = request.chat_user['id']
+    try:
+        with get_db() as db:
+            sesion = fetch_one(db.cursor, """
+                SELECT COUNT(*) AS n, MAX(COALESCE(ultimo_uso, fecha_creacion)) AS ultima
+                FROM chat_user_sessions
+                WHERE user_id = %s AND tipo = 'mcp' AND activa
+                  AND (fecha_expiracion IS NULL OR fecha_expiracion > NOW())
+            """, (user_id,))
+            try:
+                uso = fetch_one(db.cursor, """
+                    SELECT MAX(created_at) AS ultimo, COUNT(*) AS llamadas_30d
+                    FROM mcp_tool_calls
+                    WHERE user_id = %s AND created_at > NOW() - INTERVAL '30 days'
+                """, (user_id,))
+            except Exception:
+                db.conn.rollback()  # la tabla de uso aún no existe (migración 039)
+                uso = {}
+        ultimo = (uso or {}).get('ultimo') or sesion.get('ultima')
+        return _ok({
+            "conectado": bool(sesion and sesion['n']),
+            "ultimo_uso": ultimo.isoformat() if ultimo else None,
+            "llamadas_30d": int((uso or {}).get('llamadas_30d') or 0),
+        })
+    except Exception as e:
+        return _fallo(e, 'mcp_estado')
 
 
 # =========================================================================
