@@ -685,7 +685,7 @@ def generar_comparativa(property_ids: List[str]) -> Dict[str, Any]:
     return {
         "ok": True,
         "total": len(ids),
-        "link": sh.link_comparativa(ids),
+        "link": sh.link_comparativa(ids, agente_id=getattr(current_agent(), "user_id", None)),
         "mensaje": "Comparativa lista. Envíale este link al cliente por WhatsApp; se ve bonita en el celular.",
     }
 
@@ -707,7 +707,8 @@ def reporte_zona_captacion(ciudad: Optional[str] = None, zona: Optional[str] = N
         return {"error": "falta_zona", "mensaje": "Dime la ciudad o el barrio de la zona."}
     return {
         "ok": True,
-        "link": sh.link_reporte_zona(ciudad, zona, tipo_propiedad),
+        "link": sh.link_reporte_zona(ciudad, zona, tipo_propiedad,
+                                     agente_id=getattr(current_agent(), "user_id", None)),
         "mensaje": "Reporte de zona listo. Mándaselo al dueño por WhatsApp para captar su propiedad.",
     }
 
@@ -728,7 +729,7 @@ def generar_ficha_cliente(property_id: str) -> Dict[str, Any]:
         return {"error": "no_encontrada"}
     return {
         "ok": True,
-        "link": sh.link_brochure(p["id"]),
+        "link": sh.link_brochure(p["id"], agente_id=getattr(current_agent(), "user_id", None)),
         "mensaje": "Ficha lista. Envíale este link al cliente por WhatsApp.",
     }
 

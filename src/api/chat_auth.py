@@ -427,33 +427,17 @@ def update_profile():
 def get_agent_public_info(user_id: int):
     """
     Obtiene información pública del agente para páginas compartidas.
-    No requiere autenticación.
+    No requiere autenticación. Solo agentes activos con teléfono verificado.
     """
     try:
-        with DatabaseManager() as db:
-            db.cursor.execute("""
-                SELECT id, nombre, telefono
-                FROM chat_users
-                WHERE id = %s AND activo AND telefono_verificado
-            """, (user_id,))
-
-            user = db.cursor.fetchone()
-            if not user or not user.get('telefono'):
-                return jsonify({'success': False, 'error': 'Agente no encontrado'}), 404
-
-            phone = user['telefono']
-            return jsonify({
-                'success': True,
-                'data': {
-                    'id': user['id'],
-                    'name': user['nombre'] or 'Fynder',
-                    'phone': phone,
-                    'whatsapp': phone.replace('+', '') if phone else None
-                }
-            }), 200
+        from src.services.agente_service import agente_publico
+        agente = agente_publico(user_id)
+        if not agente:
+            return jsonify({'success': False, 'error': 'Agente no encontrado'}), 404
+        return jsonify({'success': True, 'data': agente}), 200
     except Exception as e:
         print(f"Error obteniendo agente: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Error en el servidor'}), 500
 
 
 def log_chat_usage(user_id: int, accion: str, detalles: dict = None):

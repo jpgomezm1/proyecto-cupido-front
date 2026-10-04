@@ -50,12 +50,28 @@ def _sign(payload: Dict[str, Any]) -> str:
     return f"{body}.{sig}"
 
 
-def make_token(kind: str, ids: List[int]) -> str:
-    return _sign({"k": kind, "ids": [int(i) for i in ids]})
+def _agente_int(agente_id: Any) -> Optional[int]:
+    try:
+        n = int(agente_id)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 
-def make_token_zona(ciudad, zona, tipo) -> str:
-    return _sign({"k": "zona", "ciudad": ciudad, "zona": zona, "tipo": tipo})
+def make_token(kind: str, ids: List[int], agente_id: Optional[int] = None) -> str:
+    payload: Dict[str, Any] = {"k": kind, "ids": [int(i) for i in ids]}
+    a = _agente_int(agente_id)
+    if a:
+        payload["a"] = a  # agente que comparte (atribución + contacto en la página)
+    return _sign(payload)
+
+
+def make_token_zona(ciudad, zona, tipo, agente_id: Optional[int] = None) -> str:
+    payload: Dict[str, Any] = {"k": "zona", "ciudad": ciudad, "zona": zona, "tipo": tipo}
+    a = _agente_int(agente_id)
+    if a:
+        payload["a"] = a
+    return _sign(payload)
 
 
 def verify_token(token: str) -> Dict[str, Any]:
@@ -76,24 +92,25 @@ def _frontend_base() -> str:
     return os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
 
 
-def link_comparativa(ids: List[int]) -> str:
+def link_comparativa(ids: List[int], agente_id: Optional[int] = None) -> str:
     # Link elegante con el dominio de Fynder (la página vive en el portal React).
-    return f"{_frontend_base()}/comparar/{make_token('cmp', ids)}"
+    return f"{_frontend_base()}/comparar/{make_token('cmp', ids, agente_id)}"
 
 
-def link_brochure(property_id: int) -> str:
-    return f"{_frontend_base()}/ficha/{make_token('fic', [property_id])}"
+def link_brochure(property_id: int, agente_id: Optional[int] = None) -> str:
+    return f"{_frontend_base()}/ficha/{make_token('fic', [property_id], agente_id)}"
 
 
-def link_reporte_zona(ciudad, zona, tipo) -> str:
-    return f"{_frontend_base()}/zona/{make_token_zona(ciudad, zona, tipo)}"
+def link_reporte_zona(ciudad, zona, tipo, agente_id: Optional[int] = None) -> str:
+    return f"{_frontend_base()}/zona/{make_token_zona(ciudad, zona, tipo, agente_id)}"
 
 
 # --------------------------------------------------------------------------
-# Datos limpios para renderizar (SIN info de agente).
+# Datos limpios para renderizar (SIN info del captador; el contacto del agente
+# que comparte lo agrega la API vía agente_service.agente_publico).
 # --------------------------------------------------------------------------
 
-def _prop_limpia(cur, pid: int) -> Optional[Dict[str, Any]]:
+def _prop_limpia(cur, pid: int, agente_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Proyección visual de una propiedad para el cliente final."""
     p = get_property(cur, pid)
     if not p:
@@ -102,7 +119,7 @@ def _prop_limpia(cur, pid: int) -> Optional[Dict[str, Any]]:
     return {
         "id": p["id"],
         "slug": p.get("slug"),
-        "link_detalle": build_share_link(p["id"], p.get("titulo")),  # detalle en el portal de Fynder
+        "link_detalle": build_share_link(p["id"], p.get("titulo"), _agente_int(agente_id)),  # detalle en el portal de Fynder
         "titulo": p.get("titulo") or "Propiedad",
         "precio": p.get("precio"),
         "precio_legible": p.get("precio_legible"),
@@ -126,9 +143,9 @@ def _prop_limpia(cur, pid: int) -> Optional[Dict[str, Any]]:
     }
 
 
-def datos_comparativa(ids: List[int]) -> Dict[str, Any]:
+def datos_comparativa(ids: List[int], agente_id: Optional[int] = None) -> Dict[str, Any]:
     with get_db() as db:
-        props = [x for x in (_prop_limpia(db.cursor, i) for i in ids) if x]
+        props = [x for x in (_prop_limpia(db.cursor, i, agente_id) for i in ids) if x]
     if not props:
         return {"error": "No se encontraron las propiedades"}
 
@@ -146,9 +163,9 @@ def datos_comparativa(ids: List[int]) -> Dict[str, Any]:
     }
 
 
-def datos_brochure(property_id: int) -> Dict[str, Any]:
+def datos_brochure(property_id: int, agente_id: Optional[int] = None) -> Dict[str, Any]:
     with get_db() as db:
-        p = _prop_limpia(db.cursor, property_id)
+        p = _prop_limpia(db.cursor, property_id, agente_id)
     if not p:
         return {"error": "Propiedad no encontrada"}
     return {"propiedad": p}
