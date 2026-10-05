@@ -48,10 +48,11 @@ def generar_contenido(datos: Dict[str, Any], analisis_fotos: Optional[Dict[str, 
         return {"error": "anthropic no disponible"}
 
     hechos = []
-    for k, etq in [("tipo_propiedad", "Tipo"), ("ciudad", "Ciudad"), ("zona", "Zona/Barrio"),
+    for k, etq in [("tipo_negocio", "Negocio"), ("tipo_propiedad", "Tipo"), ("ciudad", "Ciudad"), ("zona", "Zona/Barrio"),
                    ("area_construida", "Área m²"), ("habitaciones", "Habitaciones"),
                    ("banos", "Baños"), ("parqueaderos", "Parqueaderos"), ("estrato", "Estrato"),
-                   ("piso", "Piso"), ("ano_construccion", "Año")]:
+                   ("piso", "Piso"), ("ano_construccion", "Año"), ("administracion", "Administración COP/mes"),
+                   ("amenidades_internas", "Amenidades del inmueble"), ("amenidades_externas", "Amenidades del conjunto")]:
         if datos.get(k):
             hechos.append(f"{etq}: {datos[k]}")
     hechos_txt = ", ".join(hechos) or "Sin datos"
@@ -63,14 +64,20 @@ def generar_contenido(datos: Dict[str, Any], analisis_fotos: Optional[Dict[str, 
         if vis or pts:
             fotos_txt = f"\nLo que se ve en las fotos: {', '.join(vis[:12])}. Destacados: {', '.join(pts[:6])}."
 
-    prompt = f"""Eres un copywriter inmobiliario experto en Colombia. Crea el contenido de venta de una propiedad NUEVA.
+    prompt = f"""Eres un copywriter inmobiliario experto en Colombia. Escribe el aviso de un inmueble que un agente va a publicar en Fynder.
 
-DATOS DE LA PROPIEDAD: {hechos_txt}{fotos_txt}
+DATOS DEL INMUEBLE: {hechos_txt}{fotos_txt}
+
+REGLAS (no negociables: el agente responde ante su cliente por lo que diga el aviso):
+- Usa SOLO lo que está en los datos y en lo que se ve en las fotos. No afirmes que es nuevo, para estrenar, remodelado, ni su antigüedad, acabados, vista, piso, orientación o amenidades que no aparezcan arriba.
+- Escribe el barrio y la ciudad exactamente como vienen en los datos.
+- Del barrio puedes decir cosas generales y ciertas de la zona, sin nombrar lugares, distancias ni tiempos concretos.
+- Sin frases de relleno ("oportunidad única", "no te lo pierdas") y sin mencionar el precio.
 
 Genera:
-1. Un TÍTULO corto y atractivo (máx 70 caracteres, sin el precio).
-2. Una DESCRIPCIÓN vendedora de 2-3 párrafos en español colombiano, cálida y profesional. Resalta lo que la hace especial. NO inventes datos que no estén arriba.
-3. AMENIDADES detectadas de las fotos/datos, separadas por '|' (ej. "Piscina|Gimnasio|Zona infantil|Portería 24h"). Si no hay evidencia, deja vacío.
+1. Un TÍTULO corto y concreto (máx 70 caracteres): tipo, lo más atractivo que tenga y el barrio.
+2. Una DESCRIPCIÓN de 3 párrafos en español colombiano, cálida y profesional: cómo se vive el inmueble, lo que incluye y la zona.
+3. AMENIDADES con evidencia en las fotos o los datos, separadas por '|' (ej. "Balcón|Piscina|Portería 24h"). Si no hay evidencia, deja vacío.
 
 FORMATO — JSON puro sin markdown:
 {{"titulo": "...", "descripcion": "Párrafo 1.\\n\\nPárrafo 2.", "amenidades": "Piscina|Gimnasio"}}"""
