@@ -515,6 +515,24 @@ def costo_total_mensual(property_id: str, cuota_inicial: Optional[float] = None,
     return ps.costo_total_mensual_public(property_id, cuota_inicial, tasa_mensual, plazo_anos)
 
 
+@mcp.tool(title="Compradores para un inmueble (link o descripción)", annotations=_LECTURA)
+def compradores_para_inmueble(entrada: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Búsqueda inversa: el agente TIENE un inmueble y quiere saber qué pedidos de
+    compradores encajan. `entrada` puede ser un link de Wasi o Lobbie, un link o
+    código de Fynder, o una descripción ("apto de 85 m² en Laureles, 3 hab,
+    520 millones"). Devuelve la ficha que se entendió y los pedidos ordenados por
+    `score` (0-100) con `razones` (zona, presupuesto, habitaciones...).
+
+    Cada pedido trae `desbloqueable`: si es true, el contacto de quien lo hizo
+    se obtiene con `ver_contacto_pedido` (gasta 1 desbloqueo). Si es false, ofrece
+    `solicitar_visita`. Para un inmueble que ya está en Fynder también sirve
+    `find_buyers_for_property`.
+    """
+    from src.services import compradores_service as cs
+    return cs.buscar_compradores_public(entrada, current_agent().user_id, limit=min(max(limit, 1), 25))
+
+
 @mcp.tool(title="Encaje con un comprador", annotations=_LECTURA)
 def match_comprador(property_id: str, presupuesto_max: Optional[float] = None,
                     habitaciones_min: Optional[int] = None,

@@ -12,7 +12,7 @@ EXPECTED_TOOLS = {
     "search_properties", "get_property",
     "get_zone_stats", "get_demand_stats", "get_supply_demand_balance",
     "find_comparables", "compare_properties", "estimate_price",
-    "diagnose_property", "find_buyers_for_property", "list_my_properties",
+    "diagnose_property", "find_buyers_for_property", "compradores_para_inmueble", "list_my_properties",
     # Lote 1: cerrador / cazador / calificador
     "donde_captar", "capacidad_de_compra", "ficha_venta",
     "termometro_de_interes", "mis_listings_calientes",

@@ -35,7 +35,38 @@ def _median_or_none(values: List[Any]) -> Optional[float]:
 def find_buyers_for_property(cur, property_id, dias: int = 120,
                              limit: int = 15) -> Dict[str, Any]:
     """
-    Compradores activos que podrían encajar con el inmueble.
+    Compradores activos (pedidos) que encajan con el inmueble, con puntaje 0-100
+    y razones (compradores_service, sobre los criterios estructurados con IA).
+    Si todavía no hay pedidos estructurados, cae a la heurística por texto.
+    """
+    from src.services import compradores_service as cs
+    from src.services.db import scalar
+
+    base = get_property(cur, property_id)
+    if not base:
+        return {"error": f"Propiedad {property_id} no encontrada"}
+    if not scalar(cur, "SELECT 1 FROM pedidos WHERE criterios IS NOT NULL LIMIT 1"):
+        return _find_buyers_heuristica(cur, property_id, dias, limit)
+
+    res = cs.buscar_compradores(cur, cs._ficha_desde_propiedad(base), None, dias=dias, limit=limit)
+    return {
+        "propiedad_id": base["id"],
+        "zona_buscada": base.get("zona") or base.get("ciudad"),
+        "total_compradores": res["total_found"],
+        "nota": "Ordenados por qué tanto encajan (score 0-100, con razones). Para hablar con "
+                "quien hizo un pedido, desbloquea su contacto con ver_contacto_pedido (solo los "
+                "marcados desbloqueable=true). Si no es desbloqueable, Fynder puede conectarte "
+                "con solicitar_visita.",
+        "compradores": [{k: c[k] for k in ("pedido_id", "busca", "score", "razones",
+                                           "presupuesto_estimado", "presupuesto_legible",
+                                           "fecha", "desbloqueable")} for c in res["compradores"]],
+    }
+
+
+def _find_buyers_heuristica(cur, property_id, dias: int = 120,
+                            limit: int = 15) -> Dict[str, Any]:
+    """
+    Respaldo sin criterios estructurados: pedidos cuyo texto menciona la zona.
 
     Heurística: pedidos recientes cuyo texto menciona la zona/ciudad del
     inmueble y cuyo presupuesto (si se conoce) alcanza al menos el 85% del
@@ -83,8 +114,8 @@ def find_buyers_for_property(cur, property_id, dias: int = 120,
     rows = fetch_all(cur, f"""
         SELECT id, texto_pedido, presupuesto_estimado, fecha_captura, grupo_id, canal,
                -- Desbloqueable: quien pidió es usuario Fynder activo, verificado y con
-               -- términos aceptados, y el pedido tiene menos de 60 días.
-               (fecha_captura > NOW() - INTERVAL '60 days' AND EXISTS (
+               -- términos aceptados, y el pedido tiene menos de 120 días.
+               (fecha_captura > NOW() - INTERVAL '120 days' AND EXISTS (
                    SELECT 1 FROM chat_users u
                    WHERE u.activo AND u.telefono_verificado AND u.terminos_aceptados_at IS NOT NULL
                      AND RIGHT(REGEXP_REPLACE(COALESCE(u.telefono,''),'[^0-9]','','g'),10)

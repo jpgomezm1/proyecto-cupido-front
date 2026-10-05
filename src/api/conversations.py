@@ -16,6 +16,7 @@ from src.core.search_context import merge_criteria, generate_conversation_name
 from src.core.search_config import normalizar_texto_busqueda
 from src.api.chat_auth import require_chat_auth, get_current_user
 from src.api.access import sin_contacto, uso_justo
+from src.services import compradores_service as compradores
 
 # v2.4: Nuevos módulos para sistema de fases
 from src.core.search_state import (
@@ -590,8 +591,12 @@ def send_message(conversation_id):
 
     Body JSON:
     {
-        "content": "Busco apartamento en Laureles..."
+        "content": "Busco apartamento en Laureles...",
+        "modo": "propiedades" | "compradores"   (opcional)
     }
+
+    modo "compradores" (o un link en el mensaje): búsqueda inversa — el agente
+    da un inmueble y Findy devuelve los pedidos de compradores que encajan.
 
     Returns:
     {
@@ -719,6 +724,15 @@ def send_message(conversation_id):
                     'content': content,
                     'fecha_creacion': user_msg_row[1].isoformat() if user_msg_row[1] else None
                 }
+
+            # =================================================================
+            # Búsqueda inversa: "tengo este inmueble, ¿quién lo busca?"
+            # =================================================================
+            modo = str(data.get('modo') or '').strip().lower()
+            if modo == 'compradores' or (modo != 'propiedades' and compradores.es_entrada_de_inmueble(content)):
+                return _responder_compradores(
+                    db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes
+                )
 
             # =================================================================
             # v2.4: SISTEMA DE FASES
@@ -1145,6 +1159,123 @@ def _handle_priority_retry(db, conversation_id, user_message, pending_options):
             'user_message': user_message,
             'assistant_message': assistant_message
         }
+    })
+
+
+
+def _nombre_compradores(ficha):
+    tipo = (ficha.get('tipo') or 'Inmueble').strip().capitalize()
+    lugar = ficha.get('zona') or ficha.get('ciudad')
+    return f"Compradores · {tipo}{' en ' + lugar if lugar else ''}"[:80]
+
+
+def _responder_compradores(db, conversation_id, user_id, user_message, content,
+                           conv_nombre, total_mensajes):
+    """
+    Modo "Tengo un inmueble": resuelve el inmueble (link de Wasi/Lobbie, link o
+    código de Fynder, o descripción) y devuelve los pedidos que mejor encajan.
+    El contacto de quien pidió no sale aquí: se desbloquea aparte (tipo pedido).
+    """
+    start_time = datetime.now()
+    resuelto = compradores.resolver_inmueble(db.cursor, content)
+    ficha = resuelto.get('ficha')
+
+    if ficha:
+        res = compradores.buscar_compradores(db.cursor, ficha, user_id)
+        total = res['total_found']
+        lista = res['compradores']
+        lugar = ficha.get('zona') or ficha.get('ciudad')
+        tipo = (ficha.get('tipo') or 'inmueble').lower()
+        if lista:
+            assistant_content = (
+                f"Encontré {total} {'pedido que encaja' if total == 1 else 'pedidos que encajan'} "
+                f"con tu {tipo}{' en ' + lugar if lugar else ''}. "
+                f"El mejor coincide en {lista[0]['score']}%."
+            )
+        else:
+            assistant_content = (
+                f"Todavía no hay pedidos activos que encajen con tu {tipo}"
+                f"{' en ' + lugar if lugar else ''}."
+            )
+        search_response = {
+            'modo': 'compradores',
+            'results': [],
+            'criteria': {},
+            'propiedad': compradores.ficha_publica(ficha),
+            'total_found': total,
+            'compradores': lista,
+            'error_type': None,
+            'mensaje_error': None,
+        }
+    else:
+        total = 0
+        error_type = resuelto.get('error_type') or 'datos_insuficientes'
+        assistant_content = resuelto.get('mensaje_error') or (
+            'Findy no está disponible en este momento. Intenta de nuevo en unos minutos.'
+            if error_type == 'ai_unavailable' else 'No pude entender ese inmueble.')
+        search_response = {
+            'modo': 'compradores',
+            'results': [],
+            'criteria': {},
+            'propiedad': None,
+            'total_found': 0,
+            'compradores': [],
+            'error_type': error_type,
+            'mensaje_error': resuelto.get('mensaje_error'),
+        }
+
+    elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+    criterios_conv = {'modo': 'compradores', 'original_query': content}
+
+    db.cursor.execute(
+        """INSERT INTO mensajes_conversacion
+           (conversacion_id, role, content, criterios_acumulados, total_resultados,
+            tiempo_respuesta_ms, search_response)
+           VALUES (%s, 'assistant', %s, %s, %s, %s, %s)
+           RETURNING id, fecha_creacion""",
+        (conversation_id, assistant_content, json.dumps(criterios_conv), total,
+         elapsed_ms, json.dumps(search_response, default=str))
+    )
+    asst_msg_row = db.cursor.fetchone()
+    db.cursor.execute(
+        """UPDATE conversaciones_busqueda
+           SET criterios_acumulados = %s, fecha_actualizacion = NOW()
+           WHERE id = %s""",
+        (json.dumps(criterios_conv), conversation_id)
+    )
+    if total_mensajes == 0 and conv_nombre == 'Nueva Conversación' and ficha:
+        db.cursor.execute(
+            "UPDATE conversaciones_busqueda SET nombre = %s WHERE id = %s",
+            (_nombre_compradores(ficha), conversation_id)
+        )
+    db.cursor.execute(
+        """INSERT INTO chat_usage_log (user_id, accion, conversacion_id, detalles)
+           VALUES (%s, 'search_compradores', %s, %s)""",
+        (user_id, conversation_id, json.dumps({
+            'query': content[:100], 'origen': (ficha or {}).get('origen'),
+            'results_count': total, 'error_type': search_response['error_type'],
+        }))
+    )
+    db.cursor.execute(
+        "UPDATE chat_users SET total_busquedas = total_busquedas + 1 WHERE id = %s", (user_id,)
+    )
+    db.conn.commit()
+
+    msg_id = asst_msg_row['id'] if isinstance(asst_msg_row, dict) else asst_msg_row[0]
+    fecha = asst_msg_row['fecha_creacion'] if isinstance(asst_msg_row, dict) else asst_msg_row[1]
+    assistant_message = {
+        'id': msg_id,
+        'role': 'assistant',
+        'content': assistant_content,
+        'criterios_acumulados': criterios_conv,
+        'total_resultados': total,
+        'tiempo_respuesta_ms': elapsed_ms,
+        'fecha_creacion': fecha.isoformat() if fecha else None,
+        'search_response': search_response,
+    }
+    return jsonify({
+        'success': True,
+        'data': {'user_message': user_message, 'assistant_message': assistant_message}
     })
 
 

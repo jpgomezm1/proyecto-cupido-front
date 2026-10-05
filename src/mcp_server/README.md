@@ -32,7 +32,7 @@ Agente en Claude.ai/Desktop ──Bearer token──▶ Fynder MCP (Streamable H
 | Búsqueda/ficha | `search_properties` (paginable con `offset`), `get_property` (incluye `imagenes_urls`) |
 | Mercado | `get_zone_stats`, `get_demand_stats`, `get_supply_demand_balance` |
 | Comparación | `find_comparables`, `compare_properties`, `estimate_price` |
-| Diagnóstico | `diagnose_property`, `find_buyers_for_property` |
+| Diagnóstico | `diagnose_property`, `find_buyers_for_property`, `compradores_para_inmueble` (búsqueda inversa: link de Wasi/Lobbie, link o código de Fynder, o descripción → pedidos que encajan, con score y razones) |
 | Inventario | `list_my_properties` |
 | Contactos y plan (lo que se cobra) | `ver_contacto`, `ver_contacto_pedido`, `mi_plan`, `mis_desbloqueos`, `reportar_contacto_invalido` |
 | Escritura (propose→apply, scoped) | `propose_price_update_tool`, `propose_description_update_tool`, `propose_status_update_tool`, `propose_fields_update_tool`, `apply_change` |

@@ -38,7 +38,7 @@ TERMINOS_VERSION = "2026-10"
 CREDITOS_PRUEBA = 2
 DIAS_PERIODO = 30
 DIAS_GRACIA = 5
-DIAS_VIGENCIA_PEDIDO = 60
+DIAS_VIGENCIA_PEDIDO = 120  # = compradores_service.DIAS_PEDIDOS
 DIAS_PARA_REPORTAR = 15
 
 # Lock transaccional por usuario para el cobro: (clase, user_id).

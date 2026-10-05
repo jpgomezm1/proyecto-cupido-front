@@ -55,6 +55,23 @@ if __name__ == '__main__':
         scheduler.start()
         print("[WORKER] Revalidación de inventario programada")
 
+    # Criterios de los pedidos nuevos con IA (búsqueda inversa inmueble -> compradores).
+    if os.getenv('PEDIDOS_IA_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services.pedidos_ia import estructurar_pendientes
+
+        def _pedidos():
+            try:
+                print(f"[PEDIDOS-IA] {estructurar_pendientes(limit=100, concurrencia=4)}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                print(f"[PEDIDOS-IA] Error: {e}")
+
+        sched_pedidos = BackgroundScheduler()
+        sched_pedidos.add_job(_pedidos, 'interval', minutes=15, id='pedidos_ia',
+                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_pedidos.start()
+        print("[WORKER] Estructuración de pedidos programada (cada 15 min)")
+
     # Crear worker con la conexión (API moderna de RQ)
     worker = Worker([queue], connection=conn)
     print(f"[WORKER] Escuchando cola 'captures'...")
