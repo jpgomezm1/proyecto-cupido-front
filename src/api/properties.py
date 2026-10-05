@@ -1237,6 +1237,11 @@ def scrape_wasi():
             print(f"[API] Marcada como propiedad propia")
 
         # Agregar información del agente captador si se proporciona
+        if not es_admin() and not request.chat_user.get('telefono_verificado'):
+            # La captura queda a nombre del celular: sin verificar, alguien podría
+            # captar a nombre de otro agente.
+            return jsonify({'success': False, 'code': 'telefono_no_verificado',
+                            'error': 'Verifica tu celular para subir inmuebles: quedan a tu nombre.'}), 403
         agente_telefono = data.get('agente_telefono') if es_admin() \
             else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')
@@ -1411,6 +1416,11 @@ def scrape_tu360():
             }), 400
 
         # Agregar información del agente captador si se proporciona
+        if not es_admin() and not request.chat_user.get('telefono_verificado'):
+            # La captura queda a nombre del celular: sin verificar, alguien podría
+            # captar a nombre de otro agente.
+            return jsonify({'success': False, 'code': 'telefono_no_verificado',
+                            'error': 'Verifica tu celular para subir inmuebles: quedan a tu nombre.'}), 403
         agente_telefono = data.get('agente_telefono') if es_admin() \
             else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')
@@ -1585,6 +1595,11 @@ def scrape_lobbie():
             }), 400
 
         # Agregar información del agente captador si se proporciona
+        if not es_admin() and not request.chat_user.get('telefono_verificado'):
+            # La captura queda a nombre del celular: sin verificar, alguien podría
+            # captar a nombre de otro agente.
+            return jsonify({'success': False, 'code': 'telefono_no_verificado',
+                            'error': 'Verifica tu celular para subir inmuebles: quedan a tu nombre.'}), 403
         agente_telefono = data.get('agente_telefono') if es_admin() \
             else request.chat_user.get('telefono')
         agente_nombre = data.get('agente_nombre')

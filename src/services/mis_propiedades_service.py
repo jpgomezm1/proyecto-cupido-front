@@ -161,8 +161,8 @@ def validar(cambios: Dict[str, Any]) -> Dict[str, Any]:
                 raise EdicionError(f"Máximo {largo} caracteres.", campo)
             if campo == "titulo" and not v:
                 raise EdicionError("El título no puede quedar vacío.", campo)
-            if campo == "tipo_negocio" and v and v not in ("Venta", "Arriendo"):
-                raise EdicionError("Elige Venta o Arriendo.", campo)
+            if campo == "tipo_negocio" and v and v != "Venta":
+                raise EdicionError("Fynder solo recibe inmuebles en venta.", campo)
             if campo == "tipo_propiedad" and v and v not in TIPOS:
                 raise EdicionError("Elige un tipo de inmueble de la lista.", campo)
             sets[columna] = v

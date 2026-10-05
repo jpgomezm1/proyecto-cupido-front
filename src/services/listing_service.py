@@ -28,7 +28,7 @@ from src.services.textutils import (
 
 # Tipos de negocio válidos. Igual que el resto del sistema, los arriendos se
 # guardan pero no aparecen en búsquedas de venta.
-_TIPO_NEGOCIO = {"Venta", "Arriendo"}
+_TIPO_NEGOCIO = {"Venta"}  # Fynder solo recibe inmuebles en venta
 
 
 class ListingError(Exception):
@@ -83,7 +83,7 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
 
     tipo_negocio = data.get("tipo_negocio") or "Venta"
     if tipo_negocio not in _TIPO_NEGOCIO:
-        raise ListingError(f"tipo_negocio inválido; usa {_TIPO_NEGOCIO}.")
+        raise ListingError("Fynder solo recibe inmuebles en venta.")
 
     # --- Imágenes ---
     imgs: List[str] = [u for u in (data.get("imagenes_urls") or []) if u]

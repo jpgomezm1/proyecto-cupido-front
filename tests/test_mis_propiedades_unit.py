@@ -22,6 +22,7 @@ def test_amenidades_lista_sin_repetir():
     ({"titulo": ""}, "titulo"),
     ({"estrato": 9}, "estrato"),
     ({"tipo_negocio": "Permuta"}, "tipo_negocio"),
+    ({"tipo_negocio": "Arriendo"}, "tipo_negocio"),     # solo venta
     ({"tipo_propiedad": "Castillo"}, "tipo_propiedad"),
     ({"habitaciones": True}, "habitaciones"),
     ({"descripcion": "x" * 9000}, "descripcion"),
