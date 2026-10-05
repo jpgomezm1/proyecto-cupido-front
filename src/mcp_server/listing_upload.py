@@ -2,7 +2,7 @@
 Link mágico para subir fotos de un listing (creado desde el MCP).
 
 Al crear un listing conversando con la IA, se devuelve un link firmado. El agente
-lo abre en el celular, arrastra/toma las fotos, y estas se suben a Supabase
+lo abre en el celular, arrastra/toma las fotos, y estas se suben al storage de Neon
 Storage y se añaden a la propiedad. Así las fotos entran por web (natural) sin
 pasar por el chat.
 

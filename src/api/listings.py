@@ -6,7 +6,7 @@ propiedad con fotos y autocompletado por IA. Protegido con la auth de chat
 (el agente logueado).
 
 Endpoints:
-- POST /api/listings/upload-image  -> sube una imagen a Supabase, devuelve URL.
+- POST /api/listings/upload-image  -> sube una imagen al storage (Neon), devuelve URL.
 - POST /api/listings/autocomplete  -> IA (tokens de Fynder): título, descripción,
                                        amenidades y precio sugerido.
 - POST /api/listings               -> crea el listing.
@@ -40,7 +40,7 @@ listings_bp = Blueprint("listings", __name__, url_prefix="/api/listings")
 @listings_bp.route("/upload-image", methods=["POST"])
 @require_chat_auth
 def upload_image():
-    """Sube una imagen (data URL o archivo) a Supabase y devuelve la URL pública."""
+    """Sube una imagen (data URL o archivo) al storage de Neon y devuelve la URL pública."""
     try:
         # Soporta multipart (archivo) o JSON con data URL.
         if request.files.get("file"):

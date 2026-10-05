@@ -2,7 +2,7 @@
 Creación de listings NATIVOS de Fynder (fuente='Fynder').
 
 El agente crea una propiedad directamente en Fynder (no scrapeada de Wasi/Lobbie),
-con fotos subidas a Supabase Storage y campos autocompletados por IA. Toda la
+con fotos subidas al storage de Neon y campos autocompletados por IA. Toda la
 escritura pasa por el único punto de verdad: `DatabaseManager.insert_property`.
 
 Campos que el agente PONE a mano (la IA no puede saberlos): precio, área,
@@ -206,7 +206,7 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
 # =========================================================================
 # Las fotos no viajan bien por un tool call del MCP (son binarios grandes). En
 # su lugar, al crear el listing se devuelve un link firmado; el agente lo abre y
-# arrastra las fotos, que se suben a Supabase y se añaden a la propiedad.
+# arrastra las fotos, que se suben al storage de Neon y se añaden a la propiedad.
 
 _PHOTO_TTL = 60 * 60 * 24 * 14  # 14 días
 
@@ -255,7 +255,7 @@ def link_subir_fotos(property_id: int, owner_10: str) -> str:
 
 def agregar_fotos(property_id: int, nuevas_urls: List[str]) -> Dict[str, Any]:
     """
-    Añade URLs de imágenes (ya subidas a Supabase) a una propiedad: las anexa a
+    Añade URLs de imágenes (ya subidas al storage) a una propiedad: las anexa a
     imagenes_urls, actualiza total_imagenes y fija imagen_principal si estaba vacía.
     """
     if not nuevas_urls:
