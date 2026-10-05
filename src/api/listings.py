@@ -83,10 +83,12 @@ def autocomplete():
 def create_listing():
     """Crea el listing nativo de Fynder para el agente autenticado."""
     user = request.chat_user
+    # El inmueble queda a nombre del celular VERIFICADO: uno auto-declarado
+    # permitiría publicar a nombre de otro agente (y el dueño no podría editarlo).
+    if not _tel10_verificado(user):
+        return jsonify({"success": False, "code": "telefono_no_verificado",
+                        "error": "Verifica tu celular para publicar: el inmueble queda a tu nombre."}), 403
     telefono = user.get("telefono")
-    if not telefono:
-        return jsonify({"success": False,
-                        "error": "Tu usuario no tiene teléfono asociado; no se puede asignar la propiedad."}), 400
     body = request.get_json(silent=True) or {}
     try:
         res = lst.crear_listing(telefono, body,
