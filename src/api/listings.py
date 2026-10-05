@@ -11,6 +11,12 @@ Endpoints:
                                        amenidades y precio sugerido.
 - POST /api/listings               -> crea el listing.
 - PATCH /api/listings/<id>/precio  -> el agente cambia el precio de un inmueble suyo.
+- GET   /api/listings/<id>          -> el inmueble completo para editarlo (solo su dueño).
+- PATCH /api/listings/<id>          -> edita título, descripción, precio, cifras, ubicación y amenidades.
+- POST/PUT/DELETE /api/listings/<id>/fotos[/orden] -> agrega, ordena y quita fotos.
+
+Dueño = teléfono VERIFICADO del usuario de chat igual al del captador. Lo que el
+agente edita sobrevive a una recaptura desde Wasi/Lobbie (campos_editados).
 """
 
 from flask import Blueprint, request, jsonify
@@ -19,6 +25,7 @@ from src.api.chat_auth import require_chat_auth
 from src.services import storage_service as store
 from src.services import listing_ai
 from src.services import listing_service as lst
+from src.services import mis_propiedades_service as mp
 from src.services.db import get_db
 from src.services.textutils import normalize_phone, format_cop
 
@@ -102,77 +109,96 @@ def update_precio(property_id: int):
     Body: { "precio": 650000000 }
 
     Solo aplica sobre propiedades cuyo `agente_captador_telefono` coincide (últimos
-    10 dígitos) con el teléfono del usuario de chat. `precio_m2` lo recalcula el
+    10 dígitos) con el teléfono VERIFICADO del usuario de chat (un teléfono
+    auto-declarado no da control). Queda marcado como editado por el agente. `precio_m2` lo recalcula el
     trigger `calcular_precio_m2` de la BD. Queda auditado en eventos_log con el
     precio anterior y el nuevo.
     """
     user = request.chat_user
-    owner_10 = normalize_phone(user.get("telefono"))
-    if not owner_10 or len(owner_10) != 10:
-        return jsonify({"success": False,
-                        "error": "Tu usuario no tiene teléfono asociado; no se puede validar la propiedad."}), 400
-
     body = request.get_json(silent=True) or {}
     raw = body.get("precio")
     if isinstance(raw, bool) or raw is None or (isinstance(raw, str) and not raw.strip()):
         return jsonify({"success": False, "error": "Envía el nuevo 'precio' en COP"}), 400
     try:
-        nuevo = int(float(raw))
-    except (TypeError, ValueError):
-        return jsonify({"success": False, "error": "El precio debe ser un número (en COP)"}), 400
-    if nuevo < _PRECIO_MIN or nuevo > _PRECIO_MAX:
-        return jsonify({"success": False,
-                        "error": f"Precio fuera de rango ({format_cop(_PRECIO_MIN)} a {format_cop(_PRECIO_MAX)}). "
-                                 "Revisa que esté escrito completo, en pesos."}), 400
-
-    own_clause = "RIGHT(REGEXP_REPLACE(agente_captador_telefono, '[^0-9]', '', 'g'), 10) = %s"
-    try:
-        with get_db() as db:
-            # Bloquea la fila para leer el precio anterior de forma consistente.
-            db.cursor.execute(f"""
-                SELECT id, precio FROM propiedades
-                WHERE id = %s AND agente_captador_telefono IS NOT NULL AND {own_clause}
-                FOR UPDATE
-            """, (property_id, owner_10))
-            actual = db.cursor.fetchone()
-            if not actual:
-                db.conn.rollback()
-                return jsonify({"success": False,
-                                "error": "La propiedad no existe o no está a tu nombre."}), 404
-
-            anterior = actual["precio"]
-            db.cursor.execute(f"""
-                UPDATE propiedades SET precio = %s, fecha_actualizacion = NOW()
-                WHERE id = %s AND {own_clause}
-                RETURNING id, codigo_propiedad AS slug, titulo, precio, precio_m2
-            """, (nuevo, property_id, owner_10))
-            row = db.cursor.fetchone()
-            if not row:
-                db.conn.rollback()
-                return jsonify({"success": False,
-                                "error": "La propiedad no existe o no está a tu nombre."}), 404
-            db.conn.commit()
-
-            try:
-                db.log_evento(
-                    tipo_evento="agent_price_update",
-                    agente_telefono=user.get("telefono"),
-                    propiedad_id=property_id,
-                    datos_evento={"origen": "chat_mis_propiedades", "chat_user_id": user.get("id"),
-                                  "precio_anterior": anterior, "precio_nuevo": nuevo},
-                )
-            except Exception as e:
-                print(f"[listings] no se pudo auditar cambio de precio {property_id}: {e}")
-
-        return jsonify({"success": True, "data": {
-            "id": row["id"],
-            "slug": row["slug"],
-            "titulo": row["titulo"],
-            "precio_anterior": anterior,
-            "precio": row["precio"],
-            "precio_legible": format_cop(row["precio"]),
-            "precio_m2": float(row["precio_m2"]) if row.get("precio_m2") is not None else None,
-        }})
+        antes = mp.obtener(property_id, _tel10_verificado(user))
+        res = mp.editar(property_id, _tel10_verificado(user), {"precio": raw}, user)
+    except mp.EdicionError as e:
+        return jsonify({"success": False, "error": e.mensaje, "campo": e.campo}), e.status
     except Exception as e:
         print(f"[listings] update precio error ({property_id}): {e}")
         return jsonify({"success": False, "error": "No se pudo actualizar el precio"}), 500
+    return jsonify({"success": True, "data": {
+        "id": res["id"],
+        "slug": res["codigo"],
+        "titulo": res["titulo"],
+        "precio_anterior": antes["precio"],
+        "precio": res["precio"],
+        "precio_legible": format_cop(res["precio"]),
+    }})
+
+
+def _tel10_verificado(user) -> str:
+    """Últimos 10 dígitos del teléfono VERIFICADO; '' si no está verificado."""
+    if not user or not user.get("telefono_verificado"):
+        return ""
+    tel = normalize_phone(user.get("telefono"))
+    return tel if tel and len(tel) == 10 else ""
+
+
+def _respuesta_mp(fn, *args):
+    user = request.chat_user
+    try:
+        return jsonify({"success": True, "data": fn(*args[:1], _tel10_verificado(user), *args[1:])})
+    except mp.EdicionError as e:
+        return jsonify({"success": False, "error": e.mensaje, "campo": e.campo}), e.status
+    except Exception as e:
+        print(f"[listings] {fn.__name__} error ({args[0] if args else '-'}): {e}")
+        return jsonify({"success": False, "error": "No se pudo guardar. Intenta de nuevo."}), 500
+
+
+@listings_bp.route("/<int:property_id>", methods=["GET"])
+@require_chat_auth
+def obtener_listing(property_id: int):
+    """El inmueble completo para el editor de Mis propiedades (solo su dueño)."""
+    return _respuesta_mp(mp.obtener, property_id)
+
+
+@listings_bp.route("/<int:property_id>", methods=["PATCH"])
+@require_chat_auth
+def editar_listing(property_id: int):
+    """
+    Edita campos del inmueble. Body con cualquiera de: titulo, descripcion, precio,
+    tipo_propiedad, tipo_negocio, ciudad, zona, direccion, area_construida,
+    habitaciones, banos, parqueaderos, estrato, administracion,
+    amenidades_internas[], amenidades_externas[].
+    """
+    user = request.chat_user
+    try:
+        res = mp.editar(property_id, _tel10_verificado(user), request.get_json(silent=True) or {}, user)
+        return jsonify({"success": True, "data": res})
+    except mp.EdicionError as e:
+        return jsonify({"success": False, "error": e.mensaje, "campo": e.campo}), e.status
+    except Exception as e:
+        print(f"[listings] editar error ({property_id}): {e}")
+        return jsonify({"success": False, "error": "No se pudo guardar. Intenta de nuevo."}), 500
+
+
+@listings_bp.route("/<int:property_id>/fotos", methods=["POST"])
+@require_chat_auth
+def agregar_fotos_listing(property_id: int):
+    """Body: { urls: [...] } ya subidas con /upload-image."""
+    return _respuesta_mp(mp.agregar_fotos, property_id, (request.get_json(silent=True) or {}).get("urls") or [])
+
+
+@listings_bp.route("/<int:property_id>/fotos/orden", methods=["PUT"])
+@require_chat_auth
+def ordenar_fotos_listing(property_id: int):
+    """Body: { orden: [todas las urls en el nuevo orden] } (la primera es la portada)."""
+    return _respuesta_mp(mp.ordenar_fotos, property_id, (request.get_json(silent=True) or {}).get("orden") or [])
+
+
+@listings_bp.route("/<int:property_id>/fotos", methods=["DELETE"])
+@require_chat_auth
+def quitar_foto_listing(property_id: int):
+    """Body: { url }."""
+    return _respuesta_mp(mp.quitar_foto, property_id, (request.get_json(silent=True) or {}).get("url") or "")

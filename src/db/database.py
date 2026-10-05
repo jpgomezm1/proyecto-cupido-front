@@ -164,7 +164,12 @@ class DatabaseManager:
                 if f in preserve_on_conflict:
                     update_parts.append(f'{f} = COALESCE(propiedades.{f}, EXCLUDED.{f})')
                 else:
-                    update_parts.append(f'{f} = EXCLUDED.{f}')
+                    # Lo que el dueño editó en Mis propiedades (migración 042) no
+                    # lo pisa una recaptura del mismo link de Wasi/Lobbie.
+                    update_parts.append(
+                        f"{f} = CASE WHEN '{f}' = ANY(COALESCE(propiedades.campos_editados, '{{}}'::text[])) "
+                        f"THEN propiedades.{f} ELSE EXCLUDED.{f} END"
+                    )
             update_clauses = ', '.join(update_parts)
 
             query = f"""
