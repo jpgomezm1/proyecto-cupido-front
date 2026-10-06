@@ -88,7 +88,8 @@ def build_address_line(prop: dict) -> str:
 
 
 def build_maps_link(lat, lon):
-    if lat is None or lon is None:
+    # 0,0 (o vacío) es un dato sin geocodificar, no una ubicación: no dar link.
+    if lat is None or lon is None or (float(lat) == 0 and float(lon) == 0):
         return None
     return f"https://www.google.com/maps?q={lat},{lon}"
 
