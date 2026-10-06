@@ -547,9 +547,13 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             SELECT d.id, d.tipo, d.ref_id, d.fuente_credito, d.motivo_gratis, d.estado,
                    d.contacto_telefono, d.contacto_nombre, d.contacto_agencia, d.created_at,
                    p.codigo_propiedad, p.titulo, p.zona, p.ciudad,
+                   p.imagen_principal, p.precio, p.tipo_propiedad, p.area_construida,
+                   p.habitaciones, p.banos, p.activa,
+                   pe.texto_pedido, pe.presupuesto_estimado,
                    r.id AS reporte_id, r.reembolsado
             FROM desbloqueos d
             LEFT JOIN propiedades p ON d.tipo = 'propiedad' AND p.id = d.ref_id
+            LEFT JOIN pedidos pe ON d.tipo = 'pedido' AND pe.id = d.ref_id
             LEFT JOIN reportes_contacto r ON r.desbloqueo_id = d.id
             WHERE d.user_id = %s
             ORDER BY d.created_at DESC
@@ -572,6 +576,20 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             "reportado": d.get("reporte_id") is not None,
             "contacto": {"telefono": d.get("contacto_telefono"), "nombre": d.get("contacto_nombre"),
                          "agencia": d.get("contacto_agencia")},
+            # Para mostrar el contacto con su inmueble o su pedido (sin datos de contacto)
+            "inmueble": {
+                "imagen": d.get("imagen_principal"),
+                "precio": int(d["precio"]) if d.get("precio") else None,
+                "tipo": d.get("tipo_propiedad"),
+                "area": float(d["area_construida"]) if d.get("area_construida") else None,
+                "habitaciones": d.get("habitaciones"),
+                "banos": d.get("banos"),
+                "activa": d.get("activa"),
+            } if d["tipo"] == "propiedad" else None,
+            "pedido": {
+                "texto": d.get("texto_pedido"),
+                "presupuesto": int(d["presupuesto_estimado"]) if d.get("presupuesto_estimado") else None,
+            } if d["tipo"] == "pedido" else None,
         })
     return {"ok": True, "total": total or 0, "items": items}
 
