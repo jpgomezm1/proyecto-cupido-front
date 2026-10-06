@@ -33,7 +33,7 @@ suscripciones_admin_bp = Blueprint('suscripciones_admin', __name__,
                                    url_prefix='/api/admin/suscripciones')
 
 # Códigos de negocio que tienen un status HTTP propio.
-_STATUS = {"sin_creditos": 402, "terminos_pendientes": 409, "no_encontrado": 404}
+_STATUS = {"sin_creditos": 402, "terminos_pendientes": 409, "no_encontrado": 404, "invalido": 400}
 
 
 def _ok(data, status=200):
@@ -105,6 +105,18 @@ def reportar(desbloqueo_id: int):
             request.chat_user['id'], desbloqueo_id, data.get('motivo', ''), data.get('detalle')))
     except Exception as e:
         return _fallo(e, 'reportar')
+
+
+@suscripciones_chat_bp.route('/desbloqueos/<int:desbloqueo_id>/seguimiento', methods=['PUT'])
+@require_chat_auth
+def seguimiento(desbloqueo_id: int):
+    """Body con cualquiera de: estado, nota, recordatorio (AAAA-MM-DD o null)."""
+    from src.services import seguimiento_service
+    try:
+        return _desde_servicio(seguimiento_service.actualizar(
+            request.chat_user['id'], desbloqueo_id, request.get_json(silent=True) or {}))
+    except Exception as e:
+        return _fallo(e, 'seguimiento')
 
 
 @suscripciones_chat_bp.route('/terminos/aceptar', methods=['POST'])

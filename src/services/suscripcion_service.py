@@ -27,6 +27,7 @@ import re
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Set
 
+from src.services import seguimiento_service
 from src.services.db import get_db, fetch_one, fetch_all, scalar
 from src.services.disponibilidad_service import verificar_disponibilidad
 from src.services.interes_service import cargar_puntas, _limpiar_texto_captador
@@ -550,11 +551,14 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                    p.imagen_principal, p.precio, p.tipo_propiedad, p.area_construida,
                    p.habitaciones, p.banos, p.activa,
                    pe.texto_pedido, pe.presupuesto_estimado,
-                   r.id AS reporte_id, r.reembolsado
+                   r.id AS reporte_id, r.reembolsado,
+                   s.estado AS seg_estado, s.nota AS seg_nota, s.recordatorio AS seg_recordatorio,
+                   s.updated_at AS seg_updated_at
             FROM desbloqueos d
             LEFT JOIN propiedades p ON d.tipo = 'propiedad' AND p.id = d.ref_id
             LEFT JOIN pedidos pe ON d.tipo = 'pedido' AND pe.id = d.ref_id
             LEFT JOIN reportes_contacto r ON r.desbloqueo_id = d.id
+            LEFT JOIN contacto_seguimiento s ON s.desbloqueo_id = d.id
             WHERE d.user_id = %s
             ORDER BY d.created_at DESC
             LIMIT %s OFFSET %s
@@ -590,6 +594,7 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                 "texto": d.get("texto_pedido"),
                 "presupuesto": int(d["presupuesto_estimado"]) if d.get("presupuesto_estimado") else None,
             } if d["tipo"] == "pedido" else None,
+            "seguimiento": seguimiento_service.salida(d),
         })
     return {"ok": True, "total": total or 0, "items": items}
 
