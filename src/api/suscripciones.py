@@ -8,7 +8,8 @@ API de suscripciones y desbloqueo de contactos.
     POST /desbloqueos/<id>/reportar {motivo, detalle}
     POST /terminos/aceptar {version?}
     GET  /mis-propiedades/resumen       → cuántos inmuebles propios (teléfono verificado)
-    GET  /mcp-estado                    → ¿conectó su IA? y último uso
+    GET  /mcp-estado                    → ¿conectó su IA?, desde dónde, qué usó
+    POST /mcp-desconectar               → cierra sesiones MCP y revoca refresh tokens
 
 - Admin (`token_required`), prefijo /api/admin/suscripciones:
     GET  /planes · PUT /planes/<codigo>
@@ -156,9 +157,10 @@ def resumen_mis_propiedades():
 def mcp_estado():
     """
     ¿El agente ya conectó su IA (Claude/ChatGPT) a Fynder? Conectado = tiene una
-    sesión MCP vigente. `ultimo_uso` = última tool que usó desde su IA.
+    sesión MCP vigente. Además: desde qué clientes, qué herramientas usó en los
+    últimos 30 días y sus últimas acciones (solo nombres de herramientas).
     """
-    from src.services.db import get_db, fetch_one
+    from src.services.db import get_db, fetch_one, fetch_all
     user_id = request.chat_user['id']
     try:
         with get_db() as db:
@@ -168,23 +170,69 @@ def mcp_estado():
                 WHERE user_id = %s AND tipo = 'mcp' AND activa
                   AND (fecha_expiracion IS NULL OR fecha_expiracion > NOW())
             """, (user_id,))
+            clientes = fetch_all(db.cursor, """
+                SELECT DISTINCT COALESCE(c.client_name, 'Otro cliente') AS nombre
+                FROM oauth_refresh_tokens r
+                LEFT JOIN oauth_clients c ON c.client_id = r.client_id
+                WHERE r.user_id = %s
+                  AND (r.expires_at IS NULL OR r.expires_at > EXTRACT(EPOCH FROM NOW()))
+            """, (user_id,))
             try:
                 uso = fetch_one(db.cursor, """
-                    SELECT MAX(created_at) AS ultimo, COUNT(*) AS llamadas_30d
+                    SELECT MAX(created_at) AS ultimo, COUNT(*) AS llamadas_30d,
+                           COUNT(DISTINCT created_at::date) AS dias_30d
                     FROM mcp_tool_calls
                     WHERE user_id = %s AND created_at > NOW() - INTERVAL '30 days'
                 """, (user_id,))
+                top = fetch_all(db.cursor, """
+                    SELECT tool, COUNT(*) AS veces FROM mcp_tool_calls
+                    WHERE user_id = %s AND ok AND created_at > NOW() - INTERVAL '30 days'
+                    GROUP BY tool ORDER BY veces DESC LIMIT 6
+                """, (user_id,))
+                recientes = fetch_all(db.cursor, """
+                    SELECT tool, ok, created_at FROM mcp_tool_calls
+                    WHERE user_id = %s ORDER BY created_at DESC LIMIT 8
+                """, (user_id,))
             except Exception:
                 db.conn.rollback()  # la tabla de uso aún no existe (migración 039)
-                uso = {}
+                uso, top, recientes = {}, [], []
         ultimo = (uso or {}).get('ultimo') or sesion.get('ultima')
         return _ok({
             "conectado": bool(sesion and sesion['n']),
             "ultimo_uso": ultimo.isoformat() if ultimo else None,
             "llamadas_30d": int((uso or {}).get('llamadas_30d') or 0),
+            "dias_activos_30d": int((uso or {}).get('dias_30d') or 0),
+            "clientes": [c['nombre'] for c in clientes],
+            "herramientas": [{"tool": t['tool'], "veces": int(t['veces'])} for t in top],
+            "recientes": [{"tool": r['tool'], "ok": r['ok'], "fecha": r['created_at'].isoformat()} for r in recientes],
         })
     except Exception as e:
         return _fallo(e, 'mcp_estado')
+
+
+@suscripciones_chat_bp.route('/mcp-desconectar', methods=['POST'])
+@require_chat_auth
+def mcp_desconectar():
+    """
+    Desconecta la IA del agente: cierra sus sesiones MCP y borra los tokens de
+    renovación (si no, el cliente volvería a entrar solo). Para volver a usarla
+    debe conectarla de nuevo e iniciar sesión.
+    """
+    from src.services.db import get_db
+    user_id = request.chat_user['id']
+    try:
+        with get_db() as db:
+            db.cursor.execute("""
+                UPDATE chat_user_sessions SET activa = FALSE
+                WHERE user_id = %s AND tipo = 'mcp' AND activa
+            """, (user_id,))
+            sesiones = db.cursor.rowcount
+            db.cursor.execute("DELETE FROM oauth_refresh_tokens WHERE user_id = %s", (user_id,))
+            tokens = db.cursor.rowcount
+            db.conn.commit()
+        return _ok({"ok": True, "sesiones_cerradas": sesiones, "tokens_revocados": tokens})
+    except Exception as e:
+        return _fallo(e, 'mcp_desconectar')
 
 
 # =========================================================================
