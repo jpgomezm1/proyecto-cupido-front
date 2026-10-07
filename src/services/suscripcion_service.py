@@ -239,7 +239,13 @@ def estado(user_id: int) -> Dict[str, Any]:
         "reembolsos_restantes_mes": max(0, limite_reembolsos_mes() - reembolsos),
         "planes": planes,
         "instrucciones_pago": instrucciones_pago(),
+        "pago_en_linea": _pago_en_linea(),
     }
+
+
+def _pago_en_linea() -> bool:
+    from src.services import pagos_service  # import diferido: pagos_service importa este módulo
+    return pagos_service.habilitado()
 
 
 def _ahora():
@@ -700,29 +706,38 @@ def activar_plan(user_id: int, plan_codigo: str, referencia_pago: Optional[str] 
     anterior (pagar tarde no regala días).
     """
     with get_db() as db:
-        cur = db.cursor
-        plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND activo", (plan_codigo,))
-        if not plan or plan_codigo == "prueba":
-            raise SuscripcionError(f"Plan inválido: {plan_codigo}")
-        if not _usuario(cur, user_id):
-            raise SuscripcionError(f"Usuario {user_id} no existe")
-        cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_COBRO, user_id))
-        previo = fetch_one(cur, """
-            SELECT fin, gracia_hasta FROM suscripciones
-            WHERE user_id = %s AND estado = 'activa' AND gracia_hasta > NOW()
-            ORDER BY inicio DESC LIMIT 1
-        """, (user_id,))
-        inicio = max(_ahora(), previo["fin"]) if previo else _ahora()
-        fin = inicio + timedelta(days=DIAS_PERIODO)
-        cur.execute("""
-            INSERT INTO suscripciones (user_id, plan_codigo, desbloqueos_incluidos, precio_cop,
-                                       inicio, fin, gracia_hasta, referencia_pago, notas, activada_por)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, inicio, fin, gracia_hasta
-        """, (user_id, plan_codigo, plan["desbloqueos_mes"], plan["precio_cop"], inicio, fin,
-              fin + timedelta(days=DIAS_GRACIA), referencia_pago, notas, admin))
-        row = cur.fetchone()
+        res = activar_plan_en(db.cursor, user_id, plan_codigo, referencia_pago, notas, admin)
         db.conn.commit()
+    return res
+
+
+def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Optional[str] = None,
+                    notas: Optional[str] = None, admin: Optional[str] = None,
+                    precio_cop: Optional[int] = None) -> Dict[str, Any]:
+    """`activar_plan` dentro de una transacción del caller (no hace commit).
+    `precio_cop` registra lo realmente pagado (si no, el precio del plan hoy)."""
+    plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND activo", (plan_codigo,))
+    if not plan or plan_codigo == "prueba":
+        raise SuscripcionError(f"Plan inválido: {plan_codigo}")
+    if not _usuario(cur, user_id):
+        raise SuscripcionError(f"Usuario {user_id} no existe")
+    cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_COBRO, user_id))
+    previo = fetch_one(cur, """
+        SELECT fin, gracia_hasta FROM suscripciones
+        WHERE user_id = %s AND estado = 'activa' AND gracia_hasta > NOW()
+        ORDER BY inicio DESC LIMIT 1
+    """, (user_id,))
+    inicio = max(_ahora(), previo["fin"]) if previo else _ahora()
+    fin = inicio + timedelta(days=DIAS_PERIODO)
+    cur.execute("""
+        INSERT INTO suscripciones (user_id, plan_codigo, desbloqueos_incluidos, precio_cop,
+                                   inicio, fin, gracia_hasta, referencia_pago, notas, activada_por)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, inicio, fin, gracia_hasta
+    """, (user_id, plan_codigo, plan["desbloqueos_mes"],
+          plan["precio_cop"] if precio_cop is None else precio_cop, inicio, fin,
+          fin + timedelta(days=DIAS_GRACIA), referencia_pago, notas, admin))
+    row = cur.fetchone()
     return {"ok": True, "suscripcion_id": row["id"], "plan": plan_codigo,
             "inicio": row["inicio"].isoformat(), "fin": row["fin"].isoformat(),
             "gracia_hasta": row["gracia_hasta"].isoformat()}
