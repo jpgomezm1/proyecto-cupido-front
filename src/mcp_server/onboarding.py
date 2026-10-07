@@ -144,7 +144,7 @@ details.otros .inner{ padding:0 20px 22px; }
 @media (max-width:480px){ .hero h1{ font-size:28px; } }
 """
 
-_WA_CUENTA = brand.wa_link("Hola, quiero mi cuenta de Fynder (con los 2 desbloqueos de prueba).")
+_WA_CUENTA = brand.wa_link("Hola, quiero mi cuenta de Fynder (con las 2 llaves de prueba).")
 _WA_AYUDA = brand.wa_link("Hola, necesito ayuda para conectar Fynder a mi IA.")
 
 _MAIN = """
@@ -154,7 +154,7 @@ _MAIN = """
     <h1>Lleva a Findy a tu IA</h1>
     <p class="lead">Conecta Fynder a Claude o ChatGPT y pregúntale en español por precios, demanda,
       comparativas o por qué una propiedad no se vende. Buscar y analizar es <b>gratis</b>. El contacto
-      de quien tiene un inmueble se desbloquea con tu plan: <b>2 desbloqueos de prueba</b> al verificar
+      de quien tiene un inmueble se abre con una llave: <b>2 llaves de prueba</b> al verificar
       tu celular y __PLANES__.</p>
   </section>
 
@@ -196,7 +196,7 @@ _MAIN = """
 
   <section class="section card cuenta" aria-labelledby="cuenta-titulo">
     <p><b id="cuenta-titulo">¿No tienes cuenta? Pídela por WhatsApp</b><br><span class="muted">Te la
-      creamos con tu correo y clave, e incluye 2 desbloqueos de prueba.</span></p>
+      creamos con tu correo y clave, e incluye 2 llaves de prueba.</span></p>
     <a class="btn btn-primary" href="__WA_CUENTA__" target="_blank" rel="noopener noreferrer">Pedir mi cuenta</a>
   </section>
 
@@ -221,7 +221,7 @@ _MAIN = """
             <input id="nombre" name="nombre" placeholder="Ej: Lina Roldán" autocomplete="name" required aria-describedby="error"></div>
           <div class="field"><label for="email">Tu correo electrónico</label>
             <input id="email" name="email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="email" required aria-describedby="error"></div>
-          <div class="field"><label for="telefono">Tu celular <span class="opt">· Fynder lo verifica para darte tus 2 desbloqueos de prueba y mostrarte “mis propiedades”</span></label>
+          <div class="field"><label for="telefono">Tu celular <span class="opt">· Fynder lo verifica para darte tus 2 llaves de prueba y mostrarte “mis propiedades”</span></label>
             <input id="telefono" name="telefono" placeholder="Ej: 3122655340" inputmode="tel" autocomplete="tel"></div>
           <div class="field hidden" id="code-field"><label for="invite">Código de invitación</label>
             <input id="invite" name="invite" placeholder="Te lo entrega Fynder" aria-describedby="error"></div>

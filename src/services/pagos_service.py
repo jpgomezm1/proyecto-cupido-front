@@ -95,6 +95,8 @@ def _salida(pago: Dict[str, Any]) -> Dict[str, Any]:
         "estado": pago["estado"],
         "metodo": pago.get("metodo"),
         "creado": pago["created_at"].isoformat() if pago.get("created_at") else None,
+        "llaves": pago.get("llaves"),
+        "vence": pago["vence"].isoformat() if pago.get("vence") else None,
     }
 
 
@@ -266,7 +268,9 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
     """Estado de un pago del usuario; si sigue pendiente, se lo pregunta a Wompi."""
     with get_db() as db:
         pago = fetch_one(db.cursor, """
-            SELECT pg.*, p.nombre AS plan_nombre FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+            FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+            LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
             WHERE pg.referencia = %s AND pg.user_id = %s
         """, (referencia, user_id))
     if not pago:
@@ -283,7 +287,9 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
             print(f"⚠️ No se pudo consultar Wompi para {referencia}: {e}")
         with get_db() as db:
             pago = fetch_one(db.cursor, """
-                SELECT pg.*, p.nombre AS plan_nombre FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+            FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+            LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
                 WHERE pg.referencia = %s
             """, (referencia,))
     return {"ok": True, **_salida(pago)}
@@ -292,7 +298,9 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
 def historial(user_id: int, limit: int = 12) -> list:
     with get_db() as db:
         filas = fetch_all(db.cursor, """
-            SELECT pg.*, p.nombre AS plan_nombre FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+            FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+            LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
             WHERE pg.user_id = %s AND pg.estado <> 'pendiente'
             ORDER BY pg.created_at DESC LIMIT %s
         """, (user_id, limit))

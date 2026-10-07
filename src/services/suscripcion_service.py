@@ -4,13 +4,13 @@ Suscripciones y desbloqueo de contactos (modelo de negocio desde oct-2026).
 Lo que se cobra es saber QUIÉN TIENE un inmueble (o quién hizo un pedido): el
 contacto. Todo lo demás (búsqueda, análisis, reportes) es gratis con uso justo.
 
-Créditos (el saldo NUNCA se guarda: se deriva de las tablas, no puede desfasarse):
-  - plan:  los desbloqueos del periodo pagado vigente (incluye 5 días de gracia).
+Llaves (los créditos; el saldo NUNCA se guarda: se deriva de las tablas, no puede desfasarse):
+  - plan:  las llaves del periodo pagado vigente (incluye 5 días de gracia).
            No se acumulan: un periodo nuevo trae su propio cupo.
-  - saldo: créditos que no vencen (prueba de 2 al verificar el teléfono,
+  - saldo: llaves que no vencen (prueba de 2 al verificar el teléfono,
            paquetes extra, ajustes) − desbloqueos cobrados contra ese saldo.
   Se consume primero el plan. Un reembolso marca el desbloqueo 'reembolsado' y
-  el crédito vuelve solo a su fuente.
+  la llave vuelve sola a su fuente.
 
 Reglas de cobro (`desbloquear`):
   - Re-ver un desbloqueo vigente: gratis.
@@ -135,7 +135,7 @@ def _usuario(cur, user_id: int) -> Optional[Dict[str, Any]]:
 
 def asegurar_prueba(cur, usuario: Dict[str, Any]) -> None:
     """
-    Otorga los créditos de prueba (una sola vez por usuario y por teléfono) si
+    Otorga las llaves de prueba (una sola vez por usuario y por teléfono) si
     el teléfono está verificado. Idempotente. El caller hace commit.
     """
     tel10 = normalize_phone(usuario.get("telefono"))
@@ -419,14 +419,14 @@ def desbloquear(user_id: int, tipo: str, ref, canal: str = "mcp") -> Dict[str, A
             return _error("no_encontrado", "Usuario no encontrado o inactivo.")
         if usuario.get("terminos_aceptados_at") is None:
             return _error("terminos_pendientes",
-                          "Antes de tu primer desbloqueo debes aceptar los términos de Fynder.")
+                          "Antes de usar tu primera llave debes aceptar los términos de Fynder.")
         hoy = scalar(cur, f"""
             SELECT COUNT(*) FROM desbloqueos
             WHERE user_id = %s AND (created_at AT TIME ZONE '{TZ}')::date = (NOW() AT TIME ZONE '{TZ}')::date
         """, (user_id,)) or 0
         if hoy >= limite_desbloqueos_dia():
             return _error("limite_diario",
-                          f"Llegaste al máximo de {limite_desbloqueos_dia()} desbloqueos por día.")
+                          f"Llegaste al máximo de {limite_desbloqueos_dia()} llaves por día.")
         asegurar_prueba(cur, usuario)
         db.conn.commit()
 
@@ -525,8 +525,8 @@ def _exito(desbloqueo_id, r, contacto, *, cobrado, fuente, ya, disponibilidad, d
 
 def _sin_creditos(cur, user_id: int) -> Dict[str, Any]:
     return _error("sin_creditos",
-                  "No te quedan desbloqueos. Puedes activar o mejorar tu plan, o comprar un "
-                  "paquete extra.",
+                  "No te quedan llaves. Puedes activar o mejorar tu plan, o comprar un "
+                  "paquete extra de llaves.",
                   planes=planes_activos(cur), instrucciones_pago=instrucciones_pago(),
                   disponibles=0)
 
@@ -629,11 +629,11 @@ def reportar_invalido(user_id: int, desbloqueo_id: int, motivo: str,
             WHERE id = %s AND user_id = %s
         """, (desbloqueo_id, user_id))
         if not d:
-            return _error("no_encontrado", "No encontré ese desbloqueo.")
+            return _error("no_encontrado", "No encontré ese contacto desbloqueado.")
         if d["fuente_credito"] == "gratis":
-            return _error("no_cobrado", "Ese desbloqueo no te costó créditos; no hay nada que reembolsar.")
+            return _error("no_cobrado", "Ese contacto no te costó ninguna llave; no hay nada que devolver.")
         if d["estado"] != "vigente":
-            return _error("ya_reembolsado", "Ese desbloqueo ya fue reembolsado.")
+            return _error("ya_reembolsado", "La llave de ese contacto ya te fue devuelta.")
         if scalar(cur, "SELECT 1 FROM reportes_contacto WHERE desbloqueo_id = %s", (desbloqueo_id,)):
             return _error("ya_reportado", "Ya reportaste ese contacto; lo estamos revisando.")
         if d["created_at"] < _ahora() - timedelta(days=DIAS_PARA_REPORTAR):
@@ -656,9 +656,9 @@ def reportar_invalido(user_id: int, desbloqueo_id: int, motivo: str,
 
     if reembolsar:
         return {"ok": True, "reembolsado": True,
-                "mensaje": "Gracias por avisar. Te devolvimos el desbloqueo y vamos a revisar ese contacto."}
+                "mensaje": "Gracias por avisar. Te devolvimos la llave y vamos a revisar ese contacto."}
     return {"ok": True, "reembolsado": False,
-            "mensaje": "Gracias por avisar. Ya usaste los reembolsos automáticos de este mes; "
+            "mensaje": "Gracias por avisar. Ya usaste las devoluciones automáticas de llaves de este mes; "
                        "el equipo de Fynder revisa tu reporte y te responde."}
 
 

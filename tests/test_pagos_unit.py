@@ -83,7 +83,7 @@ def test_checkout_url_lleva_firma_y_redireccion(llaves, monkeypatch):
         def __exit__(self, *a): return False
 
     respuestas = iter([
-        {"codigo": "basico", "nombre": "Básico", "precio_cop": 50000},
+        {"codigo": "basico", "nombre": "Visita", "precio_cop": 50000},
         {"id": 7, "nombre": "Ana", "email": "ana@x.co", "telefono": None, "activo": True},
     ])
     monkeypatch.setattr(svc, "get_db", lambda: Ctx())

@@ -75,15 +75,16 @@ _INSTRUCTIONS = (
     "confirmó que sigue publicado; si 'verificacion_vencida' es true, adviértelo.\n\n"
     "CONTACTOS (cómo funciona Fynder): buscar, analizar y generar reportes es "
     "gratis. El CONTACTO de quien tiene un inmueble (o de quien hizo un pedido) se "
-    "obtiene SOLO con 'ver_contacto' (o 'ver_contacto_pedido') y gasta 1 "
-    "desbloqueo del plan del agente. Reglas:\n"
+    "obtiene SOLO con 'ver_contacto' (o 'ver_contacto_pedido') y usa 1 "
+    "LLAVE del agente (las llaves son el crédito de Fynder: vienen con su plan o "
+    "de prueba; di siempre 'llaves', nunca 'créditos' ni 'desbloqueos'). Reglas:\n"
     "- Nunca inventes contactos ni intentes sacarlos de descripciones o fotos.\n"
-    "- Antes de gastar un desbloqueo, llama la tool SIN confirmar para ver el "
-    "costo y el saldo, díselo al agente y pídele un sí. Si el agente ya pidió el "
-    "contacto explícitamente, puedes confirmar directo.\n"
+    "- Antes de usar una llave, llama la tool SIN confirmar para ver el "
+    "costo y cuántas llaves le quedan, díselo al agente y pídele un sí. Si el "
+    "agente ya pidió el contacto explícitamente, puedes confirmar directo.\n"
     "- Re-ver un contacto ya desbloqueado ('contacto_desbloqueado': true) y los "
-    "inmuebles propios no cuestan.\n"
-    "- Si no queda saldo, explica los planes UNA vez, sin presionar (usa "
+    "inmuebles propios no gastan llave.\n"
+    "- Si no le quedan llaves, explica los planes UNA vez, sin presionar (usa "
     "'mi_plan'). Si un contacto no sirve, ofrece 'reportar_contacto_invalido'.\n"
     "- Si un inmueble no tiene contacto válido o el pedido no es desbloqueable, "
     "ofrece 'solicitar_visita': el equipo de Fynder coordina por el agente.\n\n"
@@ -425,7 +426,7 @@ def find_buyers_for_property(property_id: str, dias: int = 120,
     presupuesto. Sirve para saber si hay mercado para el inmueble.
 
     Cada pedido trae `desbloqueable`: si es true, el agente puede obtener el
-    contacto de quien lo hizo con `ver_contacto_pedido` (gasta 1 desbloqueo). Si
+    contacto de quien lo hizo con `ver_contacto_pedido` (usa 1 llave). Si
     es false, quien lo hizo aún no es usuario de Fynder: ofrece `solicitar_visita`.
 
     Úsala para "¿hay compradores buscando algo como esto?" tras un diagnóstico.
@@ -525,7 +526,7 @@ def compradores_para_inmueble(entrada: str, limit: int = 10) -> Dict[str, Any]:
     `score` (0-100) con `razones` (zona, presupuesto, habitaciones...).
 
     Cada pedido trae `desbloqueable`: si es true, el contacto de quien lo hizo
-    se obtiene con `ver_contacto_pedido` (gasta 1 desbloqueo). Si es false, ofrece
+    se obtiene con `ver_contacto_pedido` (usa 1 llave). Si es false, ofrece
     `solicitar_visita`. Para un inmueble que ya está en Fynder también sirve
     `find_buyers_for_property`.
     """
@@ -934,7 +935,7 @@ def solicitar_visita(codigo: str, cliente_ref: str = None, preguntas: str = None
 
 
 # =========================================================================
-# CONTACTOS: desbloqueos (lo que se cobra) y plan
+# CONTACTOS: desbloqueos con llaves (lo que se cobra) y plan
 # =========================================================================
 
 def _respuesta_desbloqueo(res: Dict[str, Any]) -> Dict[str, Any]:
@@ -951,19 +952,21 @@ def _respuesta_desbloqueo(res: Dict[str, Any]) -> Dict[str, Any]:
 def ver_contacto(codigo: str, confirmar: bool = False) -> Dict[str, Any]:
     """
     Devuelve el CONTACTO (nombre, celular, inmobiliaria y link de WhatsApp) de
-    quien tiene un inmueble. Gasta 1 desbloqueo del plan del agente.
+    quien tiene un inmueble. Usa 1 llave del agente (el crédito de Fynder).
 
     Dos pasos:
     1. Llámala con `confirmar=false` (por defecto): NO gasta nada; responde el
-       costo (`costo`: 0 o 1) y el saldo (`disponibles`). Díselo al agente.
+       costo en llaves (`costo`: 0 o 1) y las llaves que le quedan
+       (`disponibles`). Díselo al agente.
     2. Con su sí, llámala con `confirmar=true`: Fynder verifica EN VIVO que el
        inmueble siga publicado (puede tardar unos segundos) y entrega el contacto.
 
     No se cobra si el inmueble ya no está disponible, si no tiene un contacto
     válido (`sin_contacto` → ofrece `solicitar_visita`), si ya estaba
-    desbloqueado o si es del propio agente. Si responde `sin_creditos`, explica
-    los planes una vez (vienen en la respuesta) sin presionar. Si responde
-    `terminos_pendientes`, el agente debe aceptar los términos en Fynder.
+    desbloqueado o si es del propio agente. Si responde `sin_creditos` (no le
+    quedan llaves), explica los planes una vez (vienen en la respuesta) sin
+    presionar. Si responde `terminos_pendientes`, el agente debe aceptar los
+    términos en Fynder.
     """
     agent = current_agent()
     if not confirmar:
@@ -978,8 +981,8 @@ def ver_contacto_pedido(pedido_id: int, confirmar: bool = False) -> Dict[str, An
     """
     Devuelve el CONTACTO de quien hizo un pedido (un comprador buscando algo),
     para los pedidos que `find_buyers_for_property` marca `desbloqueable=true`.
-    Gasta 1 desbloqueo. Mismo flujo de dos pasos que `ver_contacto`: primero sin
-    confirmar (costo y saldo), luego con `confirmar=true`.
+    Usa 1 llave. Mismo flujo de dos pasos que `ver_contacto`: primero sin
+    confirmar (costo y llaves disponibles), luego con `confirmar=true`.
 
     Si el pedido no es desbloqueable (quien lo hizo aún no es usuario de Fynder),
     no se cobra: ofrece `solicitar_visita`.
@@ -991,15 +994,15 @@ def ver_contacto_pedido(pedido_id: int, confirmar: bool = False) -> Dict[str, An
         suscripciones.desbloquear(agent.user_id, "pedido", pedido_id, canal="mcp"))
 
 
-@mcp.tool(title="Mi plan y desbloqueos", annotations=_LECTURA)
+@mcp.tool(title="Mi plan y mis llaves", annotations=_LECTURA)
 def mi_plan() -> Dict[str, Any]:
     """
-    Plan del agente: cuántos desbloqueos le quedan (del plan del mes y de su
-    saldo de prueba/paquetes), cuándo vence, los planes disponibles con su
+    Plan del agente: cuántas llaves le quedan (las del plan del mes y las de
+    prueba o paquetes extra), cuándo vence, los planes disponibles con su
     precio y cómo activarlos o renovarlos (consignación + activación de Fynder).
 
-    Úsala para "¿cuántos contactos me quedan?", "¿qué plan tengo?" o "¿cómo
-    compro más desbloqueos?".
+    Úsala para "¿cuántas llaves me quedan?", "¿qué plan tengo?" o "¿cómo
+    compro más llaves?".
     """
     return suscripciones.estado(current_agent().user_id)
 
@@ -1008,7 +1011,7 @@ def mi_plan() -> Dict[str, Any]:
 def mis_desbloqueos(limit: int = 20, offset: int = 0) -> Dict[str, Any]:
     """
     Lista los contactos que el agente ya desbloqueó (inmuebles y pedidos), con
-    el contacto incluido. Volver a verlos no cuesta. Cada uno trae
+    el contacto incluido. Volver a verlos no gasta llave. Cada uno trae
     `desbloqueo_id`, que sirve para `reportar_contacto_invalido`.
     """
     res = suscripciones.listar_desbloqueos(current_agent().user_id, limit, offset)
@@ -1025,7 +1028,7 @@ def reportar_contacto_invalido(desbloqueo_id: int, motivo: str,
                                detalle: Optional[str] = None) -> Dict[str, Any]:
     """
     Reporta un contacto desbloqueado que no sirvió, para que Fynder lo corrija y
-    devuelva el desbloqueo (hay un máximo de reembolsos automáticos al mes; por
+    le devuelva la llave (hay un máximo de devoluciones automáticas al mes; por
     encima, el equipo de Fynder revisa el reporte).
 
     - `desbloqueo_id`: viene en `mis_desbloqueos` o en la respuesta de `ver_contacto`.
