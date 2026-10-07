@@ -37,11 +37,20 @@ def _insertar(tool: str, user_id: Optional[int], ok: bool, error: Optional[str],
             logger.warning("No se pudo registrar uso del MCP (¿falta la migración 039?): %s", e)
 
 
+def _registrar_y_evaluar(tool: str, user_id: Optional[int], ok: bool, error: Optional[str],
+                         duracion_ms: int, argumentos: list) -> None:
+    _insertar(tool, user_id, ok, error, duracion_ms, argumentos)
+    if ok:
+        # Rachas y misiones (llaves de premio): ya con esta llamada registrada.
+        from src.services.logros_service import evaluar_tras_mcp
+        evaluar_tras_mcp(user_id)
+
+
 def registrar(tool: str, user_id: Optional[int], duracion_ms: int,
               error: Optional[str] = None, argumentos: Iterable[str] = ()) -> None:
     """Encola el registro de una tool call. Nunca lanza."""
     try:
-        _executor.submit(_insertar, tool, user_id, error is None, error,
+        _executor.submit(_registrar_y_evaluar, tool, user_id, error is None, error,
                          int(duracion_ms), sorted(argumentos))
     except Exception:
         pass

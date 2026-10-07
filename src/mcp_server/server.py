@@ -32,6 +32,7 @@ from src.mcp_server.oauth_provider import FynderOAuthProvider, public_base_url, 
 from src.services.redact import sanitize as _sanitize
 from src.services.textutils import normalize_phone
 from src.services import mcp_uso_service as uso
+from src.services import logros_service as logros
 from src.services import property_service as ps
 from src.services import market_service as ms
 from src.services import diagnosis_service as ds
@@ -88,6 +89,11 @@ _INSTRUCTIONS = (
     "'mi_plan'). Si un contacto no sirve, ofrece 'reportar_contacto_invalido'.\n"
     "- Si un inmueble no tiene contacto válido o el pedido no es desbloqueable, "
     "ofrece 'solicitar_visita': el equipo de Fynder coordina por el agente.\n\n"
+    "PREMIOS: usar Fynder desde aquí (su IA) le da llaves gratis al agente: "
+    "+2 al conectar, +1 en su primera consulta, y rachas de días seguidos (3, 7 y 14 "
+    "días) que pagan EL DOBLE cuando son con su IA. Si una respuesta trae "
+    "'premio_fynder', felicítalo en UNA línea al final (cuántas llaves ganó y por qué). "
+    "'mi_plan' trae su racha: menciónala si pregunta por sus llaves.\n\n"
     "PUBLICAR PROPIEDADES: para crear un listing, primero reúne los datos mínimos "
     "obligatorios (precio, área, tipo, ubicación) y adviértele al agente que "
     "necesitará FOTOS. Redacta una descripción VENDEDORA y COMPLETA (3-4 párrafos, "
@@ -196,6 +202,11 @@ def _tool_saneada(*t_args, revela_contacto: bool = False, costo_ia: bool = False
                 finally:
                     unbind_agent(cv)
                 error = _codigo_error(result)
+                if isinstance(result, dict) and not error:
+                    # Llaves de premio ganadas (rachas, misiones) que el agente aún no conoce.
+                    premio = logros.aviso_mcp(agent.user_id)
+                    if premio:
+                        result = {**result, "premio_fynder": premio}
                 return _sanitize(result, revelar=revela_contacto)
             except Exception as e:
                 error = type(e).__name__
@@ -1004,7 +1015,17 @@ def mi_plan() -> Dict[str, Any]:
     Úsala para "¿cuántas llaves me quedan?", "¿qué plan tengo?" o "¿cómo
     compro más llaves?".
     """
-    return suscripciones.estado(current_agent().user_id)
+    uid = current_agent().user_id
+    res = suscripciones.estado(uid)
+    try:
+        r = logros.resumen(uid)
+        res["racha"] = {k: r["racha"][k] for k in ("dias", "dias_ia", "hoy", "en_riesgo", "siguiente", "record")}
+        res["premios_mes"] = r["premios_mes"]
+        res["misiones_pendientes"] = [m["titulo"] + (f" (+{m['llaves']} llaves)" if m["llaves"] else "")
+                                      for m in r["misiones"] if not m["hecha"]]
+    except Exception:
+        pass  # sin la migración 049, mi_plan sigue funcionando
+    return res
 
 
 @mcp.tool(title="Mis contactos desbloqueados", annotations=_LECTURA, revela_contacto=True)
