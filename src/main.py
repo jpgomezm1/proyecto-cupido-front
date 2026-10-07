@@ -51,6 +51,7 @@ from src.api.feedback import feedback_bp
 from src.api.platform_costs import platform_costs_bp
 from src.api.suscripciones import suscripciones_chat_bp, suscripciones_admin_bp
 from src.api.pagos import pagos_bp
+from src.api.registro import registro_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -206,6 +207,7 @@ app.register_blueprint(platform_costs_bp)
 app.register_blueprint(suscripciones_chat_bp)
 app.register_blueprint(suscripciones_admin_bp)
 app.register_blueprint(pagos_bp)
+app.register_blueprint(registro_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
