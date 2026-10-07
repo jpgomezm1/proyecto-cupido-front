@@ -93,7 +93,7 @@ def test_checkout_url_lleva_firma_y_redireccion(llaves, monkeypatch):
     assert q["amount-in-cents"] == "5000000" and q["currency"] == "COP"
     assert q["reference"] == r["referencia"] and r["referencia"].startswith("FY7-BAS-")
     assert q["signature:integrity"] == svc.firma_integridad(r["referencia"], 5000000)
-    assert q["redirect-url"] == f"http://localhost:4242/chat/pago?ref={r['referencia']}"
+    assert "redirect-url" not in q and r["sin_redireccion"] is True   # Wompi bloquea localhost
     assert q["customer-data:email"] == "ana@x.co"
     assert "prv_prod_x" not in r["checkout_url"] and "prod_integrity_x" not in r["checkout_url"]
 
@@ -111,3 +111,25 @@ def test_ambiente_sale_de_las_llaves(monkeypatch, llaves_env, esperado):
     assert svc.habilitado() is (esperado is not None)
     if esperado:
         assert svc._api() == svc._API[esperado]
+
+
+def test_redireccion_en_produccion(llaves, monkeypatch):
+    class Ctx:
+        def __enter__(self):
+            class Db:
+                class cursor:
+                    @staticmethod
+                    def execute(*a): pass
+                class conn:
+                    @staticmethod
+                    def commit(): pass
+            return Db()
+        def __exit__(self, *a): return False
+    respuestas = iter([{"codigo": "pro", "nombre": "Pro", "precio_cop": 100000},
+                       {"id": 3, "nombre": None, "email": None, "telefono": None, "activo": True}])
+    monkeypatch.setattr(svc, "get_db", lambda: Ctx())
+    monkeypatch.setattr(svc, "fetch_one", lambda *a, **k: next(respuestas))
+    r = svc.crear_pago(3, "pro", "https://getfynder.com")
+    q = {k: v[0] for k, v in parse_qs(urlparse(r["checkout_url"]).query).items()}
+    assert q["redirect-url"] == f"https://getfynder.com/chat/pago?ref={r['referencia']}"
+    assert r["sin_redireccion"] is False and "customer-data:email" not in q

@@ -132,8 +132,13 @@ def crear_pago(user_id: int, plan_codigo: str, frontend: Optional[str] = None) -
         "amount-in-cents": centavos,
         "reference": referencia,
         "signature:integrity": firma_integridad(referencia, centavos),
-        "redirect-url": f"{base}/chat/pago?ref={referencia}",
     }
+    # El firewall del checkout de Wompi rechaza (403) una redirect-url a
+    # localhost: en desarrollo el checkout se abre en otra pestaña sin regreso
+    # y la web espera el resultado en /chat/pago.
+    local = base.startswith(("http://localhost", "http://127.0.0.1"))
+    if not local:
+        params["redirect-url"] = f"{base}/chat/pago?ref={referencia}"
     if usuario.get("email"):
         params["customer-data:email"] = usuario["email"]
     if usuario.get("nombre"):
@@ -145,6 +150,7 @@ def crear_pago(user_id: int, plan_codigo: str, frontend: Optional[str] = None) -
         "plan_nombre": plan["nombre"],
         "monto_cop": plan["precio_cop"],
         "checkout_url": f"{CHECKOUT_URL}?{urlencode(params)}",
+        "sin_redireccion": local,
     }
 
 
