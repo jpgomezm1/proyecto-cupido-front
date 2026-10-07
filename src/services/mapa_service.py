@@ -336,7 +336,7 @@ def _estadisticas(inm: List[dict], peds: List[dict]) -> Dict[str, Any]:
     pm2 = [v for v in (_pm2_valido(p.get("precio_m2")) for p in inm) if v]
     presup = [float((p["criterios"] or {}).get("presupuesto_max")) for p in peds
               if (p["criterios"] or {}).get("presupuesto_max")]
-    tipos = Counter((p.get("tipo_propiedad") or "Otro").strip().title() for p in inm)
+    tipos = Counter(p["tipo_propiedad"].strip().title() for p in inm if (p.get("tipo_propiedad") or "").strip())
     tipos_buscados = Counter(t.title() for p in peds for t in ((p["criterios"] or {}).get("tipos") or []))
     return {
         "inmuebles": len(inm),
