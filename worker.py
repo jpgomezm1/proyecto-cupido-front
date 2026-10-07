@@ -72,6 +72,23 @@ if __name__ == '__main__':
         sched_pedidos.start()
         print("[WORKER] Estructuración de pedidos programada (cada 15 min)")
 
+    # Correos de recordatorio del plan (por vencer / vencido), idempotentes.
+    if os.getenv('CORREOS_RECORDATORIO_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services.correo_service import recordatorios_plan
+
+        def _recordatorios():
+            try:
+                print(f"[CORREOS] Recordatorios de plan: {recordatorios_plan()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                print(f"[CORREOS] Error: {e}")
+
+        sched_correos = BackgroundScheduler()
+        sched_correos.add_job(_recordatorios, 'interval', hours=6, id='correos_plan',
+                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_correos.start()
+        print("[WORKER] Recordatorios de plan programados (cada 6 h)")
+
     # Crear worker con la conexión (API moderna de RQ)
     worker = Worker([queue], connection=conn)
     print(f"[WORKER] Escuchando cola 'captures'...")

@@ -22,7 +22,7 @@ import secrets
 from datetime import timedelta
 from typing import Any, Dict, Optional
 
-from src.services import suscripcion_service
+from src.services import correo_service, suscripcion_service
 from src.services.db import get_db, fetch_one, scalar
 from src.services.textutils import normalize_phone
 from src.services.whatsapp_sender import WhatsAppSendError, enviar_whatsapp
@@ -98,6 +98,7 @@ def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_termino
         user_id = cur.fetchone()["id"]
         db.conn.commit()
     print(f"🆕 Registro web: usuario {user_id}")
+    correo_service.bienvenida(nombre, email)
     return {"ok": True, "user_id": user_id, "email": email}
 
 

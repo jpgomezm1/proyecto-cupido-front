@@ -30,7 +30,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from src.services import suscripcion_service
+from src.services import correo_service, suscripcion_service
 from src.services.db import get_db, fetch_one, fetch_all
 
 CHECKOUT_URL = "https://checkout.wompi.co/p/"
@@ -203,7 +203,32 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
         """, (nuevo, tx.get("id"), tx.get("payment_method_type"), suscripcion_id, detalle, pago["id"]))
         db.conn.commit()
     print(f"💳 Pago {referencia} → {nuevo} ({fuente})")
+    if nuevo in ("aprobado", "rechazado"):
+        _notificar(referencia, nuevo)
     return {"ok": True, "estado": nuevo, "suscripcion_id": suscripcion_id}
+
+
+def _notificar(referencia: str, estado: str) -> None:
+    """Correo al agente con el resultado (solo cuando el estado cambia: idempotente)."""
+    try:
+        with get_db() as db:
+            fila = fetch_one(db.cursor, """
+                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence,
+                       u.nombre AS usuario_nombre, u.email AS usuario_email
+                FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
+                LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
+                JOIN chat_users u ON u.id = pg.user_id
+                WHERE pg.referencia = %s
+            """, (referencia,))
+        if not fila:
+            return
+        salida = _salida(fila)
+        if estado == "aprobado":
+            correo_service.pago_aprobado(fila["usuario_nombre"], fila["usuario_email"], salida)
+        else:
+            correo_service.pago_rechazado(fila["usuario_nombre"], fila["usuario_email"], salida)
+    except Exception as e:  # noqa: BLE001 — el correo nunca rompe la confirmación del pago
+        print(f"[CORREO] No se pudo preparar el correo del pago {referencia}: {e}")
 
 
 # ---------------------------------------------------------------------------
