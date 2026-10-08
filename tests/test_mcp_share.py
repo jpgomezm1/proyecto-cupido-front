@@ -122,5 +122,6 @@ def test_agente_publico_verificado(monkeypatch):
     monkeypatch.setattr(ag, "get_db", lambda: _FakeCtx())
     monkeypatch.setattr(ag, "fetch_one", fake_fetch)
     out = ag.agente_publico("3")
-    assert out == {"id": 3, "name": "Ana Gómez", "phone": "+573001112233", "whatsapp": "573001112233"}
+    assert out == {"id": 3, "name": "Ana Gómez", "phone": "+573001112233", "whatsapp": "573001112233",
+                   "logo_url": None, "foto_url": None, "marca_nombre": None, "pagina": None}
     assert "telefono_verificado" in captured["sql"] and "activo" in captured["sql"]
