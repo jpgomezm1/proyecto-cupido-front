@@ -142,7 +142,7 @@ def radar(limite: int = 8) -> Dict[str, Any]:
         ppm = f["precio"] / f["area"]
         desc = 1 - ppm / m[0]
         creado = f["fecha_creacion"].timestamp() if f["fecha_creacion"] else 0
-        if 0.15 <= desc <= 0.45:   # más de 45 % casi siempre es un dato mal cargado
+        if 0.15 <= desc <= 0.35:   # más de 35 % casi siempre es un dato mal cargado (área o precio)
             bajo.append((creado >= reciente, desc, f, m))
     # Primero lo reciente (lo que todavía nadie ha movido), luego el mayor descuento.
     bajo.sort(key=lambda x: (x[0], x[1]), reverse=True)
