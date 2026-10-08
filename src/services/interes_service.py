@@ -470,7 +470,7 @@ def orquestar_solicitud(*, propiedad_ref, comprador_telefono, comprador_id=None,
 
     disp = {"estado": None, "activo": True}
     if verificar:
-        disp = verificar_disponibilidad(prop["id"])
+        disp = verificar_disponibilidad(prop["id"], origen="visita")
         if disp.get("error"):
             disp = {"estado": "desconocido", "activo": True}
 

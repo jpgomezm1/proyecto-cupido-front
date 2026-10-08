@@ -452,7 +452,7 @@ def desbloquear(user_id: int, tipo: str, ref, canal: str = "mcp") -> Dict[str, A
     # 2) Disponibilidad en vivo (solo inmuebles cobrables), sin conexión retenida.
     disponibilidad = None
     if tipo == "propiedad" and ev["costo"]:
-        disp = verificar_disponibilidad(r["ref_id"])
+        disp = verificar_disponibilidad(r["ref_id"], origen="desbloqueo")
         if disp.get("error"):
             disp = {"estado": "desconocido", "activo": True}
         if disp.get("estado") in ("404", "no_disponible"):
@@ -651,7 +651,7 @@ def reportar_invalido(user_id: int, desbloqueo_id: int, motivo: str,
             cur.execute("UPDATE desbloqueos SET estado = 'reembolsado' WHERE id = %s", (desbloqueo_id,))
         if d["tipo"] == "propiedad" and motivo == "ya_no_disponible":
             # Que la revalidación lo revise primero.
-            cur.execute("UPDATE propiedades SET fecha_ultima_validacion = NULL WHERE id = %s", (d["ref_id"],))
+            cur.execute("UPDATE propiedades SET fecha_ultimo_intento = NULL WHERE id = %s", (d["ref_id"],))
         db.conn.commit()
 
     if reembolsar:

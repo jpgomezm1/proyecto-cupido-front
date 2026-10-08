@@ -1,185 +1,163 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Validador de URLs de propiedades.
+Salud de la verificación de links (lo usa el skill /validate-links).
 
-Verifica que los links originales de las propiedades activas siguen funcionando.
-Si un link devuelve 404 o no carga, marca la propiedad como inactiva.
+El trabajo diario lo hace el worker (`revalidar_lote` cada 30 min). Este script
+sirve para mirar y para casos puntuales; usa los mismos detectores por portal
+de src/services/disponibilidad_service.py.
 
 Uso:
-    python scripts/validate_property_urls.py              # Ejecutar validación completa
-    python scripts/validate_property_urls.py --dry-run    # Solo verificar, no desactivar
-    python scripts/validate_property_urls.py --limit 50   # Validar solo las primeras N
+    python scripts/validate_property_urls.py --reporte
+        Frescura por portal (meta: verificada hace ≤ 8 días) y qué hizo el
+        validador la última semana. Solo lectura.
+
+    python scripts/validate_property_urls.py --muestra 40
+        Revisa en vivo N activas y N/2 inactivas por portal y compara el
+        veredicto con lo que dice la base. No escribe nada. Sirve para detectar
+        que un portal cambió su HTML (suben los "inciertos" o los desacuerdos).
+
+    python scripts/validate_property_urls.py --rescatar [--dias 90] [--aplicar]
+        Busca inmuebles inactivos que NO bajó el validador (los bajó un script
+        viejo o una persona) y que hoy siguen publicados. Sin --aplicar solo los
+        lista; con --aplicar los reactiva y deja constancia.
+
+    python scripts/validate_property_urls.py --lote 200
+        Fuerza ya una corrida de revalidación de N inmuebles (escribe).
 """
 
+import argparse
+import collections
 import os
 import sys
-import time
-import argparse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-
-# Fuente única de verdad del chequeo de URLs (compartida con la verificación
-# on-demand del MCP/admin). Ver src/services/disponibilidad_service.py.
-from src.services.disponibilidad_service import check_url, USER_AGENT
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-BATCH_SIZE = 100
-DELAY_BETWEEN_REQUESTS = 0.2  # seconds
-DELAY_BETWEEN_BATCHES = 2     # seconds
+from src.services.db import get_db, fetch_all  # noqa: E402
+from src.services import disponibilidad_service as disp  # noqa: E402
+
+_PORTALES = {"wasi": r"wasi\.co", "lobbie": r"lobbieapp\.com", "pulppo": r"pulppo"}
 
 
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    END = '\033[0m'
+def _diag(fila):
+    return fila, disp.diagnosticar(disp.build_session(), fila["url"])
 
 
-def get_connection():
-    if not DATABASE_URL:
-        print(f"{Colors.RED}Error: DATABASE_URL no configurada{Colors.END}")
-        sys.exit(1)
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+def reporte() -> None:
+    s = disp.salud()
+    print(f"\nActivas: {s['activas']} · verificadas en ≤ 8 días: {s['frescas']} ({s['pct_sla']} %)\n")
+    print(f"{'portal':10} {'activas':>8} {'frescas':>8} {'%':>6} {'nunca':>7}")
+    for r in s["por_portal"]:
+        pct = round(100 * r["frescas"] / r["activas"], 1) if r["activas"] else 0
+        print(f"{r['portal']:10} {r['activas']:>8} {r['frescas']:>8} {pct:>6} {r['nunca_revisadas']:>7}")
+    print("\nÚltimos 7 días (veredictos del validador):")
+    for r in s["ultima_semana"]:
+        print(f"  {r['portal']:8} {r['veredicto']:9} {r['n']:>6}  "
+              f"desactivadas {r['desactivadas']:>4} · reactivadas {r['reactivadas']:>4}")
+    if s["inciertos_frecuentes"]:
+        print("\nInciertos más frecuentes (si crecen, revisar el detector de ese portal):")
+        for r in s["inciertos_frecuentes"]:
+            print(f"  {r['portal']:8} {r['motivo']:45} {r['n']:>5}")
 
 
-def run_validation(dry_run=False, limit=None, offset=None, min_id=None):
-    start_time = datetime.now()
-    print(f"\n{Colors.BOLD}{'=' * 70}{Colors.END}")
-    print(f"{Colors.BOLD}  VALIDACION DE URLS DE PROPIEDADES{Colors.END}")
-    print(f"{Colors.BOLD}  {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Colors.END}")
-    if dry_run:
-        print(f"{Colors.YELLOW}  MODO DRY-RUN: No se desactivaran propiedades{Colors.END}")
-    print(f"{Colors.BOLD}{'=' * 70}{Colors.END}\n")
+def muestra(n: int) -> None:
+    with get_db() as db:
+        filas = []
+        for portal, rx in _PORTALES.items():
+            for activa, k in ((True, n), (False, max(1, n // 2))):
+                filas += [dict(f, portal=portal) for f in fetch_all(db.cursor, """
+                    SELECT id, url, activa FROM propiedades
+                    WHERE url ~* %s AND activa = %s ORDER BY random() LIMIT %s
+                """, (rx, activa, k))]
+    with ThreadPoolExecutor(8) as pool:
+        resultados = list(pool.map(_diag, filas))
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    print("\nVeredicto en vivo vs. la base (nada se escribe):")
+    cuenta = collections.Counter(
+        (f["portal"], "activa" if f["activa"] else "inactiva", v.veredicto) for f, v in resultados)
+    for (portal, db_estado, ver), k in sorted(cuenta.items()):
+        alerta = ""
+        if (db_estado == "activa" and ver == "muerto") or (db_estado == "inactiva" and ver == "vivo"):
+            alerta = "  ← desacuerdo"
+        elif ver == "incierto":
+            alerta = "  ← incierto"
+        print(f"  {portal:8} en base {db_estado:8} → {ver:9} {k:>4}{alerta}")
+    raros = [(f, v) for f, v in resultados if v.veredicto == "incierto"]
+    for f, v in raros[:10]:
+        print(f"    #{f['id']} {v.motivo}  {f['url'][:80]}")
 
-    # Fetch active properties with URLs
-    query = """
-        SELECT id, url, fuente, titulo
-        FROM propiedades
-        WHERE activa = TRUE AND url IS NOT NULL AND url != ''
-    """
-    # min_id: reanudar solo desde propiedades con id mayor (checkpoint estable
-    # ante desactivaciones, a diferencia de OFFSET que se corre al desactivar)
-    if min_id:
-        query += f" AND id > {int(min_id)}"
-    query += " ORDER BY id"
-    if limit:
-        query += f" LIMIT {int(limit)}"
-    if offset:
-        query += f" OFFSET {int(offset)}"
 
-    cursor.execute(query)
-    properties = cursor.fetchall()
+def rescatar(dias: int, aplicar: bool) -> None:
+    with get_db() as db:
+        filas = fetch_all(db.cursor, f"""
+            SELECT id, url, titulo FROM propiedades
+            WHERE NOT activa AND desactivada_por IS NULL
+              AND url IS NOT NULL AND url <> '' AND {disp._SQL_SIN_PROPIOS}
+              AND fecha_actualizacion > NOW() - (%s * INTERVAL '1 day')
+            ORDER BY fecha_actualizacion DESC
+        """, (dias,))
+    print(f"\nRevisando {len(filas)} inactivos de los últimos {dias} días que no bajó el validador…")
+    with ThreadPoolExecutor(8) as pool:
+        vivos = [(f, v) for f, v in pool.map(_diag, filas) if v.veredicto == "vivo"]
 
-    total = len(properties)
-    print(f"  Propiedades activas con URL: {Colors.BOLD}{total}{Colors.END}\n")
-
-    if total == 0:
-        print(f"{Colors.GREEN}No hay propiedades para validar{Colors.END}")
-        conn.close()
+    print(f"Siguen publicados: {len(vivos)}")
+    for f, v in vivos[:40]:
+        print(f"  #{f['id']:>6} {v.portal:7} {(f['titulo'] or '')[:60]}")
+    if len(vivos) > 40:
+        print(f"  … y {len(vivos) - 40} más")
+    if not aplicar or not vivos:
+        if vivos:
+            print("\nPara reactivarlos: --rescatar --aplicar")
         return
 
-    # Setup HTTP session
-    session = requests.Session()
-    session.headers.update({"User-Agent": USER_AGENT})
+    with get_db() as db:
+        for f, v in vivos:
+            db.cursor.execute("""
+                UPDATE propiedades
+                SET activa = TRUE, fecha_actualizacion = NOW(), validaciones_fallidas_consecutivas = 0,
+                    fecha_ultima_validacion = NOW(), fecha_ultimo_intento = NOW(),
+                    disponibilidad_motivo = %s
+                WHERE id = %s AND NOT activa
+            """, (v.motivo, f["id"]))
+            db.cursor.execute("""
+                INSERT INTO verificaciones_disponibilidad
+                    (propiedad_id, veredicto, motivo, status_code, portal, origen, cambio)
+                VALUES (%s, 'vivo', %s, %s, %s, 'rescate', 'reactivada')
+            """, (f["id"], v.motivo, v.status, v.portal))
+        db.conn.commit()
+    print(f"Reactivados: {len(vivos)}")
 
-    # Counters
-    ok_count = 0
-    deactivated_count = 0
-    skipped_count = 0
-    error_count = 0
-    deactivated_list = []
 
-    for idx, prop in enumerate(properties, 1):
-        prop_id = prop["id"]
-        url = prop["url"]
-        fuente = prop["fuente"] or "unknown"
-        titulo = (prop["titulo"] or "Sin titulo")[:50]
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--reporte", action="store_true")
+    g.add_argument("--muestra", type=int, metavar="N")
+    g.add_argument("--rescatar", action="store_true")
+    g.add_argument("--lote", type=int, metavar="N")
+    ap.add_argument("--dias", type=int, default=90)
+    ap.add_argument("--aplicar", action="store_true")
+    a = ap.parse_args()
 
-        is_active, reason, status_code = check_url(session, url, fuente)
-
-        if is_active:
-            if reason == "ok" or reason.startswith("ok_"):
-                ok_count += 1
-                status_str = f"{Colors.GREEN}✓ OK{Colors.END}"
-            else:
-                skipped_count += 1
-                status_str = f"{Colors.YELLOW}⊘ SKIP ({reason}){Colors.END}"
-        else:
-            deactivated_count += 1
-            deactivated_list.append({
-                "id": prop_id,
-                "titulo": titulo,
-                "fuente": fuente,
-                "reason": reason,
-                "url": url,
-            })
-
-            if not dry_run:
-                cursor.execute(
-                    "UPDATE propiedades SET activa = FALSE, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = %s",
-                    (prop_id,)
-                )
-                conn.commit()
-
-            status_str = f"{Colors.RED}✗ {reason.upper()}{Colors.END} — {'DESACTIVADA' if not dry_run else 'SERIA DESACTIVADA'}"
-
-        # Progress log (incluye id para poder reanudar por --min-id si se corta)
-        print(f"  [{idx:>{len(str(total))}}/{total}] {status_str} {Colors.DIM}#{prop_id} {titulo} ({fuente}){Colors.END}")
-
-        # Rate limiting
-        if idx % BATCH_SIZE == 0 and idx < total:
-            print(f"\n  {Colors.BLUE}Pausa entre lotes ({DELAY_BETWEEN_BATCHES}s)...{Colors.END}\n")
-            time.sleep(DELAY_BETWEEN_BATCHES)
-        else:
-            time.sleep(DELAY_BETWEEN_REQUESTS)
-
-    conn.close()
-    elapsed = (datetime.now() - start_time).total_seconds()
-
-    # Summary
-    print(f"\n{Colors.BOLD}{'=' * 70}{Colors.END}")
-    print(f"{Colors.BOLD}  RESUMEN{Colors.END}")
-    print(f"{Colors.BOLD}{'=' * 70}{Colors.END}")
-    print(f"  Total verificadas:   {total}")
-    print(f"  {Colors.GREEN}Activas (OK):        {ok_count}{Colors.END}")
-    print(f"  {Colors.YELLOW}Skipped (temp):      {skipped_count}{Colors.END}")
-    print(f"  {Colors.RED}Desactivadas:        {deactivated_count}{Colors.END}")
-    print(f"  Tiempo total:        {elapsed/60:.1f} minutos")
-    print(f"{Colors.BOLD}{'=' * 70}{Colors.END}")
-
-    if deactivated_list:
-        print(f"\n{Colors.RED}{Colors.BOLD}  Propiedades desactivadas:{Colors.END}\n")
-        for d in deactivated_list[:30]:
-            print(f"    #{d['id']} — {d['titulo']} ({d['fuente']}) — {d['reason']}")
-            print(f"    {Colors.DIM}{d['url']}{Colors.END}")
-        if len(deactivated_list) > 30:
-            print(f"\n    ... y {len(deactivated_list) - 30} mas")
-
-    print()
+    if not os.getenv("DATABASE_URL"):
+        sys.exit("DATABASE_URL no configurada")
+    if a.reporte:
+        reporte()
+    elif a.muestra:
+        muestra(a.muestra)
+    elif a.rescatar:
+        rescatar(a.dias, a.aplicar)
+    else:
+        print(disp.revalidar_lote(n=a.lote))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Validador de URLs de propiedades")
-    parser.add_argument("--dry-run", action="store_true", help="Solo verificar, no desactivar")
-    parser.add_argument("--limit", type=int, help="Limitar cantidad de propiedades a verificar")
-    parser.add_argument("--offset", type=int, help="Saltar las primeras N propiedades (reanudar validacion)")
-    parser.add_argument("--min-id", type=int, dest="min_id", help="Solo verificar propiedades con id mayor a este (reanudar por checkpoint estable)")
-    args = parser.parse_args()
-
-    run_validation(dry_run=args.dry_run, limit=args.limit, offset=args.offset, min_id=args.min_id)
+    main()

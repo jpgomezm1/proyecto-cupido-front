@@ -6,18 +6,39 @@ Tres usos:
     de escalar una visita a Hernán (interes_service).
   - Revalidación continua (`revalidar_lote`), que corre en el worker cada 30 min
     y recorre todo el inventario activo en ~7 días (acuerdo de frescura ≤ 8 días).
-  - Batch manual (`scripts/validate_property_urls.py`), que importa `check_url`.
+  - Reporte y rescate manual (`scripts/validate_property_urls.py`, skill
+    /validate-links).
 
-Este módulo es la ÚNICA fuente de verdad del chequeo de URLs. La verificación
-on-demand no retiene una conexión de BD durante el HTTP (puede tardar hasta
-20 s); la revalidación del worker sí, porque necesita su lock de sesión.
+Este módulo es la ÚNICA fuente de verdad del chequeo de URLs.
+
+Cada portal tiene su detector, porque cada uno avisa distinto que un inmueble ya
+no está:
+  - Wasi responde 200 con "No se encontró inmueble" (o redirige al home).
+  - Lobbie responde 404 de verdad.
+  - Pulppo (portal de Tu360) siempre responde 200 con la ficha completa; el
+    estado real va en el JSON de Next.js: `property.status.last` = 'published'
+    o 'cancelled' (con `reasonToFinish`, p. ej. "Otro asesor la concretó").
+Cada detector exige evidencia positiva para decir "vivo"; si la página no se
+parece a ninguna de las dos cosas, el veredicto es "incierto" y no se toca nada.
+
+Veredictos y efectos:
+  - muerto   → activa = FALSE, desactivada_por = 'validador', sella la validación.
+  - vivo     → sella la validación; si el validador la había bajado, la reactiva.
+  - incierto → solo sella el intento (timeout, 403, 5xx, página irreconocible).
+`fecha_ultima_validacion` (lo que ve el agente como "verificada hace N días")
+solo cambia con un veredicto concluyente; la rotación usa `fecha_ultimo_intento`.
+Cada veredicto queda en `verificaciones_disponibilidad`.
 """
 
+import json
 import math
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -30,8 +51,7 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-# Patrones en el HTML que indican que la propiedad ya no existe. Los portales
-# devuelven HTTP 200 pero muestran estos mensajes en el contenido.
+# Mensajes de "ya no existe" que muestran los portales con HTTP 200.
 CONTENT_NOT_FOUND_PATTERNS = [
     "no se encontró inmueble",
     "no se encontro inmueble",
@@ -49,106 +69,197 @@ CONTENT_NOT_FOUND_PATTERNS = [
     "publicacion no disponible",
 ]
 
-# Wasi a veces redirige al home cuando no existe.
-WASI_REDIRECT_PATTERNS = ["wasi.co/es", "wasi.co/en"]
+# Páginas propias de Fynder: no hay portal de origen que revisar.
+_HOSTS_PROPIOS = ("fyndercol.netlify.app", "getfynder.com")
+_SQL_SIN_PROPIOS = "url !~* '(fyndercol\\.netlify\\.app|getfynder\\.com)'"
+
+# Estados de Pulppo que significan que el inmueble ya no se comercializa.
+_PULPPO_TERMINADO = {"cancelled", "completed", "finished", "sold", "rented", "closed", "archived", "expired"}
+
+VIVO, MUERTO, INCIERTO = "vivo", "muerto", "incierto"
+
+
+@dataclass
+class Veredicto:
+    veredicto: str          # vivo | muerto | incierto
+    motivo: str
+    status: Optional[int]
+    portal: str
 
 
 def build_session() -> requests.Session:
-    """Sesión HTTP con el User-Agent estándar (compartida por batch y on-demand)."""
+    """Sesión HTTP con el User-Agent estándar."""
     s = requests.Session()
     s.headers.update({"User-Agent": USER_AGENT})
     return s
 
 
-def check_url(session, url, fuente) -> Tuple[bool, str, Optional[int]]:
-    """
-    Verifica si una URL sigue activa.
-    Approach principal: leer el contenido HTML y buscar patrones de "no encontrada"
-    (los portales devuelven HTTP 200 aun cuando la propiedad ya no existe).
-    Conservador: ante error temporal (5xx/403/timeout) NO desactiva.
-    Returns: (is_active: bool, reason: str, status_code: int|None)
-    """
+def portal_de(url: Optional[str]) -> str:
+    host = (urlparse(url or "").netloc or "").lower()
+    if host.endswith("wasi.co"):
+        return "wasi"
+    if host.endswith("lobbieapp.com"):
+        return "lobbie"
+    if "pulppo" in host:
+        return "pulppo"
+    if any(host.endswith(h) for h in _HOSTS_PROPIOS):
+        return "propio"
+    return "generico"
+
+
+def _no_encontrado(html: str) -> Optional[str]:
+    bajo = html.lower()
+    return next((p for p in CONTENT_NOT_FOUND_PATTERNS if p in bajo), None)
+
+
+# ── Detectores por portal: (status, url_final, html) → (veredicto, motivo) ──
+
+def _wasi(status: int, final_url: str, html: str) -> Tuple[str, str]:
+    patron = _no_encontrado(html)
+    if patron:
+        return MUERTO, f"wasi: {patron}"
+    ruta = urlparse(final_url).path.strip("/").lower()
+    if ruta in ("", "es", "en"):
+        return MUERTO, "wasi: redirige al home"
+    # Evidencia positiva: la galería y el encabezado de la ficha.
+    if "fotorama" in html or "firstHeading" in html:
+        return VIVO, "wasi: ficha publicada"
+    return INCIERTO, "wasi: página irreconocible"
+
+
+def _lobbie(status: int, final_url: str, html: str) -> Tuple[str, str]:
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    titulo = (m.group(1).strip() if m else "").lower()
+    if titulo and titulo != "lobbie":
+        return VIVO, "lobbie: ficha publicada"
+    patron = _no_encontrado(html)
+    if patron:
+        return MUERTO, f"lobbie: {patron}"
+    return INCIERTO, "lobbie: página irreconocible"
+
+
+def _pulppo(status: int, final_url: str, html: str) -> Tuple[str, str]:
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+    if not m:
+        return INCIERTO, "pulppo: sin datos de la ficha"
+    try:
+        prop = json.loads(m.group(1)).get("props", {}).get("pageProps", {}).get("property")
+    except (ValueError, AttributeError):
+        return INCIERTO, "pulppo: datos ilegibles"
+    if not prop:
+        return MUERTO, "pulppo: ficha inexistente"
+    estado = prop.get("status") or {}
+    ultimo = (estado.get("last") or "").lower() if isinstance(estado, dict) else ""
+    if ultimo == "published":
+        return VIVO, "pulppo: publicada"
+    if ultimo in _PULPPO_TERMINADO:
+        razon = estado.get("reasonToFinish")
+        return MUERTO, f"pulppo: {ultimo}" + (f" ({razon})" if razon else "")
+    return INCIERTO, f"pulppo: estado '{ultimo or 'sin estado'}'"
+
+
+def _generico(status: int, final_url: str, html: str) -> Tuple[str, str]:
+    patron = _no_encontrado(html)
+    if patron:
+        return MUERTO, f"contenido: {patron}"
+    return VIVO, "ok"
+
+
+_DETECTORES = {"wasi": _wasi, "lobbie": _lobbie, "pulppo": _pulppo, "generico": _generico}
+
+
+def diagnosticar(session, url: Optional[str]) -> Veredicto:
+    """Visita el link original y decide si el inmueble sigue publicado."""
+    portal = portal_de(url)
     if not url or not url.startswith("http"):
-        return True, "sin_url", None
+        return Veredicto(INCIERTO, "sin_url", None, portal)
+    if portal == "propio":
+        return Veredicto(INCIERTO, "sin_portal_de_origen", None, portal)
 
     try:
-        response = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        status = response.status_code
-        final_url = response.url
-
-        if status == 410:
-            return False, "410_gone", status
-        if status == 404:
-            return False, "404", status
-        if status >= 500:
-            return True, f"server_error_{status}", status
-        if status == 403:
-            return True, "forbidden_skip", status
-
-        if 200 <= status < 400:
-            content_lower = response.text[:8000].lower()
-            for pattern in CONTENT_NOT_FOUND_PATTERNS:
-                if pattern in content_lower:
-                    return False, f"content_not_found: {pattern}", status
-            if fuente and "wasi" in fuente.lower():
-                for pattern in WASI_REDIRECT_PATTERNS:
-                    if pattern in final_url.lower() and "info.wasi.co" not in final_url.lower():
-                        return False, "wasi_redirect_home", status
-            return True, "ok", status
-
-        return True, f"unknown_{status}", status
-
+        r = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
     except requests.exceptions.Timeout:
-        return True, "timeout_skip", None
+        return Veredicto(INCIERTO, "timeout", None, portal)
     except requests.exceptions.ConnectionError:
-        return True, "connection_error_skip", None
+        return Veredicto(INCIERTO, "error_de_conexion", None, portal)
     except requests.exceptions.TooManyRedirects:
-        return False, "too_many_redirects", None
-    except Exception as e:  # noqa: BLE001 — conservador: cualquier error raro = no desactivar
-        return True, f"error: {str(e)[:50]}", None
+        return Veredicto(MUERTO, "demasiadas_redirecciones", None, portal)
+    except Exception as e:  # noqa: BLE001 — conservador: lo raro no desactiva
+        return Veredicto(INCIERTO, f"error: {str(e)[:60]}", None, portal)
+
+    status = r.status_code
+    if status in (404, 410):
+        return Veredicto(MUERTO, f"http_{status}", status, portal)
+    if status >= 400:
+        return Veredicto(INCIERTO, f"http_{status}", status, portal)
+    veredicto, motivo = _DETECTORES[portal](status, r.url, r.text)
+    return Veredicto(veredicto, motivo, status, portal)
 
 
-def _estado_desde_reason(is_active: bool, reason: str) -> str:
-    """Traduce el `reason` técnico a un estado de negocio legible."""
-    if is_active:
-        return "disponible" if reason.startswith("ok") else "desconocido"
-    if reason in ("404", "410_gone"):
-        return "404"
-    if reason.startswith("content_not_found") or reason in ("wasi_redirect_home", "too_many_redirects"):
-        return "no_disponible"
+def check_url(session, url, fuente=None) -> Tuple[bool, str, Optional[int]]:
+    """Compatibilidad: (sigue_activa, motivo, status). Lo incierto cuenta como activa."""
+    v = diagnosticar(session, url)
+    return v.veredicto != MUERTO, v.motivo, v.status
+
+
+def _estado(v: Veredicto) -> str:
+    """Estado de negocio que consumen cobro, visitas y admin."""
+    if v.veredicto == VIVO:
+        return "disponible"
+    if v.veredicto == MUERTO:
+        return "404" if v.motivo in ("http_404", "http_410") else "no_disponible"
     return "desconocido"
 
 
-def _persistir_resultado(cur, propiedad_id: int, is_active: bool, estado: str) -> None:
-    """
-    Semántica de escritura (conservadora, igual que el batch):
-      - Muerta (404/410/contenido) → activa=FALSE, +1 fallo, sella fecha.
-      - Viva → sella fecha y resetea el contador de fallos (no reactiva a la fuerza).
-      - Temporal/desconocida (5xx/403/timeout/sin_url) → solo sella la fecha.
-    """
-    if not is_active:
+def _persistir(cur, propiedad_id: int, v: Veredicto, origen: str) -> Optional[str]:
+    """Aplica el veredicto. Devuelve el cambio hecho ('desactivada' / 'reactivada') o None."""
+    if v.veredicto == MUERTO:
         cur.execute("""
-            UPDATE propiedades
+            UPDATE propiedades p
             SET activa = FALSE,
-                fecha_ultima_validacion = NOW(),
-                validaciones_fallidas_consecutivas = COALESCE(validaciones_fallidas_consecutivas, 0) + 1,
-                fecha_actualizacion = NOW()
-            WHERE id = %s
-        """, (propiedad_id,))
-    elif estado == "disponible":
+                desactivada_por = CASE WHEN p.activa THEN 'validador' ELSE p.desactivada_por END,
+                fecha_actualizacion = CASE WHEN p.activa THEN NOW() ELSE p.fecha_actualizacion END,
+                validaciones_fallidas_consecutivas = COALESCE(p.validaciones_fallidas_consecutivas, 0) + 1,
+                fecha_ultima_validacion = NOW(), fecha_ultimo_intento = NOW(),
+                disponibilidad_motivo = %s
+            FROM (SELECT activa FROM propiedades WHERE id = %s FOR UPDATE) antes
+            WHERE p.id = %s
+            RETURNING antes.activa AS antes
+        """, (v.motivo, propiedad_id, propiedad_id))
+        row = cur.fetchone()
+        cambio = "desactivada" if row and row["antes"] else None
+    elif v.veredicto == VIVO:
         cur.execute("""
-            UPDATE propiedades
-            SET fecha_ultima_validacion = NOW(),
-                validaciones_fallidas_consecutivas = 0
+            UPDATE propiedades p
+            SET activa = p.activa OR COALESCE(p.desactivada_por = 'validador', FALSE),
+                fecha_actualizacion = CASE WHEN NOT p.activa AND p.desactivada_por = 'validador'
+                                           THEN NOW() ELSE p.fecha_actualizacion END,
+                desactivada_por = CASE WHEN p.desactivada_por = 'validador' THEN NULL ELSE p.desactivada_por END,
+                validaciones_fallidas_consecutivas = 0,
+                fecha_ultima_validacion = NOW(), fecha_ultimo_intento = NOW(),
+                disponibilidad_motivo = %s
+            FROM (SELECT activa FROM propiedades WHERE id = %s FOR UPDATE) antes
+            WHERE p.id = %s
+            RETURNING antes.activa AS antes, p.activa AS ahora
+        """, (v.motivo, propiedad_id, propiedad_id))
+        row = cur.fetchone()
+        cambio = "reactivada" if row and not row["antes"] and row["ahora"] else None
+    else:
+        cambio = None
+        cur.execute("""
+            UPDATE propiedades SET fecha_ultimo_intento = NOW(), disponibilidad_motivo = %s
             WHERE id = %s
-        """, (propiedad_id,))
-    else:  # temporal / desconocida: solo dejamos constancia del intento
-        cur.execute(
-            "UPDATE propiedades SET fecha_ultima_validacion = NOW() WHERE id = %s",
-            (propiedad_id,))
+        """, (v.motivo, propiedad_id))
+
+    cur.execute("""
+        INSERT INTO verificaciones_disponibilidad
+            (propiedad_id, veredicto, motivo, status_code, portal, origen, cambio)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (propiedad_id, v.veredicto, v.motivo, v.status, v.portal, origen, cambio))
+    return cambio
 
 
-def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str, Any]:
+def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str = "on_demand") -> Dict[str, Any]:
     """
     Verifica una propiedad puntual y (por defecto) persiste el resultado.
 
@@ -161,25 +272,23 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str,
     """
     # 1) Lectura corta; 2) HTTP sin conexión retenida; 3) escritura corta.
     with get_db() as db:
-        prop = fetch_one(db.cursor,
-            "SELECT id, url, fuente, activa FROM propiedades WHERE id = %s", (propiedad_id,))
+        prop = fetch_one(db.cursor, "SELECT id, url FROM propiedades WHERE id = %s", (propiedad_id,))
     if not prop:
         return {"error": f"Propiedad {propiedad_id} no encontrada"}
 
-    is_active, reason, status = check_url(build_session(), prop["url"], prop["fuente"])
-    estado = _estado_desde_reason(is_active, reason)
+    v = diagnosticar(build_session(), prop["url"])
 
     if actualizar:
         with get_db() as db:
-            _persistir_resultado(db.cursor, prop["id"], is_active, estado)
+            _persistir(db.cursor, prop["id"], v, origen)
             db.conn.commit()
 
     return {
         "propiedad_id": prop["id"],
-        "activo": is_active,
-        "estado": estado,
-        "status_code": status,
-        "motivo": reason,
+        "activo": v.veredicto != MUERTO,
+        "estado": _estado(v),
+        "status_code": v.status,
+        "motivo": v.motivo,
         "verificado_en": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -191,6 +300,11 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True) -> Dict[str,
 # Lock de sesión para que solo una instancia del worker revalide a la vez.
 _LOCK_REVALIDACION = 7102
 
+# De cada lote, esta fracción revisa inmuebles que el validador bajó hace más de
+# una semana, por si volvieron a publicarse (p. ej. "comercialización suspendida
+# temporalmente" en Pulppo).
+_FRACCION_RESCATE = 0.1
+
 
 def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int) -> int:
     """Cuántas propiedades revisar por corrida para cubrir todas en `dias_objetivo`."""
@@ -198,19 +312,19 @@ def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int) -> int:
     return max(1, math.ceil(activas / corridas))
 
 
-def _chequear(prop: Dict[str, Any]) -> Tuple[int, bool, str]:
-    is_active, reason, _ = check_url(build_session(), prop["url"], prop["fuente"])
-    return prop["id"], is_active, _estado_desde_reason(is_active, reason)
+def _diagnosticar_fila(prop: Dict[str, Any]) -> Tuple[int, Veredicto]:
+    return prop["id"], diagnosticar(build_session(), prop["url"])
 
 
 def revalidar_lote(n: Optional[int] = None, hilos: int = 4) -> Dict[str, Any]:
     """
-    Revalida las `n` propiedades activas con la validación más vieja (las nunca
-    validadas primero). Si `n` es None, lo calcula para recorrer todo el
-    inventario activo en REVALIDACION_DIAS_OBJETIVO días.
+    Revisa las `n` propiedades activas con el intento más viejo (las nunca
+    revisadas primero), más un 10 % de las que el validador bajó, por si
+    volvieron. Si `n` es None, lo calcula para recorrer todo el inventario
+    activo en REVALIDACION_DIAS_OBJETIVO días.
 
-    Devuelve un resumen {revisadas, desactivadas, desconocidas} o
-    {omitido: True} si otra instancia ya está corriendo.
+    Devuelve {revisadas, desactivadas, reactivadas, inciertas} o {omitido: True}
+    si otra instancia ya está corriendo.
     """
     dias = int(os.getenv("REVALIDACION_DIAS_OBJETIVO", "7"))
     intervalo = int(os.getenv("REVALIDACION_INTERVALO_MIN", "30"))
@@ -223,25 +337,82 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4) -> Dict[str, Any]:
             if n is None:
                 activas = scalar(db.cursor, "SELECT COUNT(*) FROM propiedades WHERE activa") or 0
                 n = tamano_lote(activas, dias, intervalo)
-            props = fetch_all(db.cursor, """
-                SELECT id, url, fuente FROM propiedades
-                WHERE activa AND url IS NOT NULL AND url <> ''
-                ORDER BY fecha_ultima_validacion NULLS FIRST, id
+            props: List[Dict[str, Any]] = fetch_all(db.cursor, f"""
+                SELECT id, url FROM propiedades
+                WHERE activa AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
+                ORDER BY fecha_ultimo_intento NULLS FIRST, id
                 LIMIT %s
             """, (n,))
+            props += fetch_all(db.cursor, f"""
+                SELECT id, url FROM propiedades
+                WHERE NOT activa AND desactivada_por = 'validador'
+                  AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
+                  AND COALESCE(fecha_ultimo_intento, fecha_ultima_validacion) < NOW() - INTERVAL '7 days'
+                ORDER BY COALESCE(fecha_ultimo_intento, fecha_ultima_validacion), id
+                LIMIT %s
+            """, (max(1, int(n * _FRACCION_RESCATE)),))
             db.conn.commit()
 
             with ThreadPoolExecutor(max_workers=hilos) as pool:
-                resultados = list(pool.map(_chequear, props))
+                resultados = list(pool.map(_diagnosticar_fila, props))
 
-            desactivadas = desconocidas = 0
-            for pid, is_active, estado in resultados:
-                _persistir_resultado(db.cursor, pid, is_active, estado)
-                desactivadas += not is_active
-                desconocidas += estado == "desconocido"
+            cuenta = {"desactivada": 0, "reactivada": 0}
+            inciertas = 0
+            for pid, v in resultados:
+                cambio = _persistir(db.cursor, pid, v, "worker")
+                if cambio:
+                    cuenta[cambio] += 1
+                inciertas += v.veredicto == INCIERTO
             db.conn.commit()
         finally:
             db.cursor.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_REVALIDACION,))
             db.conn.commit()
 
-    return {"revisadas": len(props), "desactivadas": desactivadas, "desconocidas": desconocidas}
+    return {"revisadas": len(props), "desactivadas": cuenta["desactivada"],
+            "reactivadas": cuenta["reactivada"], "inciertas": inciertas}
+
+
+# =========================================================================
+# Salud del inventario (skill /validate-links, admin)
+# =========================================================================
+
+def salud(dias_sla: int = 8) -> Dict[str, Any]:
+    """Frescura por portal y lo que hizo el validador en los últimos 7 días."""
+    with get_db() as db:
+        por_portal = fetch_all(db.cursor, f"""
+            SELECT CASE
+                     WHEN url ~* 'wasi\\.co' THEN 'wasi'
+                     WHEN url ~* 'lobbieapp\\.com' THEN 'lobbie'
+                     WHEN url ~* 'pulppo' THEN 'pulppo'
+                     WHEN url ~* '(fyndercol\\.netlify\\.app|getfynder\\.com)' THEN 'propio'
+                     ELSE 'generico' END AS portal,
+                   COUNT(*) AS activas,
+                   COUNT(*) FILTER (WHERE fecha_ultima_validacion > NOW() - INTERVAL '{int(dias_sla)} days') AS frescas,
+                   COUNT(*) FILTER (WHERE fecha_ultimo_intento IS NULL) AS nunca_revisadas
+            FROM propiedades WHERE activa
+            GROUP BY 1 ORDER BY 2 DESC
+        """)
+        semana = fetch_all(db.cursor, """
+            SELECT portal, veredicto, COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE cambio = 'desactivada') AS desactivadas,
+                   COUNT(*) FILTER (WHERE cambio = 'reactivada') AS reactivadas
+            FROM verificaciones_disponibilidad
+            WHERE created_at > NOW() - INTERVAL '7 days'
+            GROUP BY 1, 2 ORDER BY 1, 2
+        """)
+        motivos_inciertos = fetch_all(db.cursor, """
+            SELECT portal, motivo, COUNT(*) AS n
+            FROM verificaciones_disponibilidad
+            WHERE created_at > NOW() - INTERVAL '7 days' AND veredicto = 'incierto'
+            GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10
+        """)
+    total = sum(r["activas"] for r in por_portal) or 0
+    frescas = sum(r["frescas"] for r in por_portal) or 0
+    return {
+        "activas": total,
+        "frescas": frescas,
+        "pct_sla": round(100 * frescas / total, 1) if total else None,
+        "por_portal": por_portal,
+        "ultima_semana": semana,
+        "inciertos_frecuentes": motivos_inciertos,
+    }

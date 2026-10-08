@@ -979,7 +979,7 @@ def verificar_property(property_id: int):
     """
     try:
         from src.services.disponibilidad_service import verificar_disponibilidad
-        res = verificar_disponibilidad(property_id)
+        res = verificar_disponibilidad(property_id, origen="admin")
         if res.get('error'):
             return jsonify({'success': False, 'error': res['error']}), 404
         return jsonify({'success': True, 'data': res}), 200

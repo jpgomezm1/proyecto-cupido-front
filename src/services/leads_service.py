@@ -2,8 +2,7 @@
 Motor de asignación de leads (Bloque E del plan).
 
 Cruza un pedido de demanda contra el inventario y puntúa cada inmueble candidato
-(E1) con un índice de calidad legible (E2). Base de los matches de agentes y del
-tablero B2B de constructoras (E3).
+(E1) con un índice de calidad legible (E2). Base de los matches de agentes.
 
 INTERRUPTOR (requisito del negocio): el motor se prende/apaga con la variable de
 entorno `LEAD_ENGINE_ENABLED` (default APAGADO). Cuando está apagado,
@@ -146,7 +145,7 @@ def asignar_leads(pedido_id, limit: int = 10, persistir: bool = True,
         if presupuesto:
             rows = fetch_all(db.cursor, """
                 SELECT id, codigo_propiedad, titulo, precio, zona, ciudad,
-                       tipo_propiedad, habitaciones, constructora_id
+                       tipo_propiedad, habitaciones
                 FROM propiedades
                 WHERE activa = TRUE AND precio IS NOT NULL
                   AND precio BETWEEN %s AND %s
@@ -155,7 +154,7 @@ def asignar_leads(pedido_id, limit: int = 10, persistir: bool = True,
         else:
             rows = fetch_all(db.cursor, """
                 SELECT id, codigo_propiedad, titulo, precio, zona, ciudad,
-                       tipo_propiedad, habitaciones, constructora_id
+                       tipo_propiedad, habitaciones
                 FROM propiedades
                 WHERE activa = TRUE AND precio IS NOT NULL
                 ORDER BY fecha_creacion DESC LIMIT %s
@@ -173,14 +172,14 @@ def asignar_leads(pedido_id, limit: int = 10, persistir: bool = True,
             for prop, s in top:
                 db.cursor.execute("""
                     INSERT INTO leads (pedido_id, propiedad_id, score, calidad, razon, factores,
-                                       fuente, estado, constructora_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, 'motor', 'nuevo', %s)
+                                       fuente, estado)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'motor', 'nuevo')
                     ON CONFLICT (pedido_id, propiedad_id) DO UPDATE
                     SET score = EXCLUDED.score, calidad = EXCLUDED.calidad,
                         razon = EXCLUDED.razon, factores = EXCLUDED.factores,
-                        constructora_id = EXCLUDED.constructora_id, updated_at = NOW()
+                        updated_at = NOW()
                 """, (pedido["id"], prop["id"], s["score"], s["calidad"], s["razon"],
-                      json.dumps(s["factores"]), prop.get("constructora_id")))
+                      json.dumps(s["factores"])))
             db.conn.commit()
 
     candidatos = [{

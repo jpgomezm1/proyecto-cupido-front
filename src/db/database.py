@@ -117,9 +117,7 @@ class DatabaseManager:
                 # Campos de captación (quién envió la propiedad)
                 'origen', 'agente_captador_telefono', 'grupo_origen', 'mensaje_original_grupo',
                 # Tipo de negocio (Venta/Arriendo)
-                'tipo_negocio',
-                # Inventario B2B: constructora dueña del inmueble (E3)
-                'constructora_id'
+                'tipo_negocio'
             ]
 
             # Campos AI enriquecidos (opcionales)
