@@ -72,6 +72,25 @@ if __name__ == '__main__':
         sched_pedidos.start()
         print("[WORKER] Estructuración de pedidos programada (cada 15 min)")
 
+    # Fichas del buscador v3 para inmuebles nuevos o editados: reglas primero
+    # (gratis) e IA solo si falta lo esencial. FICHAS_IA=false las deja solo con reglas.
+    if os.getenv('FICHAS_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services.ficha_service import enriquecer
+
+        def _fichas():
+            try:
+                con_ia = os.getenv('FICHAS_IA', 'true').lower() == 'true'
+                print(f"[FICHAS] {enriquecer(limite=60, hilos=3, con_ia=con_ia)}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                print(f"[FICHAS] Error: {e}")
+
+        sched_fichas = BackgroundScheduler()
+        sched_fichas.add_job(_fichas, 'interval', minutes=30, id='fichas',
+                             next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_fichas.start()
+        print("[WORKER] Fichas del buscador programadas (cada 30 min)")
+
     # Correos de recordatorio del plan (por vencer / vencido), idempotentes.
     if os.getenv('CORREOS_RECORDATORIO_ENABLED', 'true').lower() == 'true':
         from apscheduler.schedulers.background import BackgroundScheduler

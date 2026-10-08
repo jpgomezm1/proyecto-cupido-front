@@ -12,6 +12,7 @@ import json
 
 from src.db.database import DatabaseManager
 from src.core.search_agent import PropertySearchAgent
+from src.services import busqueda as busqueda_v3
 from src.core.search_context import merge_criteria, generate_conversation_name
 from src.core.search_config import normalizar_texto_busqueda
 from src.api.chat_auth import require_chat_auth, get_current_user
@@ -734,6 +735,14 @@ def send_message(conversation_id):
                     db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes
                 )
 
+            # Buscador v3 (interruptor FYNDER_BUSQUEDA_V3): entiende el pedido y su
+            # refinamiento en una sola llamada; no usa las fases de prioridad/área.
+            if busqueda_v3.activo():
+                return _execute_search_and_respond(
+                    db, conversation_id, user_id, user_message,
+                    prev_criteria, conv_nombre, total_mensajes, content, v3=True
+                )
+
             # =================================================================
             # v2.4: SISTEMA DE FASES
             # =================================================================
@@ -1280,12 +1289,16 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
 
 
 def _execute_search_and_respond(db, conversation_id, user_id, user_message,
-                                 criteria, conv_nombre, total_mensajes, original_content):
+                                 criteria, conv_nombre, total_mensajes, original_content, v3=False):
     """
     Ejecuta la búsqueda y devuelve los resultados
 
     v2.4: Función auxiliar para ejecutar búsqueda con criterios ya procesados
+    v3: el buscador nuevo recibe el texto y el pedido anterior (criteria['pedido_v3'])
     """
+    if v3:
+        return _execute_search_v3(db, conversation_id, user_id, user_message, criteria,
+                                  conv_nombre, total_mensajes, original_content)
     agent = get_search_agent()
     start_time = datetime.now()
 
@@ -1355,6 +1368,31 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
     if 'search_state' in accumulated_criteria:
         accumulated_criteria['search_state']['phase'] = SearchPhase.READY_TO_SEARCH.value
 
+    return _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
+                                conv_nombre, total_mensajes, original_content,
+                                search_response, search_criteria, accumulated_criteria, elapsed_ms)
+
+
+def _execute_search_v3(db, conversation_id, user_id, user_message, criteria,
+                       conv_nombre, total_mensajes, original_content):
+    start_time = datetime.now()
+    search_response = busqueda_v3.buscar_compat(original_content, previo=(criteria or {}).get('pedido_v3'))
+    elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+    accumulated_criteria = search_response.get('criteria') or {}
+    print(f"🔍 [SEARCH-V3] {search_response.get('total_found', 0)} resultados, "
+          f"tipo={search_response.get('search_type')}, elapsed={elapsed_ms}ms")
+    return _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
+                                conv_nombre, total_mensajes, original_content,
+                                search_response, accumulated_criteria, accumulated_criteria, elapsed_ms)
+
+
+def _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
+                         conv_nombre, total_mensajes, original_content,
+                         search_response, search_criteria, accumulated_criteria, elapsed_ms):
+    """Arma el mensaje del asistente, lo guarda con los resultados y responde."""
+    results = search_response.get('results', [])
+    total_found = search_response.get('total_found', 0)
+
     # Distinguir un fallo del buscador (ej: cuota de IA agotada) de "0 resultados".
     search_failed = not search_response.get('success', True)
     error_type = search_response.get('error_type')
@@ -1383,6 +1421,8 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
                 }
                 priority_msg = f" (priorizando {priority_labels.get(criteria['selected_priority'], '')})"
             assistant_content = f"Encontré {total_found} propiedades que coinciden con tu búsqueda{priority_msg}."
+    elif search_response.get('mensaje_usuario'):
+        assistant_content = search_response['mensaje_usuario']
     else:
         assistant_content = "No encontré propiedades que coincidan exactamente. Intenta con criterios más amplios."
 

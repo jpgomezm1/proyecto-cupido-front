@@ -378,10 +378,15 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None,
     """
     limit = max(1, min(int(limit or 10), 50))
     offset = max(0, int(offset or 0))
-    agent = _get_search_agent()
     # El buscador rankea desde el inicio: se piden offset+limit y se recorta la
     # página pedida (la extracción de criterios es la misma para ambas).
-    resp = agent.search(query=query, limit=offset + limit, sender=telefono) or {}
+    from src.services import busqueda as busqueda_v3
+    if busqueda_v3.activo():
+        resp = busqueda_v3.buscar_compat(query, limite=offset + limit)
+        if not resp.get("success", True):
+            raise RuntimeError("El buscador con IA no está disponible en este momento; intenta de nuevo.")
+    else:
+        resp = _get_search_agent().search(query=query, limit=offset + limit, sender=telefono) or {}
 
     # PropertySearchAgent.search devuelve las filas bajo la clave 'results'
     # (con 'total_found' y 'criteria'). Antes se leía 'resultados'/'properties'
@@ -419,6 +424,8 @@ def search(query: str, limit: int = 10, telefono: Optional[str] = None,
             "link_compartir": build_share_link(r.get("id"), r.get("titulo") or r.get("title"), agente_id),
             **frescura(validaciones.get(r.get("id"))),
             "score": r.get("match_score") or r.get("alignment_score"),
+            "por_que": r.get("match_reasons") or [],
+            **({"no_cumple": r["no_cumple"]} if r.get("no_cumple") else {}),
         })
 
     return {

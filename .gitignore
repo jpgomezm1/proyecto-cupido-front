@@ -214,3 +214,6 @@ yarn.lock
 run_migration.py
 scripts/run_migration_*.py
 scripts/delete_*.py
+
+# Set de prueba del buscador: pedidos reales (pueden traer datos personales)
+evals/search/data/
