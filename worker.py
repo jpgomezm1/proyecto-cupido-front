@@ -91,6 +91,25 @@ if __name__ == '__main__':
         sched_fichas.start()
         print("[WORKER] Fichas del buscador programadas (cada 30 min)")
 
+    # Alertas de cruce: inmuebles nuevos y cambios de precio contra los clientes de
+    # cada agente (sin IA: SQL y el puntaje del buscador), y su resumen por correo.
+    if os.getenv('ALERTAS_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services import alertas_service
+
+        def _alertas():
+            try:
+                print(f"[ALERTAS] {alertas_service.generar()}")
+                print(f"[ALERTAS] correo {alertas_service.enviar_resumenes()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                print(f"[ALERTAS] Error: {e}")
+
+        sched_alertas = BackgroundScheduler()
+        sched_alertas.add_job(_alertas, 'interval', minutes=30, id='alertas',
+                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_alertas.start()
+        print("[WORKER] Alertas de cruce programadas (cada 30 min)")
+
     # Correos de recordatorio del plan (por vencer / vencido), idempotentes.
     if os.getenv('CORREOS_RECORDATORIO_ENABLED', 'true').lower() == 'true':
         from apscheduler.schedulers.background import BackgroundScheduler

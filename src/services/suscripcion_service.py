@@ -198,8 +198,9 @@ def _reembolsos_este_mes(cur, user_id: int) -> int:
 
 
 def planes_activos(cur) -> List[Dict[str, Any]]:
+    """Planes a la venta. `tipo`: 'suscripcion' (mensual) o 'paquete' (llaves sueltas que no vencen)."""
     return fetch_all(cur, """
-        SELECT codigo, nombre, precio_cop, desbloqueos_mes
+        SELECT codigo, nombre, precio_cop, desbloqueos_mes, tipo
         FROM planes WHERE activo AND codigo <> 'prueba' ORDER BY orden
     """)
 
@@ -459,7 +460,13 @@ def desbloquear(user_id: int, tipo: str, ref, canal: str = "mcp") -> Dict[str, A
             return _error("no_disponible",
                           "Verifiqué el inmueble y ya no está publicado. No se cobra; "
                           "lo marqué como no disponible.")
-        disponibilidad = {"estado": disp.get("estado"), "verificado_en": disp.get("verificado_en")}
+        if disp.get("de_red"):
+            # El portal de origen no respondió ni al reintento: no se cobra sin saber si existe.
+            return _error("verificacion_pendiente",
+                          "No pude confirmar en el portal de origen que el inmueble siga publicado "
+                          "(no responde). No se usó ninguna llave; inténtalo de nuevo en unos minutos.")
+        disponibilidad = {"estado": disp.get("estado"), "verificado_en": disp.get("verificado_en"),
+                          "cambio_precio": disp.get("cambio_precio")}
 
     # 3) Cobro: transacción corta con lock por usuario.
     with get_db() as db:
@@ -717,7 +724,7 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     """`activar_plan` dentro de una transacción del caller (no hace commit).
     `precio_cop` registra lo realmente pagado (si no, el precio del plan hoy)."""
     plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND activo", (plan_codigo,))
-    if not plan or plan_codigo == "prueba":
+    if not plan or plan_codigo == "prueba" or plan.get("tipo") == "paquete":
         raise SuscripcionError(f"Plan inválido: {plan_codigo}")
     if not _usuario(cur, user_id):
         raise SuscripcionError(f"Usuario {user_id} no existe")
@@ -741,6 +748,20 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     return {"ok": True, "suscripcion_id": row["id"], "plan": plan_codigo,
             "inicio": row["inicio"].isoformat(), "fin": row["fin"].isoformat(),
             "gracia_hasta": row["gracia_hasta"].isoformat()}
+
+
+def abonar_paquete_en(cur, user_id: int, plan_codigo: str, referencia_pago: str,
+                      admin: Optional[str] = None) -> Dict[str, Any]:
+    """Llaves sueltas compradas (plan de tipo 'paquete'): se suman al saldo y no vencen.
+    Dentro de la transacción del caller (no hace commit)."""
+    plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s", (plan_codigo,))
+    if not plan or plan.get("tipo") != "paquete" or not plan["desbloqueos_mes"]:
+        raise SuscripcionError(f"Paquete inválido: {plan_codigo}")
+    cur.execute("""
+        INSERT INTO creditos_movimientos (user_id, tipo, cantidad, referencia, creado_por)
+        VALUES (%s, 'extra', %s, %s, %s) RETURNING id
+    """, (user_id, plan["desbloqueos_mes"], referencia_pago, admin))
+    return {"ok": True, "movimiento_id": cur.fetchone()["id"], "llaves": plan["desbloqueos_mes"]}
 
 
 def cancelar_suscripcion(suscripcion_id: int) -> Dict[str, Any]:

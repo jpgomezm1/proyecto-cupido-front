@@ -99,3 +99,39 @@ def test_tamano_lote():
     # …sin pasar del tope, y nunca baja del ritmo normal.
     assert d.tamano_lote(7000, 7, 30, atrasadas=20000) == 60
     assert d.tamano_lote(7000, 7, 30, atrasadas=100) == 21
+
+
+# ── precio publicado en el portal ──────────────────────────────────────────
+
+def test_precio_wasi():
+    from src.services.disponibilidad_service import leer_precio
+    html = '<div><p class="pr1 dark">$ 800.000.000</p></div>'
+    assert leer_precio("wasi", html) == 800000000
+
+
+def test_precio_lobbie():
+    from src.services.disponibilidad_service import leer_precio
+    html = '<p class="share-hero-overlay__price">COP 930.000.000</p>'
+    assert leer_precio("lobbie", html) == 930000000
+
+
+def test_precio_pulppo():
+    import json
+    from src.services.disponibilidad_service import leer_precio
+    datos = {"props": {"pageProps": {"property": {"listing": {"price": {"currency": "COP", "price": 576000000}}}}}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(datos)}</script>'
+    assert leer_precio("pulppo", html) == 576000000
+
+
+def test_precio_pulppo_en_dolares_no_se_aplica():
+    import json
+    from src.services.disponibilidad_service import leer_precio
+    datos = {"props": {"pageProps": {"property": {"listing": {"price": {"currency": "USD", "price": 150000}}}}}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(datos)}</script>'
+    assert leer_precio("pulppo", html) is None
+
+
+def test_precio_irreconocible_es_none():
+    from src.services.disponibilidad_service import leer_precio
+    assert leer_precio("wasi", "<html>sin precio</html>") is None
+    assert leer_precio("generico", "<p class='pr1'>$1</p>") is None

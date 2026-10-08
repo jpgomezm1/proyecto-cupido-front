@@ -54,6 +54,17 @@ def get_db():
     return db
 
 
+def _con_cambios_precio(props):
+    """`precio_anterior` / `precio_cambio_at` si el precio cambió en los últimos 30 días."""
+    try:
+        from src.services.busqueda import cambios_de_precio
+        cambios = cambios_de_precio([int(p['id']) for p in props if p.get('id')])
+    except Exception:  # noqa: BLE001 — sin la migración 052 el catálogo sale igual
+        return
+    for p in props:
+        p.update(cambios.get(int(p['id']) if p.get('id') else -1, {}))
+
+
 @api_bp.route('/properties', methods=['GET'])
 def get_properties():
     """
@@ -406,6 +417,7 @@ def get_properties():
 
         page = (offset // limit) + 1 if limit > 0 else 1
 
+        _con_cambios_precio(properties_list)
         return jsonify({
             'success': True,
             'data': _salida(properties_list),
@@ -555,6 +567,7 @@ def get_property_by_slug(slug: str):
         prop_id = str(prop_dict.get('id', ''))
         prop_dict['shareable_slug'] = f"{prop_id}-{title_slug}" if title_slug else prop_id
 
+        _con_cambios_precio([prop_dict])
         return jsonify({
             'success': True,
             'data': _salida([prop_dict])[0]
@@ -1951,6 +1964,7 @@ def get_similar_properties(slug: str):
             }
             properties_list.append(prop_dict)
 
+        _con_cambios_precio(properties_list)
         return jsonify({
             'success': True,
             'data': _salida(properties_list),

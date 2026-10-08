@@ -85,6 +85,11 @@ class Veredicto:
     motivo: str
     status: Optional[int]
     portal: str
+    precio: Optional[int] = None   # precio que muestra hoy el portal (si se pudo leer)
+
+
+# Motivos de "incierto" que vienen de la red, no de la página: vale la pena reintentar.
+MOTIVOS_DE_RED = ("timeout", "error_de_conexion")
 
 
 def build_session() -> requests.Session:
@@ -168,6 +173,37 @@ def _generico(status: int, final_url: str, html: str) -> Tuple[str, str]:
 _DETECTORES = {"wasi": _wasi, "lobbie": _lobbie, "pulppo": _pulppo, "generico": _generico}
 
 
+# ── Precio publicado hoy en el portal ──────────────────────────────────────
+
+def _entero(texto: Optional[str]) -> Optional[int]:
+    digitos = re.sub(r"[^\d]", "", texto or "")
+    return int(digitos) if digitos else None
+
+
+def leer_precio(portal: str, html: str) -> Optional[int]:
+    """Precio de venta que muestra la ficha. None si no se reconoce (nunca adivina)."""
+    try:
+        if portal == "wasi":
+            m = re.search(r'<p[^>]*class="[^"]*\bpr1\b[^"]*"[^>]*>(.*?)</p>', html, re.S)
+            return _entero(re.sub(r"<[^>]+>", "", m.group(1))) if m else None
+        if portal == "lobbie":
+            m = re.search(r'class="[^"]*share-hero-overlay__price[^"]*"[^>]*>(.*?)<', html, re.S)
+            return _entero(m.group(1)) if m else None
+        if portal == "pulppo":
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+            if not m:
+                return None
+            listing = (json.loads(m.group(1)).get("props", {}).get("pageProps", {})
+                       .get("property") or {}).get("listing") or {}
+            precio = (listing.get("price") or {}).get("price") if isinstance(listing.get("price"), dict) else None
+            if (listing.get("price") or {}).get("currency", "COP") != "COP":
+                return None
+            return int(precio) if precio else None
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return None
+
+
 def diagnosticar(session, url: Optional[str]) -> Veredicto:
     """Visita el link original y decide si el inmueble sigue publicado."""
     portal = portal_de(url)
@@ -193,7 +229,8 @@ def diagnosticar(session, url: Optional[str]) -> Veredicto:
     if status >= 400:
         return Veredicto(INCIERTO, f"http_{status}", status, portal)
     veredicto, motivo = _DETECTORES[portal](status, r.url, r.text)
-    return Veredicto(veredicto, motivo, status, portal)
+    precio = leer_precio(portal, r.text) if veredicto == VIVO else None
+    return Veredicto(veredicto, motivo, status, portal, precio)
 
 
 def check_url(session, url, fuente=None) -> Tuple[bool, str, Optional[int]]:
@@ -256,7 +293,45 @@ def _persistir(cur, propiedad_id: int, v: Veredicto, origen: str) -> Optional[st
             (propiedad_id, veredicto, motivo, status_code, portal, origen, cambio)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (propiedad_id, v.veredicto, v.motivo, v.status, v.portal, origen, cambio))
+    if v.veredicto == VIVO and v.precio:
+        _registrar_precio(cur, propiedad_id, v.precio, origen)
     return cambio
+
+
+def _registrar_precio(cur, propiedad_id: int, precio_web: int, origen: str) -> Optional[Dict[str, Any]]:
+    """
+    Si el portal muestra otro precio, lo registra en `cambios_precio` y lo aplica.
+    No se aplica (pero queda registrado) si el dueño editó el precio en Fynder o
+    si el salto es absurdo (menos de la mitad o más del doble: casi siempre un
+    error de digitación en el portal).
+    """
+    fila = fetch_one(cur, "SELECT precio, campos_editados FROM propiedades WHERE id = %s", (propiedad_id,))
+    if not fila or not fila["precio"]:
+        return None
+    actual = int(fila["precio"])
+    if actual == precio_web:
+        return None
+    ya = fetch_one(cur, """
+        SELECT 1 FROM cambios_precio
+        WHERE propiedad_id = %s AND precio_nuevo = %s AND NOT aplicado AND created_at > NOW() - INTERVAL '30 days'
+    """, (propiedad_id, precio_web))
+    if ya:
+        return None  # ya sabemos que este precio no se aplica; no repetir el registro
+    motivo = None
+    if "precio" in (fila["campos_editados"] or []):
+        motivo = "editado_por_agente"
+    elif not (0.5 <= precio_web / actual <= 2.0):
+        motivo = "sospechoso"
+    cur.execute("""
+        INSERT INTO cambios_precio (propiedad_id, precio_anterior, precio_nuevo, aplicado, motivo, origen)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (propiedad_id, actual, precio_web, motivo is None, motivo, origen))
+    if motivo is None:
+        texto = "$" + f"{precio_web:,.0f}".replace(",", ".")
+        cur.execute("""
+            UPDATE propiedades SET precio = %s, precio_texto = %s, fecha_actualizacion = NOW() WHERE id = %s
+        """, (precio_web, texto, propiedad_id))
+    return {"precio_anterior": actual, "precio_nuevo": precio_web, "aplicado": motivo is None}
 
 
 def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str = "on_demand") -> Dict[str, Any]:
@@ -276,19 +351,31 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str 
     if not prop:
         return {"error": f"Propiedad {propiedad_id} no encontrada"}
 
-    v = diagnosticar(build_session(), prop["url"])
+    sesion = build_session()
+    v = diagnosticar(sesion, prop["url"])
+    if v.veredicto == INCIERTO and (v.motivo in MOTIVOS_DE_RED or (v.status or 0) >= 500):
+        v = diagnosticar(sesion, prop["url"])  # un reintento: el portal a veces tarda
 
+    precio_antes = None
     if actualizar:
         with get_db() as db:
+            antes = fetch_one(db.cursor, "SELECT precio FROM propiedades WHERE id = %s", (prop["id"],))
+            precio_antes = int(antes["precio"]) if antes and antes["precio"] else None
             _persistir(db.cursor, prop["id"], v, origen)
             db.conn.commit()
 
+    cambio_precio = None
+    if v.precio and precio_antes and v.precio != precio_antes:
+        cambio_precio = {"precio_anterior": precio_antes, "precio_nuevo": v.precio}
     return {
         "propiedad_id": prop["id"],
         "activo": v.veredicto != MUERTO,
         "estado": _estado(v),
         "status_code": v.status,
         "motivo": v.motivo,
+        "de_red": v.veredicto == INCIERTO and (v.motivo in MOTIVOS_DE_RED or (v.status or 0) >= 500),
+        "precio_portal": v.precio,
+        "cambio_precio": cambio_precio,
         "verificado_en": datetime.now(timezone.utc).isoformat(),
     }
 

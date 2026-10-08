@@ -31,7 +31,7 @@ from urllib.parse import urlencode
 import requests
 
 from src.services import correo_service, suscripcion_service
-from src.services.db import get_db, fetch_one, fetch_all
+from src.services.db import get_db, fetch_one, fetch_all, scalar
 
 CHECKOUT_URL = "https://checkout.wompi.co/p/"
 _API = {"sandbox": "https://sandbox.wompi.co/v1", "production": "https://production.wompi.co/v1"}
@@ -96,6 +96,7 @@ def _salida(pago: Dict[str, Any]) -> Dict[str, Any]:
         "metodo": pago.get("metodo"),
         "creado": pago["created_at"].isoformat() if pago.get("created_at") else None,
         "llaves": pago.get("llaves"),
+        "tipo": pago.get("tipo") or "suscripcion",
         "vence": pago["vence"].isoformat() if pago.get("vence") else None,
     }
 
@@ -189,18 +190,24 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
             print(f"⚠️ Pago {referencia}: monto {tx.get('amount_in_cents')} ≠ esperado {esperado}")
             return {"ok": False, "error": "monto_no_coincide", "estado": "error"}
 
-        suscripcion_id = None
+        suscripcion_id = movimiento_id = None
         if nuevo == "aprobado":
-            res = suscripcion_service.activar_plan_en(
-                cur, pago["user_id"], pago["plan_codigo"], referencia_pago=referencia,
-                notas=f"Wompi {tx.get('payment_method_type') or ''} {tx.get('id') or ''}".strip(),
-                admin="wompi", precio_cop=pago["monto_cop"])
-            suscripcion_id = res["suscripcion_id"]
+            tipo = scalar(cur, "SELECT tipo FROM planes WHERE codigo = %s", (pago["plan_codigo"],))
+            if tipo == "paquete":
+                movimiento_id = suscripcion_service.abonar_paquete_en(
+                    cur, pago["user_id"], pago["plan_codigo"], referencia, admin="wompi")["movimiento_id"]
+            else:
+                res = suscripcion_service.activar_plan_en(
+                    cur, pago["user_id"], pago["plan_codigo"], referencia_pago=referencia,
+                    notas=f"Wompi {tx.get('payment_method_type') or ''} {tx.get('id') or ''}".strip(),
+                    admin="wompi", precio_cop=pago["monto_cop"])
+                suscripcion_id = res["suscripcion_id"]
         cur.execute("""
             UPDATE pagos SET estado = %s, transaccion_id = %s, metodo = %s,
-                   suscripcion_id = %s, detalle = %s, updated_at = NOW()
+                   suscripcion_id = %s, movimiento_id = %s, detalle = %s, updated_at = NOW()
             WHERE id = %s
-        """, (nuevo, tx.get("id"), tx.get("payment_method_type"), suscripcion_id, detalle, pago["id"]))
+        """, (nuevo, tx.get("id"), tx.get("payment_method_type"), suscripcion_id, movimiento_id,
+              detalle, pago["id"]))
         db.conn.commit()
     print(f"💳 Pago {referencia} → {nuevo} ({fuente})")
     if nuevo in ("aprobado", "rechazado"):
@@ -213,7 +220,7 @@ def _notificar(referencia: str, estado: str) -> None:
     try:
         with get_db() as db:
             fila = fetch_one(db.cursor, """
-                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence,
+                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, p.tipo AS tipo, s.fin AS vence,
                        u.nombre AS usuario_nombre, u.email AS usuario_email
                 FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
                 LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
@@ -293,7 +300,7 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
     """Estado de un pago del usuario; si sigue pendiente, se lo pregunta a Wompi."""
     with get_db() as db:
         pago = fetch_one(db.cursor, """
-            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, p.tipo AS tipo, s.fin AS vence
             FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
             LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
             WHERE pg.referencia = %s AND pg.user_id = %s
@@ -312,7 +319,7 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
             print(f"⚠️ No se pudo consultar Wompi para {referencia}: {e}")
         with get_db() as db:
             pago = fetch_one(db.cursor, """
-                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+                SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, p.tipo AS tipo, s.fin AS vence
             FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
             LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
                 WHERE pg.referencia = %s
@@ -323,7 +330,7 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
 def historial(user_id: int, limit: int = 12) -> list:
     with get_db() as db:
         filas = fetch_all(db.cursor, """
-            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, s.fin AS vence
+            SELECT pg.*, p.nombre AS plan_nombre, p.desbloqueos_mes AS llaves, p.tipo AS tipo, s.fin AS vence
             FROM pagos pg JOIN planes p ON p.codigo = pg.plan_codigo
             LEFT JOIN suscripciones s ON s.id = pg.suscripcion_id
             WHERE pg.user_id = %s AND pg.estado <> 'pendiente'

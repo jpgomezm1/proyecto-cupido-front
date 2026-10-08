@@ -42,6 +42,49 @@ conversations_bp = Blueprint('conversations', __name__, url_prefix='/api/convers
 _search_agent = None
 
 
+def _cliente_propio(db, user_id, cliente_id) -> bool:
+    try:
+        db.cursor.execute("SELECT 1 FROM clientes_agente WHERE id = %s AND user_id = %s", (int(cliente_id), user_id))
+        return db.cursor.fetchone() is not None
+    except (TypeError, ValueError):
+        return False
+
+
+def _con_clientes(db, conversaciones):
+    """Agrega `cliente: {id, nombre} | None` a cada conversación (sin la migración 052, None)."""
+    for c in conversaciones:
+        c['cliente'] = None
+    ids = [c['id'] for c in conversaciones if c.get('id')]
+    if not ids:
+        return
+    try:
+        db.cursor.execute("""
+            SELECT cb.id, cl.id AS cliente_id, cl.nombre AS cliente_nombre
+            FROM conversaciones_busqueda cb JOIN clientes_agente cl ON cl.id = cb.cliente_id
+            WHERE cb.id = ANY(%s)
+        """, (ids,))
+        por_conv = {r['id']: {'id': r['cliente_id'], 'nombre': r['cliente_nombre']} for r in db.cursor.fetchall()}
+    except Exception:  # noqa: BLE001
+        db.conn.rollback()
+        return
+    for c in conversaciones:
+        c['cliente'] = por_conv.get(c.get('id'))
+
+
+def _perfil_del_cliente(db, conversation_id):
+    """El perfil del cliente de la conversación: el punto de partida de su primera búsqueda."""
+    try:
+        db.cursor.execute("""
+            SELECT cl.perfil FROM conversaciones_busqueda cb
+            JOIN clientes_agente cl ON cl.id = cb.cliente_id WHERE cb.id = %s
+        """, (conversation_id,))
+        row = db.cursor.fetchone()
+        return (row['perfil'] or None) if row else None
+    except Exception:  # noqa: BLE001
+        db.conn.rollback()
+        return None
+
+
 def get_search_agent():
     """Obtiene o crea la instancia del agente de búsqueda"""
     global _search_agent
@@ -122,6 +165,8 @@ def list_conversations():
                     }
                 conversations.append(conv)
 
+            _con_clientes(db, conversations)
+
             # Obtener total del usuario
             db.cursor.execute(
                 "SELECT COUNT(*) as count FROM conversaciones_busqueda WHERE activa = TRUE AND user_id = %s",
@@ -169,14 +214,23 @@ def create_conversation():
         data = request.get_json() or {}
         nombre = data.get('nombre', 'Nueva Conversación')
         user_id = request.chat_user['id']
+        cliente_id = data.get('cliente_id')
 
         with DatabaseManager() as db:
-            query = """
-                INSERT INTO conversaciones_busqueda (nombre, user_id)
-                VALUES (%s, %s)
-                RETURNING id, nombre, fecha_creacion
-            """
-            db.cursor.execute(query, (nombre, user_id))
+            if cliente_id and not _cliente_propio(db, user_id, cliente_id):
+                return jsonify({'success': False, 'error': 'Ese cliente no existe'}), 404
+            if cliente_id:
+                db.cursor.execute("""
+                    INSERT INTO conversaciones_busqueda (nombre, user_id, cliente_id)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, nombre, fecha_creacion
+                """, (nombre, user_id, int(cliente_id)))
+            else:
+                db.cursor.execute("""
+                    INSERT INTO conversaciones_busqueda (nombre, user_id)
+                    VALUES (%s, %s)
+                    RETURNING id, nombre, fecha_creacion
+                """, (nombre, user_id))
             row = db.cursor.fetchone()
 
             # Registrar en log de uso
@@ -199,6 +253,7 @@ def create_conversation():
                     'fecha_creacion': row[2].isoformat() if row[2] else None
                 }
 
+            _con_clientes(db, [conversation])
             return jsonify({
                 'success': True,
                 'data': conversation
@@ -279,6 +334,8 @@ def get_conversation(conversation_id):
                     'fecha_creacion': conv_row[4].isoformat() if conv_row[4] else None,
                     'fecha_actualizacion': conv_row[5].isoformat() if conv_row[5] else None
                 }
+
+            _con_clientes(db, [conversation])
 
             # Obtener mensajes
             query_msgs = """
@@ -492,20 +549,38 @@ def update_conversation(conversation_id):
     """
     try:
         data = request.get_json()
-        if not data or 'nombre' not in data:
+        if not data or ('nombre' not in data and 'cliente_id' not in data):
             return jsonify({
                 'success': False,
-                'error': 'Se requiere el campo "nombre"'
+                'error': 'Se requiere el campo "nombre" o "cliente_id"'
             }), 400
 
-        nombre = data['nombre'].strip()
+        user_id = request.chat_user['id']
+
+        if 'cliente_id' in data:
+            cliente_id = data.get('cliente_id')
+            with DatabaseManager() as db:
+                if cliente_id and not _cliente_propio(db, user_id, cliente_id):
+                    return jsonify({'success': False, 'error': 'Ese cliente no existe'}), 404
+                db.cursor.execute("""
+                    UPDATE conversaciones_busqueda SET cliente_id = %s, fecha_actualizacion = NOW()
+                    WHERE id = %s AND activa = TRUE AND user_id = %s RETURNING id, nombre
+                """, (int(cliente_id) if cliente_id else None, conversation_id, user_id))
+                row = db.cursor.fetchone()
+                db.conn.commit()
+                if not row:
+                    return jsonify({'success': False, 'error': 'Conversación no encontrada'}), 404
+                conv = {'id': row['id'], 'nombre': row['nombre']}
+                _con_clientes(db, [conv])
+            if 'nombre' not in data:
+                return jsonify({'success': True, 'data': conv})
+
+        nombre = (data.get('nombre') or '').strip()
         if not nombre:
             return jsonify({
                 'success': False,
                 'error': 'El nombre no puede estar vacío'
             }), 400
-
-        user_id = request.chat_user['id']
 
         with DatabaseManager() as db:
             query = """
@@ -1376,7 +1451,8 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
 def _execute_search_v3(db, conversation_id, user_id, user_message, criteria,
                        conv_nombre, total_mensajes, original_content):
     start_time = datetime.now()
-    search_response = busqueda_v3.buscar_compat(original_content, previo=(criteria or {}).get('pedido_v3'))
+    previo = (criteria or {}).get('pedido_v3') or _perfil_del_cliente(db, conversation_id)
+    search_response = busqueda_v3.buscar_compat(original_content, previo=previo)
     elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
     accumulated_criteria = search_response.get('criteria') or {}
     print(f"🔍 [SEARCH-V3] {search_response.get('total_found', 0)} resultados, "

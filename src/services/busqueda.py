@@ -359,9 +359,14 @@ _FAMILIA = {
 }
 
 
-def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]]) -> List[Dict[str, Any]]:
+def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]],
+                ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+    """`ids`: limita la búsqueda a esos inmuebles (lo usan las alertas de cruce)."""
     cond = ["p.activa", "p.precio IS NOT NULL"]
     params: List[Any] = []
+    if ids is not None:
+        cond.append("p.id = ANY(%s)")
+        params.append(list(ids))
     if ped.get("negocio") == "arriendo":
         cond.append("COALESCE(f.negocio, lower(p.tipo_negocio), 'venta') = 'arriendo'")
     else:
@@ -711,6 +716,62 @@ _COLUMNAS = """id, id::text AS slug, codigo_propiedad, fuente, url, titulo, prec
     imagen_principal, total_imagenes, descripcion, fecha_creacion"""
 
 
+def chips(ped: Dict[str, Any]) -> List[Dict[str, str]]:
+    """El pedido en frases cortas para la interfaz: [{tipo, texto}]."""
+    out: List[Dict[str, str]] = []
+    for t in ped.get("tipos") or []:
+        out.append({"tipo": "tipo", "texto": t.replace("_", " ").capitalize()})
+    for u in ped.get("ubicaciones") or []:
+        out.append({"tipo": "zona", "texto": u.get("nombre", "")})
+    for x in ped.get("ubicaciones_excluidas") or []:
+        out.append({"tipo": "zona", "texto": f"Sin {x}"})
+    for x in ped.get("cerca_de") or []:
+        out.append({"tipo": "zona", "texto": f"Cerca de {x}"})
+    pmin, pmax = ped.get("presupuesto_min"), ped.get("presupuesto_max")
+    if pmin and pmax:
+        out.append({"tipo": "precio", "texto": f"{_millones(pmin)} a {_millones(pmax)}"})
+    elif pmax:
+        out.append({"tipo": "precio", "texto": f"Hasta {_millones(pmax)}"})
+    elif pmin:
+        out.append({"tipo": "precio", "texto": f"Desde {_millones(pmin)}"})
+    for k, et in (("habitaciones_min", "hab"), ("banos_min", "baños"), ("parqueaderos_min", "parq.")):
+        if ped.get(k):
+            out.append({"tipo": "hab", "texto": f"{int(ped[k])}+ {et}"})
+    if ped.get("area_min") or ped.get("area_max"):
+        a0, a1 = ped.get("area_min"), ped.get("area_max")
+        out.append({"tipo": "area", "texto": f"{int(a0)}–{int(a1)} m²" if a0 and a1 else
+                    (f"Desde {int(a0)} m²" if a0 else f"Hasta {int(a1)} m²")})
+    if ped.get("estrato_min"):
+        out.append({"tipo": "otro", "texto": f"Estrato {int(ped['estrato_min'])}+"})
+    for c in ped.get("obligatorias") or []:
+        out.append({"tipo": "obligatoria", "texto": _ETIQUETAS_CARACT.get(c, c)})
+    for d in ped.get("deseables") or []:
+        out.append({"tipo": "deseable", "texto": "Ideal: " + _ETIQUETAS_CARACT.get(d["caracteristica"], d["caracteristica"])})
+    for x in ped.get("otras_preferencias") or []:
+        out.append({"tipo": "otro", "texto": str(x)})
+    return [c for c in out if c["texto"]]
+
+
+def texto_de_pedido(ped: Dict[str, Any]) -> str:
+    """Una frase con el pedido, para el embedding cuando se busca desde un perfil guardado."""
+    return ", ".join(c["texto"] for c in chips(ped)) or "inmueble en venta"
+
+
+def cambios_de_precio(ids: List[int], dias: int = 30) -> Dict[int, Dict[str, Any]]:
+    """Último cambio de precio aplicado en los últimos `dias`: {id: {precio_anterior, precio_cambio_at}}."""
+    if not ids:
+        return {}
+    with get_db() as db:
+        filas = fetch_all(db.cursor, f"""
+            SELECT DISTINCT ON (propiedad_id) propiedad_id, precio_anterior, created_at
+            FROM cambios_precio
+            WHERE propiedad_id = ANY(%s) AND aplicado AND created_at > NOW() - INTERVAL '{int(dias)} days'
+            ORDER BY propiedad_id, created_at DESC
+        """, (list(ids),))
+    return {f["propiedad_id"]: {"precio_anterior": int(f["precio_anterior"]) if f["precio_anterior"] else None,
+                                "precio_cambio_at": f["created_at"].isoformat()} for f in filas}
+
+
 def criterios_legibles(ped: Dict[str, Any]) -> Dict[str, Any]:
     """El pedido v3 en las claves que ya pinta el frontend (chips de criterios)."""
     c = {
@@ -751,6 +812,10 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
             filas = {f["id"]: f for f in fetch_all(
                 db.cursor, f"SELECT {_COLUMNAS} FROM propiedades WHERE id = ANY(%s)", (ids,))}
     resultados = []
+    try:
+        precios = cambios_de_precio(ids)
+    except Exception:  # noqa: BLE001 — sin la migración 052 se busca igual
+        precios = {}
     for x in r["resultados"]:
         f = filas.get(x["id"])
         if not f:
@@ -760,6 +825,7 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
              "habitaciones": f.get("habitaciones") or x.get("habitaciones"),
              "banos": f.get("banos") or x.get("banos"),
              "area_construida": f.get("area_construida") or x.get("area")}
+        f.update(precios.get(x["id"], {}))
         resultados.append({**f, "match_score": x.get("score_final", x["score"]),
                            "match_reasons": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or []})
     scores = [x["match_score"] for x in resultados]

@@ -108,6 +108,14 @@ def get_favorites():
                 }
             })
 
+        try:
+            from src.services.busqueda import cambios_de_precio
+            cambios = cambios_de_precio([f['propiedad']['id'] for f in favorites])
+            for f in favorites:
+                f['propiedad'].update(cambios.get(f['propiedad']['id'], {}))
+        except Exception:  # noqa: BLE001 — sin la migración 052 los favoritos salen igual
+            pass
+
         return jsonify({
             'success': True,
             'data': favorites,

@@ -237,6 +237,8 @@ def bienvenida(nombre: str, email: str, **kw) -> None:
 
 
 def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
+    if pago.get("tipo") == "paquete":
+        return llave_comprada(nombre, email, pago, **kw)
     n = _primer_nombre(nombre)
     plan = pago.get("plan_nombre") or "tu plan"
     llaves = _llaves(pago.get("llaves"))
@@ -259,10 +261,90 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
 
 
+def llave_comprada(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
+    """Compra de llaves sueltas: se suman al saldo y no vencen."""
+    n = _primer_nombre(nombre)
+    llaves = _llaves(pago.get("llaves"))
+    comprobante = (
+        f'<div style="margin:18px 0 22px;padding:18px 20px;border:1px dashed #DAD7CE;border-radius:16px;">'
+        f'<div style="font-family:{FUENTE};font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;'
+        f'color:{SUAVE};margin-bottom:6px;">Comprobante</div>'
+        + _filas([("Compra", _e(llaves)), ("Valor", _e(_pesos(pago.get("monto_cop")))),
+                  ("Medio de pago", _e(METODO.get(pago.get("metodo") or "", pago.get("metodo") or "—"))),
+                  ("Fecha", _e(_fecha(pago.get("creado")))),
+                  ("Referencia", f'<span style="font-family:monospace;font-size:13px;">{_e(pago.get("referencia"))}</span>')])
+        + "</div>"
+    )
+    cuerpo = (
+        _parrafo(f"{_e(n)}, recibimos tu pago: <b>{_e(llaves)}</b> más en tu saldo, listas para abrir "
+                 "un contacto. Las llaves sueltas no vencen.")
+        + comprobante
+        + _parrafo('<span style="color:#6B6B6B;font-size:13px;">Procesado por Wompi (Bancolombia). '
+                   "Fynder no ve ni guarda los datos de tu tarjeta.</span>")
+    )
+    html_ = _layout(preheader=f"{llaves} más en tu saldo. No vencen.", icono="llave", eyebrow="Pago aprobado",
+                    titulo="Tu llave ya está lista", intro=f"Tienes {_e(llaves)} más para abrir contactos.",
+                    cuerpo=cuerpo, cta=("Usar mi llave", f"{_frontend()}/chat/propiedades"))
+    texto = (f"{n}, tu compra está lista: {llaves} más en tu saldo (no vencen).\n"
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/propiedades")
+    enviar(email, "✅ Tu llave ya está lista", html_, texto, "pago_aprobado", **kw)
+
+
+def resumen_alertas(nombre: str, email: str, alertas: List[Dict[str, Any]], **kw) -> None:
+    """Lo nuevo para los clientes del agente y los cambios de precio de lo que guardó."""
+    n = _primer_nombre(nombre)
+    nuevos = [a for a in alertas if a["tipo"] == "nuevo_inmueble"]
+    precios = [a for a in alertas if a["tipo"] != "nuevo_inmueble"]
+
+    def tarjeta(a: Dict[str, Any]) -> str:
+        p = a.get("propiedad") or {}
+        url = f"{_frontend()}/chat/propiedades?p={p.get('slug') or p.get('id')}"
+        foto = (f'<img src="{_e(p["imagen_principal"])}" width="88" height="66" alt="" '
+                f'style="display:block;border:0;border-radius:10px;object-fit:cover;" />') if p.get("imagen_principal") else ""
+        color = "#088650" if a["tipo"] == "baja_precio" else TEXTO
+        return (f'<tr><td width="100" valign="top" style="padding:12px 12px 12px 0;"><a href="{_e(url)}">{foto}</a></td>'
+                f'<td valign="top" style="padding:12px 0;font-family:{FUENTE};border-bottom:1px solid #EEECE6;">'
+                f'<a href="{_e(url)}" style="font-size:15px;font-weight:600;color:{color};text-decoration:none;">{_e(a["titulo"])}</a>'
+                f'<div style="font-size:13px;line-height:1.5;color:{SUAVE};margin-top:3px;">{_e(a["detalle"])}</div>'
+                f'</td></tr>')
+
+    def bloque(titulo: str, items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return ""
+        filas = "".join(tarjeta(a) for a in items[:8])
+        mas = (f'<div style="font-family:{FUENTE};font-size:13px;color:{SUAVE};padding-top:8px;">'
+               f'Y {len(items) - 8} más en la app.</div>') if len(items) > 8 else ""
+        return (f'<div style="font-family:{FUENTE};font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;'
+                f'color:{SUAVE};margin:18px 0 4px;">{_e(titulo)}</div>'
+                f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{filas}</table>{mas}')
+
+    clientes = sorted({a["cliente"]["nombre"] for a in nuevos if a.get("cliente")})
+    para = (", ".join(clientes[:3]) + (" y otros" if len(clientes) > 3 else "")) if clientes else ""
+    if nuevos:
+        intro = f"Entraron {len(nuevos)} {'inmueble' if len(nuevos) == 1 else 'inmuebles'} para {_e(para)}."
+    else:
+        intro = f"{len(precios)} {'cambio' if len(precios) == 1 else 'cambios'} de precio en lo que guardaste."
+    cuerpo = (_parrafo(f"{_e(n)}, esto es lo nuevo desde tu último resumen.")
+              + bloque("Para tus clientes", nuevos) + bloque("Cambios de precio", precios)
+              + _parrafo('<span style="color:#6B6B6B;font-size:12px;">Puedes apagar estos correos en Mi cuenta → Perfil.</span>'))
+    html_ = _layout(preheader=intro, icono="findy-busca", eyebrow="Alertas de Fynder",
+                    titulo="Novedades para tus clientes" if nuevos else "Cambios de precio",
+                    intro=intro, cuerpo=cuerpo, cta=("Verlas en Fynder", f"{_frontend()}/chat/clientes"))
+    lineas = [f"- {a['titulo']} ({a['detalle']})" for a in alertas[:16]]
+    texto = f"{n}, esto es lo nuevo en Fynder:\n\n" + "\n".join(lineas) + f"\n\n{_frontend()}/chat/clientes"
+    if nuevos:
+        asunto = f"🏠 {len(nuevos)} {'opción nueva' if len(nuevos) == 1 else 'opciones nuevas'} para tus clientes"
+    else:
+        asunto = f"💲 {len(precios)} {'cambio' if len(precios) == 1 else 'cambios'} de precio en lo que guardaste"
+    enviar(email, asunto, html_, texto, "resumen_alertas", **kw)
+
+
 def pago_rechazado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     n = _primer_nombre(nombre)
     plan = pago.get("plan_nombre") or "tu plan"
-    cuerpo = _parrafo(f"{_e(n)}, el pago del plan <b>{_e(plan)}</b> por {_e(_pesos(pago.get('monto_cop')))} no se completó "
+    if pago.get("tipo") == "paquete":
+        plan = "Llave suelta"
+    cuerpo = _parrafo(f"{_e(n)}, el pago de <b>{_e(plan)}</b> por {_e(_pesos(pago.get('monto_cop')))} no se completó "
                       "y <b>no se te cobró nada</b>. Suele pasar por fondos o cupo, o porque el banco pidió una confirmación.") + \
         _pasos([("findy-piensa", "Prueba otro medio", "PSE, Nequi, otra tarjeta o el botón Bancolombia."),
                 ("renovacion", "Confirma en tu banco", "Algunos bancos piden autorizar compras en línea.")])
@@ -270,9 +352,9 @@ def pago_rechazado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
                     icono="findy-piensa", eyebrow="Pago no completado", titulo="No se pudo completar tu pago",
                     intro="No se te cobró nada.", acento=CORAL, cuerpo=cuerpo,
                     cta=("Intentar de nuevo", f"{_frontend()}/chat/cuenta/plan#planes"))
-    texto = (f"{n}, el pago del plan {plan} no se completó y no se te cobró nada.\n"
+    texto = (f"{n}, el pago de {plan} no se completó y no se te cobró nada.\n"
              f"Intenta de nuevo: {_frontend()}/chat/cuenta/plan")
-    enviar(email, f"Tu pago del plan {plan} no se completó", html_, texto, "pago_rechazado", **kw)
+    enviar(email, f"Tu pago de {plan} no se completó", html_, texto, "pago_rechazado", **kw)
 
 
 def plan_por_vencer(nombre: str, email: str, plan: str, vence: Any, llaves_restantes: int, **kw) -> None:

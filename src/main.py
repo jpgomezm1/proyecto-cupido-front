@@ -54,6 +54,7 @@ from src.api.registro import registro_bp
 from src.api.cuenta import cuenta_bp
 from src.api.mapa import mapa_bp
 from src.api.logros import logros_bp
+from src.api.clientes import clientes_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -212,6 +213,7 @@ app.register_blueprint(registro_bp)
 app.register_blueprint(cuenta_bp)
 app.register_blueprint(mapa_bp)
 app.register_blueprint(logros_bp)
+app.register_blueprint(clientes_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
