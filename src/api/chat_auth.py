@@ -71,7 +71,19 @@ def user_publico(user) -> dict:
         'correo_personal': user.get('correo_personal'),
         'telefono_verificado': bool(user.get('telefono_verificado')),
         'terminos_aceptados_at': terminos.isoformat() if terminos else None,
+        'alertas_correo': _alertas_correo(user['id']),
     }
+
+
+def _alertas_correo(user_id) -> bool:
+    """Preferencia de alertas por correo (True si aún no existe la columna: migración 052)."""
+    try:
+        from src.services.db import get_db, scalar
+        with get_db() as db:
+            v = scalar(db.cursor, "SELECT alertas_correo FROM chat_users WHERE id = %s", (user_id,))
+        return True if v is None else bool(v)
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def require_chat_auth(f):

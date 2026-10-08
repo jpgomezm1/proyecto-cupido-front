@@ -112,3 +112,17 @@ ALTER TABLE chat_users
     ADD COLUMN IF NOT EXISTS foto_url TEXT,
     ADD COLUMN IF NOT EXISTS marca_nombre VARCHAR(80);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_users_pagina_slug ON chat_users(LOWER(pagina_slug)) WHERE pagina_slug IS NOT NULL;
+
+-- Fotos mejoradas con IA (cupo mensual por agente).
+CREATE TABLE IF NOT EXISTS fotos_mejoradas (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
+    propiedad_id INTEGER NOT NULL REFERENCES propiedades(id) ON DELETE CASCADE,
+    url_original TEXT NOT NULL,
+    url_mejorada TEXT,
+    aplicada BOOLEAN NOT NULL DEFAULT FALSE,
+    modelo VARCHAR(40),
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fotos_mejoradas_user ON fotos_mejoradas(user_id, created_at DESC);

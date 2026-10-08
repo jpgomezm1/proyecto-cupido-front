@@ -102,7 +102,7 @@ def _salida(c: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": c["id"], "nombre": c["nombre"], "telefono": c.get("telefono"),
         "proposito": c.get("proposito"), "plazo": c.get("plazo"), "estado": c["estado"],
-        "alertas": bool(c.get("alertas")), "notas": c.get("notas"),
+        "alertas": bool(c.get("alertas")), "alertas_activas": bool(c.get("alertas")), "notas": c.get("notas"),
         "perfil": perfil, "chips": busqueda.chips(perfil),
         "n_busquedas": int(c.get("n_busquedas") or 0), "n_inmuebles": int(c.get("n_inmuebles") or 0),
         "alertas_nuevas": int(c.get("alertas_nuevas") or 0),
