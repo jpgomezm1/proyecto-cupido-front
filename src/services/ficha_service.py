@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional
@@ -428,9 +429,20 @@ def enriquecer(limite: int = 200, hilos: int = 6, con_ia: bool = True) -> Dict[s
     with ThreadPoolExecutor(hilos) as pool:
         fichas = list(pool.map(uno, props))
     ok = [f for f in fichas if f]
-    with get_db() as db:
-        for f in ok:
-            guardar(db.cursor, f)
-        db.conn.commit()
+    # Neon a veces corta la conexión a mitad del lote: se reintenta una vez con
+    # otra conexión para no perder las llamadas de IA ya pagadas.
+    import psycopg2
+    for intento in (1, 2):
+        try:
+            with get_db() as db:
+                for f in ok:
+                    guardar(db.cursor, f)
+                db.conn.commit()
+            break
+        except psycopg2.OperationalError as e:
+            if intento == 2:
+                raise
+            print(f"[FICHA] conexión perdida al guardar, reintento: {str(e)[:80]}")
+            time.sleep(3)
     return {"procesadas": len(ok), "errores": len(props) - len(ok),
             "con_ia": sum(1 for f in ok if f["modelo"] != "reglas")}
