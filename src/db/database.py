@@ -14,6 +14,13 @@ from datetime import datetime
 # Cargar variables de entorno
 load_dotenv()
 
+# Neon a veces corta conexiones sin avisar: sin keepalive, una consulta sobre una
+# conexión muerta espera para siempre. Con esto se detecta en ~1 min y falla.
+OPCIONES_CONEXION = {
+    "connect_timeout": 10,
+    "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3,
+}
+
 
 class DatabaseManager:
     """Clase para manejar la conexión y operaciones con la base de datos"""
@@ -30,7 +37,7 @@ class DatabaseManager:
     def connect(self):
         """Establece conexión con la base de datos"""
         try:
-            self.conn = psycopg2.connect(self.database_url)
+            self.conn = psycopg2.connect(self.database_url, **OPCIONES_CONEXION)
             self.cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             print("[OK] Conexion a Neon PostgreSQL establecida")
             return True

@@ -23,7 +23,7 @@ import psycopg2
 from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
 
-from src.db.database import DatabaseManager
+from src.db.database import OPCIONES_CONEXION, DatabaseManager
 
 _pool: Optional[pg_pool.ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
@@ -43,7 +43,7 @@ def _get_pool() -> pg_pool.ThreadedConnectionPool:
                 maxconn = int(os.getenv("FYNDER_DB_POOL_MAX", "8"))
                 _pool = pg_pool.ThreadedConnectionPool(
                     minconn=1, maxconn=maxconn, dsn=dsn,
-                    cursor_factory=RealDictCursor,
+                    cursor_factory=RealDictCursor, **OPCIONES_CONEXION,
                 )
     return _pool
 
@@ -83,7 +83,7 @@ def _borrow():
     # Fallback: conexión directa si el pool no da una sana.
     if last_err:
         pass
-    return psycopg2.connect(os.getenv("DATABASE_URL"), cursor_factory=RealDictCursor)
+    return psycopg2.connect(os.getenv("DATABASE_URL"), cursor_factory=RealDictCursor, **OPCIONES_CONEXION)
 
 
 @contextmanager
