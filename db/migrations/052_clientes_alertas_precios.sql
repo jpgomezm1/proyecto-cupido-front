@@ -101,3 +101,14 @@ CREATE TABLE IF NOT EXISTS alertas_cursor (
 INSERT INTO alertas_cursor (clave, valor) VALUES
     ('inmuebles', NOW()), ('precios', NOW())
 ON CONFLICT (clave) DO NOTHING;
+
+-- Página pública del agente (getfynder.com/a/<slug>) y su logo en las piezas.
+ALTER TABLE chat_users
+    ADD COLUMN IF NOT EXISTS pagina_slug VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS pagina_activa BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS pagina_bio TEXT,
+    ADD COLUMN IF NOT EXISTS pagina_zonas TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS logo_url TEXT,
+    ADD COLUMN IF NOT EXISTS foto_url TEXT,
+    ADD COLUMN IF NOT EXISTS marca_nombre VARCHAR(80);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_users_pagina_slug ON chat_users(LOWER(pagina_slug)) WHERE pagina_slug IS NOT NULL;
