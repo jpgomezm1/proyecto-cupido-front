@@ -316,12 +316,13 @@ def _diagnosticar_fila(prop: Dict[str, Any]) -> Tuple[int, Veredicto]:
     return prop["id"], diagnosticar(build_session(), prop["url"])
 
 
-def revalidar_lote(n: Optional[int] = None, hilos: int = 4) -> Dict[str, Any]:
+def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[str] = None) -> Dict[str, Any]:
     """
     Revisa las `n` propiedades activas con el intento más viejo (las nunca
     revisadas primero), más un 10 % de las que el validador bajó, por si
     volvieron. Si `n` es None, lo calcula para recorrer todo el inventario
-    activo en REVALIDACION_DIAS_OBJETIVO días.
+    activo en REVALIDACION_DIAS_OBJETIVO días. `url_regex` limita el lote a un
+    portal (p. ej. después de arreglar su detector).
 
     Devuelve {revisadas, desactivadas, reactivadas, inciertas} o {omitido: True}
     si otra instancia ya está corriendo.
@@ -340,17 +341,19 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4) -> Dict[str, Any]:
             props: List[Dict[str, Any]] = fetch_all(db.cursor, f"""
                 SELECT id, url FROM propiedades
                 WHERE activa AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
+                  AND url ~* %s
                 ORDER BY fecha_ultimo_intento NULLS FIRST, id
                 LIMIT %s
-            """, (n,))
+            """, (url_regex or ".", n))
             props += fetch_all(db.cursor, f"""
                 SELECT id, url FROM propiedades
                 WHERE NOT activa AND desactivada_por = 'validador'
                   AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
                   AND COALESCE(fecha_ultimo_intento, fecha_ultima_validacion) < NOW() - INTERVAL '7 days'
+                  AND url ~* %s
                 ORDER BY COALESCE(fecha_ultimo_intento, fecha_ultima_validacion), id
                 LIMIT %s
-            """, (max(1, int(n * _FRACCION_RESCATE)),))
+            """, (url_regex or ".", max(1, int(n * _FRACCION_RESCATE))))
             db.conn.commit()
 
             with ThreadPoolExecutor(max_workers=hilos) as pool:

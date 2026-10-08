@@ -22,8 +22,9 @@ Uso:
         viejo o una persona) y que hoy siguen publicados. Sin --aplicar solo los
         lista; con --aplicar los reactiva y deja constancia.
 
-    python scripts/validate_property_urls.py --lote 200
-        Fuerza ya una corrida de revalidación de N inmuebles (escribe).
+    python scripts/validate_property_urls.py --lote 200 [--portal pulppo]
+        Fuerza ya una corrida de revalidación de N inmuebles (escribe). Con
+        --portal, solo los de ese portal (wasi, lobbie, pulppo).
 """
 
 import argparse
@@ -145,6 +146,7 @@ def main() -> None:
     g.add_argument("--lote", type=int, metavar="N")
     ap.add_argument("--dias", type=int, default=90)
     ap.add_argument("--aplicar", action="store_true")
+    ap.add_argument("--portal", choices=sorted(_PORTALES))
     a = ap.parse_args()
 
     if not os.getenv("DATABASE_URL"):
@@ -156,7 +158,7 @@ def main() -> None:
     elif a.rescatar:
         rescatar(a.dias, a.aplicar)
     else:
-        print(disp.revalidar_lote(n=a.lote))
+        print(disp.revalidar_lote(n=a.lote, url_regex=_PORTALES.get(a.portal)))
 
 
 if __name__ == "__main__":
