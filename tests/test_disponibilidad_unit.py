@@ -94,3 +94,8 @@ def test_estado_de_negocio_y_compatibilidad():
 def test_tamano_lote():
     assert d.tamano_lote(7000, 7, 30) == 21
     assert d.tamano_lote(0, 7, 30) == 1
+    # Con atrasadas, crece para alcanzarlas en 2 días (96 corridas)…
+    assert d.tamano_lote(7000, 7, 30, atrasadas=3600) == 38
+    # …sin pasar del tope, y nunca baja del ritmo normal.
+    assert d.tamano_lote(7000, 7, 30, atrasadas=20000) == 60
+    assert d.tamano_lote(7000, 7, 30, atrasadas=100) == 21

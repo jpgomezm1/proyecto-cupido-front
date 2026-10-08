@@ -306,10 +306,23 @@ _LOCK_REVALIDACION = 7102
 _FRACCION_RESCATE = 0.1
 
 
-def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int) -> int:
-    """Cuántas propiedades revisar por corrida para cubrir todas en `dias_objetivo`."""
-    corridas = max(1, (dias_objetivo * 24 * 60) // max(1, intervalo_min))
-    return max(1, math.ceil(activas / corridas))
+# Ponerse al día: si hay inmuebles sin revisar dentro del plazo (nunca revisados
+# o con el último intento vencido), el lote crece para alcanzarlos en
+# _DIAS_PARA_ALCANZAR días, sin pasar de _TOPE_LOTE por corrida (para no
+# saturar los portales). Al quedar al día vuelve solo al ritmo normal.
+_DIAS_PARA_ALCANZAR = 2
+_TOPE_LOTE = 60
+
+
+def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int, atrasadas: int = 0) -> int:
+    """Cuántas propiedades revisar por corrida para cubrir todas en `dias_objetivo`
+    y, si hay atrasadas, alcanzarlas en `_DIAS_PARA_ALCANZAR` días."""
+    intervalo = max(1, intervalo_min)
+    corridas = max(1, (dias_objetivo * 24 * 60) // intervalo)
+    normal = max(1, math.ceil(activas / corridas))
+    corridas_alcance = max(1, (_DIAS_PARA_ALCANZAR * 24 * 60) // intervalo)
+    alcance = math.ceil(atrasadas / corridas_alcance)
+    return max(normal, min(alcance, _TOPE_LOTE))
 
 
 def _diagnosticar_fila(prop: Dict[str, Any]) -> Tuple[int, Veredicto]:
@@ -336,8 +349,13 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
             return {"omitido": True}
         try:
             if n is None:
-                activas = scalar(db.cursor, "SELECT COUNT(*) FROM propiedades WHERE activa") or 0
-                n = tamano_lote(activas, dias, intervalo)
+                cuenta = fetch_one(db.cursor, f"""
+                    SELECT COUNT(*) AS activas,
+                           COUNT(*) FILTER (WHERE {_SQL_SIN_PROPIOS} AND (fecha_ultimo_intento IS NULL
+                               OR fecha_ultimo_intento < NOW() - (%s * INTERVAL '1 day'))) AS atrasadas
+                    FROM propiedades WHERE activa
+                """, (dias,))
+                n = tamano_lote(cuenta["activas"], dias, intervalo, cuenta["atrasadas"])
             props: List[Dict[str, Any]] = fetch_all(db.cursor, f"""
                 SELECT id, url FROM propiedades
                 WHERE activa AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
