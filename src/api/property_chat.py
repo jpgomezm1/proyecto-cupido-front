@@ -327,7 +327,7 @@ def chat_with_property(property_id: int):
 
         # Llamar a Claude
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=500,
             system=system_prompt,
             messages=messages
@@ -336,7 +336,7 @@ def chat_with_property(property_id: int):
         # Track AI usage
         from src.core.ai_usage_tracker import get_ai_tracker
         get_ai_tracker().track_anthropic_response(
-            model='claude-sonnet-4-20250514',
+            model='claude-sonnet-4-6',
             usage_type='property_chat',
             function_name='property_chat.chat_with_property',
             response=response,

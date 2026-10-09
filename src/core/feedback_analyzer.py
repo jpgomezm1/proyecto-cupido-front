@@ -133,7 +133,7 @@ def analyze_feedback(contenido: str, categoria: str, imagenes: List[Dict] = None
             return None
 
         client = Anthropic(api_key=api_key)
-        model = "claude-sonnet-4-20250514"
+        model = "claude-sonnet-4-6"
 
         categoria_label = CATEGORIA_LABELS.get(categoria, categoria)
 

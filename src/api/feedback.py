@@ -634,7 +634,7 @@ Now generate the comprehensive Claude Code prompt as a JSON object. Be as specif
             start_time = time.time()
 
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 max_tokens=3000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_content}]
@@ -646,7 +646,7 @@ Now generate the comprehensive Claude Code prompt as a JSON object. Be as specif
             try:
                 from src.core.ai_usage_tracker import get_ai_tracker
                 get_ai_tracker().track_anthropic_response(
-                    model='claude-sonnet-4-20250514',
+                    model='claude-sonnet-4-6',
                     usage_type='feedback_prompt_generation',
                     function_name='feedback.generate_prompt',
                     response=response,
