@@ -28,6 +28,14 @@ Veredictos y efectos:
 `fecha_ultima_validacion` (lo que ve el agente como "verificada hace N días")
 solo cambia con un veredicto concluyente; la rotación usa `fecha_ultimo_intento`.
 Cada veredicto queda en `verificaciones_disponibilidad`.
+
+Fotos: un inmueble puede seguir publicado con las fotos que guardamos ya
+borradas en el portal (el portal las cambia cuando el agente edita el aviso).
+Si la portada guardada da 404/410, se reemplazan por las que la publicación
+muestra hoy (solo Wasi: en Lobbie la galería no viene en el HTML), salvo que el
+dueño las haya editado en Fynder.
+Queda en `verificaciones_disponibilidad.cambio` como 'fotos_renovadas' o
+'fotos_rotas' (sin reemplazo posible).
 """
 
 import json
@@ -86,6 +94,8 @@ class Veredicto:
     status: Optional[int]
     portal: str
     precio: Optional[int] = None   # precio que muestra hoy el portal (si se pudo leer)
+    fotos: Optional[List[str]] = None  # fotos que muestra hoy el portal (solo Wasi)
+    fotos_rotas: bool = False          # la portada que guardamos ya no existe
 
 
 # Motivos de "incierto" que vienen de la red, no de la página: vale la pena reintentar.
@@ -204,6 +214,46 @@ def leer_precio(portal: str, html: str) -> Optional[int]:
     return None
 
 
+def leer_fotos(portal: str, html: str) -> Optional[List[str]]:
+    """Fotos que muestra hoy la publicación, con el mismo extractor del scraper.
+    None si el portal no se reconoce o el entorno no tiene el scraper (el MCP)."""
+    if portal != "wasi":
+        return None
+    try:
+        from types import SimpleNamespace
+        from bs4 import BeautifulSoup
+        from src.scrapers.wasi import WasiScraper
+        datos = WasiScraper._extract_images(SimpleNamespace(log=lambda _m: None),
+                                            BeautifulSoup(html, "html.parser"))
+    except Exception:  # noqa: BLE001 — leer fotos nunca tumba la verificación
+        return None
+    from src.services.textutils import split_image_urls
+    return split_image_urls(datos.get("imagenes_urls")) or None
+
+
+def foto_rota(session, url: Optional[str]) -> bool:
+    """True solo si el servidor de la foto dice que ya no existe (404/410).
+    Un 403 o un timeout no cuentan: puede ser antihotlinking o la red."""
+    if not url or not url.startswith("http"):
+        return False
+    try:
+        r = session.get(url, timeout=10, stream=True)
+        r.close()
+        return r.status_code in (404, 410)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _revisar_portada(session, v: Veredicto, imagenes_urls: Optional[str]) -> None:
+    """Marca `v.fotos_rotas` si la publicación sigue viva pero su portada guardada no."""
+    if v.veredicto != VIVO or not imagenes_urls:
+        return
+    from src.services.textutils import split_image_urls
+    guardadas = split_image_urls(imagenes_urls)
+    if guardadas and portal_de(guardadas[0]) != "propio" and foto_rota(session, guardadas[0]):
+        v.fotos_rotas = True
+
+
 def diagnosticar(session, url: Optional[str]) -> Veredicto:
     """Visita el link original y decide si el inmueble sigue publicado."""
     portal = portal_de(url)
@@ -230,7 +280,8 @@ def diagnosticar(session, url: Optional[str]) -> Veredicto:
         return Veredicto(INCIERTO, f"http_{status}", status, portal)
     veredicto, motivo = _DETECTORES[portal](status, r.url, r.text)
     precio = leer_precio(portal, r.text) if veredicto == VIVO else None
-    return Veredicto(veredicto, motivo, status, portal, precio)
+    fotos = leer_fotos(portal, r.text) if veredicto == VIVO else None
+    return Veredicto(veredicto, motivo, status, portal, precio, fotos)
 
 
 def check_url(session, url, fuente=None) -> Tuple[bool, str, Optional[int]]:
@@ -288,6 +339,9 @@ def _persistir(cur, propiedad_id: int, v: Veredicto, origen: str) -> Optional[st
             WHERE id = %s
         """, (v.motivo, propiedad_id))
 
+    if v.veredicto == VIVO and v.fotos_rotas:
+        cambio = cambio or _renovar_fotos(cur, propiedad_id, v.fotos)
+
     cur.execute("""
         INSERT INTO verificaciones_disponibilidad
             (propiedad_id, veredicto, motivo, status_code, portal, origen, cambio)
@@ -296,6 +350,21 @@ def _persistir(cur, propiedad_id: int, v: Veredicto, origen: str) -> Optional[st
     if v.veredicto == VIVO and v.precio:
         _registrar_precio(cur, propiedad_id, v.precio, origen)
     return cambio
+
+
+_CAMPOS_FOTOS = ["imagenes_urls", "imagen_principal", "total_imagenes"]
+
+
+def _renovar_fotos(cur, propiedad_id: int, fotos: Optional[List[str]]) -> str:
+    """Reemplaza las fotos rotas por las de la publicación. Si el dueño editó las
+    fotos en Fynder, o el portal no dejó leerlas, solo se registra."""
+    if not fotos:
+        return "fotos_rotas"
+    cur.execute("""
+        UPDATE propiedades SET imagenes_urls = %s, imagen_principal = %s, total_imagenes = %s
+        WHERE id = %s AND NOT (COALESCE(campos_editados, '{}') && %s::text[])
+    """, ("|".join(fotos), fotos[0], len(fotos), propiedad_id, _CAMPOS_FOTOS))
+    return "fotos_renovadas" if cur.rowcount else "fotos_rotas"
 
 
 def _registrar_precio(cur, propiedad_id: int, precio_web: int, origen: str) -> Optional[Dict[str, Any]]:
@@ -347,7 +416,7 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str 
     """
     # 1) Lectura corta; 2) HTTP sin conexión retenida; 3) escritura corta.
     with get_db() as db:
-        prop = fetch_one(db.cursor, "SELECT id, url FROM propiedades WHERE id = %s", (propiedad_id,))
+        prop = fetch_one(db.cursor, "SELECT id, url, imagenes_urls FROM propiedades WHERE id = %s", (propiedad_id,))
     if not prop:
         return {"error": f"Propiedad {propiedad_id} no encontrada"}
 
@@ -355,6 +424,8 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str 
     v = diagnosticar(sesion, prop["url"])
     if v.veredicto == INCIERTO and (v.motivo in MOTIVOS_DE_RED or (v.status or 0) >= 500):
         v = diagnosticar(sesion, prop["url"])  # un reintento: el portal a veces tarda
+    if actualizar:
+        _revisar_portada(sesion, v, prop["imagenes_urls"])
 
     precio_antes = None
     if actualizar:
@@ -413,7 +484,10 @@ def tamano_lote(activas: int, dias_objetivo: int, intervalo_min: int, atrasadas:
 
 
 def _diagnosticar_fila(prop: Dict[str, Any]) -> Tuple[int, Veredicto]:
-    return prop["id"], diagnosticar(build_session(), prop["url"])
+    sesion = build_session()
+    v = diagnosticar(sesion, prop["url"])
+    _revisar_portada(sesion, v, prop.get("imagenes_urls"))
+    return prop["id"], v
 
 
 def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[str] = None) -> Dict[str, Any]:
@@ -444,14 +518,14 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
                 """, (dias,))
                 n = tamano_lote(cuenta["activas"], dias, intervalo, cuenta["atrasadas"])
             props: List[Dict[str, Any]] = fetch_all(db.cursor, f"""
-                SELECT id, url FROM propiedades
+                SELECT id, url, imagenes_urls FROM propiedades
                 WHERE activa AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
                   AND url ~* %s
                 ORDER BY fecha_ultimo_intento NULLS FIRST, id
                 LIMIT %s
             """, (url_regex or ".", n))
             props += fetch_all(db.cursor, f"""
-                SELECT id, url FROM propiedades
+                SELECT id, url, imagenes_urls FROM propiedades
                 WHERE NOT activa AND desactivada_por = 'validador'
                   AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
                   AND COALESCE(fecha_ultimo_intento, fecha_ultima_validacion) < NOW() - INTERVAL '7 days'
@@ -464,7 +538,7 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
             with ThreadPoolExecutor(max_workers=hilos) as pool:
                 resultados = list(pool.map(_diagnosticar_fila, props))
 
-            cuenta = {"desactivada": 0, "reactivada": 0}
+            cuenta = {"desactivada": 0, "reactivada": 0, "fotos_renovadas": 0, "fotos_rotas": 0}
             inciertas = 0
             for pid, v in resultados:
                 cambio = _persistir(db.cursor, pid, v, "worker")
@@ -477,7 +551,8 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
             db.conn.commit()
 
     return {"revisadas": len(props), "desactivadas": cuenta["desactivada"],
-            "reactivadas": cuenta["reactivada"], "inciertas": inciertas}
+            "reactivadas": cuenta["reactivada"], "inciertas": inciertas,
+            "fotos_renovadas": cuenta["fotos_renovadas"], "fotos_rotas": cuenta["fotos_rotas"]}
 
 
 # =========================================================================

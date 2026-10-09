@@ -135,3 +135,48 @@ def test_precio_irreconocible_es_none():
     from src.services.disponibilidad_service import leer_precio
     assert leer_precio("wasi", "<html>sin precio</html>") is None
     assert leer_precio("generico", "<p class='pr1'>$1</p>") is None
+
+
+# ── Fotos rotas ─────────────────────────────────────────────────────────────
+
+class _RespFoto(_Resp):
+    def close(self):
+        pass
+
+
+def test_foto_rota_solo_con_404_o_410():
+    assert d.foto_rota(_Session(_RespFoto(404)), "https://image.wasi.co/x") is True
+    assert d.foto_rota(_Session(_RespFoto(410)), "https://image.wasi.co/x") is True
+    assert d.foto_rota(_Session(_RespFoto(403)), "https://image.wasi.co/x") is False
+    assert d.foto_rota(_Session(exc=TimeoutError()), "https://image.wasi.co/x") is False
+    assert d.foto_rota(_Session(_RespFoto(404)), None) is False
+
+
+def test_portada_rota_marca_solo_si_la_publicacion_esta_viva():
+    vivo = d.Veredicto(d.VIVO, "wasi: ficha publicada", 200, "wasi")
+    d._revisar_portada(_Session(_RespFoto(404)), vivo, "https://image.wasi.co/a | https://image.wasi.co/b")
+    assert vivo.fotos_rotas is True
+    incierto = d.Veredicto(d.INCIERTO, "timeout", None, "wasi")
+    d._revisar_portada(_Session(_RespFoto(404)), incierto, "https://image.wasi.co/a")
+    assert incierto.fotos_rotas is False
+
+
+class _Cur:
+    def __init__(self, rowcount):
+        self.rowcount, self.sql = rowcount, None
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+
+
+def test_renovar_fotos():
+    assert d._renovar_fotos(_Cur(1), 1, ["https://image.wasi.co/n"]) == "fotos_renovadas"
+    # el dueño las editó en Fynder: el UPDATE no toca la fila
+    assert d._renovar_fotos(_Cur(0), 1, ["https://image.wasi.co/n"]) == "fotos_rotas"
+    cur = _Cur(1)
+    assert d._renovar_fotos(cur, 1, None) == "fotos_rotas" and cur.sql is None
+
+
+def test_leer_fotos_solo_wasi():
+    assert d.leer_fotos("lobbie", "<html></html>") is None
+    assert d.leer_fotos("pulppo", "<html></html>") is None
