@@ -273,6 +273,7 @@ def _resolver(cur, tipo: str, ref) -> Dict[str, Any]:
             "codigo": prop.get("codigo"),
             "titulo": prop.get("titulo"),
             "activa": prop.get("activa"),
+            "publicacion_original": publicacion_original(prop.get("url")),
             "contacto": {"telefono": vend.get("telefono"), "nombre": vend.get("nombre"),
                          "agencia": vend.get("agencia")},
         }
@@ -323,6 +324,16 @@ def _desbloqueo_existente(cur, user_id: int, tipo: str, ref_id: int) -> Optional
         SELECT id, estado, fuente_credito, contacto_telefono, contacto_nombre, contacto_agencia
         FROM desbloqueos WHERE user_id = %s AND tipo = %s AND ref_id = %s
     """, (user_id, tipo, ref_id))
+
+
+def publicacion_original(url: Optional[str]) -> Optional[str]:
+    """Link de la publicación en el portal de origen (Wasi, Lobbie, Pulppo…).
+    Lleva al contacto, así que SOLO sale junto a un contacto desbloqueado: en
+    `_exito` y en `listar_desbloqueos`. Las páginas propias de Fynder no cuentan."""
+    from src.services.disponibilidad_service import portal_de
+    if not url or not str(url).startswith("http") or portal_de(url) == "propio":
+        return None
+    return url
 
 
 def _contacto_salida(contacto: Dict[str, Any]) -> Dict[str, Any]:
@@ -524,7 +535,7 @@ def _exito(desbloqueo_id, r, contacto, *, cobrado, fuente, ya, disponibilidad, d
         "cobrado": cobrado,
         "fuente": fuente,
         "ya_desbloqueado": ya,
-        "contacto": _contacto_salida(contacto),
+        "contacto": {**_contacto_salida(contacto), "publicacion_original": r.get("publicacion_original")},
         "disponibilidad": disponibilidad,
         "disponibles_restantes": disponibles,
     }
@@ -562,7 +573,7 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                    d.contacto_telefono, d.contacto_nombre, d.contacto_agencia, d.created_at,
                    p.codigo_propiedad, p.titulo, p.zona, p.ciudad,
                    p.imagen_principal, p.precio, p.tipo_propiedad, p.area_construida,
-                   p.habitaciones, p.banos, p.activa,
+                   p.habitaciones, p.banos, p.activa, p.url,
                    pe.texto_pedido, pe.presupuesto_estimado,
                    r.id AS reporte_id, r.reembolsado,
                    s.estado AS seg_estado, s.nota AS seg_nota, s.recordatorio AS seg_recordatorio,
@@ -592,7 +603,8 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             "fecha": d["created_at"].isoformat() if d.get("created_at") else None,
             "reportado": d.get("reporte_id") is not None,
             "contacto": {"telefono": d.get("contacto_telefono"), "nombre": d.get("contacto_nombre"),
-                         "agencia": d.get("contacto_agencia")},
+                         "agencia": d.get("contacto_agencia"),
+                         "publicacion_original": publicacion_original(d.get("url"))},
             # Para mostrar el contacto con su inmueble o su pedido (sin datos de contacto)
             "inmueble": {
                 "imagen": d.get("imagen_principal"),

@@ -151,6 +151,9 @@ class ContactoRevelado:
     telefono: str
     nombre: Optional[str] = None
     agencia: Optional[str] = None
+    # Link de la publicación en el portal de origen: ya pagó el contacto, así
+    # que puede ver el aviso original (solo viaja dentro de este tipo).
+    publicacion_original: Optional[str] = None
 
     def as_dict(self) -> dict:
         digitos = re.sub(r"\D", "", self.telefono or "")[-10:]
@@ -159,6 +162,7 @@ class ContactoRevelado:
             "nombre": self.nombre,
             "agencia": self.agencia,
             "whatsapp_link": f"https://wa.me/57{digitos}" if len(digitos) == 10 else None,
+            "publicacion_original": self.publicacion_original,
         }
 
 

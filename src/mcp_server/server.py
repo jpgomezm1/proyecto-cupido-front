@@ -954,7 +954,8 @@ def _respuesta_desbloqueo(res: Dict[str, Any]) -> Dict[str, Any]:
     if res.get("ok") and res.get("contacto"):
         c = res.pop("contacto")
         res["contacto_desbloqueado"] = ContactoRevelado(
-            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia"))
+            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia"),
+            publicacion_original=c.get("publicacion_original"))
     return res
 
 
@@ -1039,7 +1040,8 @@ def mis_desbloqueos(limit: int = 20, offset: int = 0) -> Dict[str, Any]:
     for item in res.get("items", []):
         c = item.pop("contacto")
         item["contacto"] = ContactoRevelado(
-            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia")) \
+            telefono=c.get("telefono"), nombre=c.get("nombre"), agencia=c.get("agencia"),
+            publicacion_original=c.get("publicacion_original")) \
             if c.get("telefono") else None
     return res
 

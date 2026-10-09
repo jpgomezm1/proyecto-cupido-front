@@ -63,3 +63,18 @@ def test_frescura():
     assert frescura(ahora - timedelta(days=9))["verificacion_vencida"] is True
     # Fechas sin zona horaria (columnas TIMESTAMP) también funcionan.
     assert frescura(datetime.now() - timedelta(days=1))["verificada_hace_dias"] == 1
+
+
+def test_publicacion_original_solo_portales_externos():
+    from src.services.suscripcion_service import publicacion_original
+    assert publicacion_original("https://info.wasi.co/apartamento-venta/123") == "https://info.wasi.co/apartamento-venta/123"
+    assert publicacion_original("https://getfynder.com/compartir/1-apto") is None
+    assert publicacion_original(None) is None
+    assert publicacion_original("info.wasi.co/sin-esquema") is None
+
+
+def test_contacto_revelado_lleva_la_publicacion_original():
+    from src.services.redact import ContactoRevelado, sanitize
+    c = ContactoRevelado(telefono="+573001234567", nombre="Ana", publicacion_original="https://info.wasi.co/x/1")
+    assert sanitize({"c": c}, revelar=True)["c"]["publicacion_original"] == "https://info.wasi.co/x/1"
+    assert sanitize({"c": c}, revelar=False)["c"] is None
