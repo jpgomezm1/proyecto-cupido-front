@@ -199,8 +199,12 @@ def obtener(user_id: int, cliente_id: int) -> Dict[str, Any]:
             FROM cliente_inmuebles WHERE cliente_id = %s ORDER BY updated_at DESC
         """, (cliente_id,))
     minis = propiedades_mini([f["propiedad_id"] for f in filas])
+    # El contacto que el agente ya desbloqueó se ve en la selección del cliente (verlo no cuesta).
+    from src.services.suscripcion_service import ids_desbloqueados
+    abiertos = ids_desbloqueados(user_id, "propiedad", list(minis))
     inmuebles = [{
-        "propiedad": minis[f["propiedad_id"]], "estado": f["estado"], "nota": f["nota"], "origen": f["origen"],
+        "propiedad": {**minis[f["propiedad_id"]], "contacto_desbloqueado": f["propiedad_id"] in abiertos},
+        "estado": f["estado"], "nota": f["nota"], "origen": f["origen"],
         "score": round(f["score"], 1) if f["score"] is not None else None, "razones": list(f["razones"] or []),
         "updated_at": f["updated_at"].isoformat(),
     } for f in filas if f["propiedad_id"] in minis]
