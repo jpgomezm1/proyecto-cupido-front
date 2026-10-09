@@ -11,6 +11,7 @@ from src.scrapers.utils import PropertyNormalizer
 from src.utils.phone import normalize_colombia_phone
 from src.api.access import es_admin, usuario_chat, para_cliente, requiere_admin_o_chat, uso_justo
 from src.api.auth import token_required
+from src.services.property_service import frescura
 import traceback
 from typing import Dict, List, Optional
 
@@ -333,7 +334,8 @@ def get_properties():
                 p.grupo_origen as source_group,
                 a.nombre as owner_name,
                 p.imagen_principal as cover_image_url,
-                p.url as source_url
+                p.url as source_url,
+                p.fecha_ultima_validacion as verified_at
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
             {where_clause}
@@ -385,6 +387,8 @@ def get_properties():
                 'source_group': prop.get('source_group'),
                 'cover_image_url': prop.get('cover_image_url'),
                 'source_url': prop.get('source_url'),
+                # Frescura: cuántos días hace que Fynder confirmó que sigue publicado
+                'verificada_hace_dias': frescura(prop.get('verified_at'))['verificada_hace_dias'],
             }
 
             # Convertir features de texto a JSON
