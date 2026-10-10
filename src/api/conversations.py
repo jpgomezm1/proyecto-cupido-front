@@ -410,11 +410,43 @@ def get_conversation(conversation_id):
         }), 500
 
 
-@conversations_bp.route('/public/<int:conversation_id>', methods=['GET'])
-def get_public_conversation(conversation_id):
+@conversations_bp.route('/public/<string:token>', methods=['GET'])
+def get_public_conversation(token):
     """
-    Obtiene una conversación para vista pública (sin autenticación)
-    Solo lectura - para compartir links
+    Conversación compartida (sin autenticación, solo lectura). Exige un link
+    FIRMADO (share_service, kind "chat"): antes bastaba el id consecutivo y
+    cualquiera podía recorrer las búsquedas de todos los agentes.
+    """
+    from src.services.share_service import ShareError, verify_token
+    if token.isdigit():
+        return jsonify({'success': False, 'error': 'Este link ya no es válido. Pídele uno nuevo a tu asesor.'}), 410
+    try:
+        payload = verify_token(token)
+    except ShareError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
+    if payload.get('k') != 'chat' or not payload.get('ids'):
+        return jsonify({'success': False, 'error': 'Link inválido'}), 404
+    return conversacion_lectura(int(payload['ids'][0]))
+
+
+@conversations_bp.route('/<int:conversation_id>/compartir', methods=['POST'])
+@require_chat_auth
+def compartir_conversation(conversation_id):
+    """Link firmado para compartir una conversación propia (solo lectura)."""
+    from src.services.share_service import _frontend_base, make_token
+    with DatabaseManager() as db:
+        db.cursor.execute("SELECT user_id FROM conversaciones_busqueda WHERE id = %s", (conversation_id,))
+        row = db.cursor.fetchone()
+    dueno = (row.get('user_id') if isinstance(row, dict) else row[0]) if row else None
+    if dueno != request.chat_user['id']:
+        return jsonify({'success': False, 'error': 'Conversación no encontrada'}), 404
+    token = make_token('chat', [conversation_id], agente_id=request.chat_user['id'])
+    return jsonify({'success': True, 'data': {'token': token, 'link': f"{_frontend_base()}/compartir/chat/{token}"}})
+
+
+def conversacion_lectura(conversation_id):
+    """
+    Obtiene una conversación en solo lectura (vista compartida y admin).
 
     Returns:
     {
@@ -528,7 +560,7 @@ def get_public_conversation(conversation_id):
             })
 
     except Exception as e:
-        print(f"Error obteniendo conversación pública: {e}")
+        print(f"Error obteniendo conversación (lectura): {e}")
         traceback.print_exc()
         return jsonify({
             'success': False,

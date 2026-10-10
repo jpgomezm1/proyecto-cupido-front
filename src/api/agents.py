@@ -54,11 +54,11 @@ def provisionar_agente():
 def listar_cuentas_precargadas():
     """Lista las cuentas pre-cargadas (C1) con inventario y estado de acceso entregado."""
     try:
-        from src.services.acquisition_service import listar_precargadas, DEFAULT_PASSWORD
+        from src.services.acquisition_service import listar_precargadas
         cuentas = listar_precargadas()
         return jsonify({'success': True, 'data': {
             'total': len(cuentas),
-            'clave_estandar': DEFAULT_PASSWORD,
+            'con_clave_compartida': sum(1 for c in cuentas if c.get('clave_compartida')),
             'cuentas': cuentas,
         }}), 200
     except Exception as e:
@@ -82,6 +82,35 @@ def set_acceso_cuenta(user_id):
         print(f"❌ Error en set_acceso_cuenta: {str(e)}")
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@agents_bp.route('/precargadas/<int:user_id>/nueva-clave', methods=['POST'])
+def nueva_clave_cuenta(user_id):
+    """Clave nueva y propia para una cuenta pre-cargada (se muestra una sola vez).
+    Body: { entregar?: bool } para marcarla como entregada en el mismo paso."""
+    try:
+        from src.services.acquisition_service import regenerar_clave
+        data = request.get_json(silent=True) or {}
+        res = regenerar_clave(user_id, marcar_entregado=bool(data.get('entregar')))
+        if res.get('error'):
+            return jsonify({'success': False, 'error': res['error']}), 404
+        return jsonify({'success': True, 'data': res}), 200
+    except Exception as e:
+        print(f"❌ Error en nueva_clave_cuenta: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'No se pudo generar la clave'}), 500
+
+
+@agents_bp.route('/precargadas/rotar-no-entregadas', methods=['POST'])
+def rotar_no_entregadas():
+    """Quita la clave compartida de las cuentas que aún no se entregaron."""
+    try:
+        from src.services.acquisition_service import rotar_claves_no_entregadas
+        return jsonify({'success': True, 'data': rotar_claves_no_entregadas()}), 200
+    except Exception as e:
+        print(f"❌ Error en rotar_no_entregadas: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'No se pudieron rotar las claves'}), 500
 
 
 @agents_bp.route('/precargadas/provisionar-lote', methods=['POST'])

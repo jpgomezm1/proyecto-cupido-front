@@ -16,9 +16,17 @@ from typing import Any, Dict, List, Optional
 from src.services.db import get_db, fetch_one, fetch_all
 from src.services.textutils import normalize_phone, FRONTEND_URL
 
-# Clave compartida de las cuentas pre-cargadas (pilotaje: fácil de entregar por
-# WhatsApp). Sobreescribible con DEFAULT_AGENT_PASSWORD en el entorno.
-DEFAULT_PASSWORD = os.getenv("DEFAULT_AGENT_PASSWORD", "Fynder2026*")
+# Clave que usaron las primeras cuentas pre-cargadas (todas la misma). Ya NO se
+# asigna: cada cuenta recibe una clave propia al crearla o al entregar el acceso.
+# Se conserva solo para detectar las cuentas que todavía la tienen y rotarlas.
+CLAVE_COMPARTIDA_VIEJA = os.getenv("DEFAULT_AGENT_PASSWORD", "Fynder2026*")
+
+
+def clave_nueva() -> str:
+    """Clave aleatoria fácil de dictar por WhatsApp: 'Fy-' + 10 caracteres sin ambiguos."""
+    import secrets
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    return "Fy-" + "".join(secrets.choice(alfabeto) for _ in range(10))
 
 # Dominio de los usuarios de login (no es un buzón real; es el identificador).
 EMAIL_DOMAIN = os.getenv("AGENT_EMAIL_DOMAIN", "fynder.co")
@@ -102,7 +110,7 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
                     "nombre": nombre, "inventario": inventario, "login_url": login_url,
                     "mensaje": "El agente ya tiene cuenta activa. Usa reset_password para regenerar la clave."}
 
-        password = DEFAULT_PASSWORD
+        password = clave_nueva()
 
         if existente and reset_password:
             db.cursor.execute(
@@ -144,13 +152,14 @@ def listar_precargadas() -> List[Dict[str, Any]]:
         rows = fetch_all(db.cursor, """
             SELECT u.id, u.nombre, u.email, u.telefono, u.activo, u.acceso_entregado,
                    u.acceso_entregado_at, u.ultimo_login, u.fecha_creacion,
+                   (u.password_hash = crypt(%s, u.password_hash)) AS clave_compartida,
                    (SELECT COUNT(*) FROM propiedades p
                     WHERE RIGHT(REGEXP_REPLACE(COALESCE(p.agente_captador_telefono,''),'[^0-9]','','g'),10)
                         = RIGHT(REGEXP_REPLACE(COALESCE(u.telefono,''),'[^0-9]','','g'),10)) AS inventario
             FROM chat_users u
             WHERE u.origen = 'provision'
             ORDER BY u.acceso_entregado ASC, inventario DESC, u.nombre ASC
-        """)
+        """, (CLAVE_COMPARTIDA_VIEJA,))
     return [dict(r) for r in rows]
 
 
@@ -170,6 +179,51 @@ def set_acceso(user_id: int, entregado: bool) -> Dict[str, Any]:
             return {"error": "Cuenta no encontrada o no es pre-cargada."}
         db.conn.commit()
     return {"ok": True, "id": row["id"], "acceso_entregado": row["acceso_entregado"]}
+
+
+def regenerar_clave(user_id: int, marcar_entregado: bool = False) -> Dict[str, Any]:
+    """Le da una clave nueva y propia a una cuenta pre-cargada. La clave se devuelve
+    una sola vez (para entregarla por WhatsApp) y no queda guardada en claro."""
+    password = clave_nueva()
+    with get_db() as db:
+        db.cursor.execute("""
+            UPDATE chat_users
+            SET password_hash = crypt(%s, gen_salt('bf')),
+                acceso_entregado = acceso_entregado OR %s,
+                acceso_entregado_at = CASE WHEN %s AND NOT acceso_entregado THEN NOW() ELSE acceso_entregado_at END
+            WHERE id = %s AND origen = 'provision'
+            RETURNING id, email, nombre, acceso_entregado
+        """, (password, marcar_entregado, marcar_entregado, user_id))
+        row = db.cursor.fetchone()
+        if not row:
+            db.conn.rollback()
+            return {"error": "Cuenta no encontrada o no es pre-cargada."}
+        # Las sesiones abiertas con la clave anterior dejan de valer.
+        db.cursor.execute("UPDATE chat_user_sessions SET activa = FALSE WHERE user_id = %s", (user_id,))
+        db.conn.commit()
+    from src.services.auditoria import registrar
+    registrar("clave_regenerada", user_id, {"entregado": bool(row["acceso_entregado"])})
+    return {"ok": True, "id": row["id"], "email": row["email"], "nombre": row["nombre"],
+            "password": password, "acceso_entregado": row["acceso_entregado"]}
+
+
+def rotar_claves_no_entregadas() -> Dict[str, Any]:
+    """Cambia la clave compartida de las cuentas que aún no se entregaron (nadie la
+    conoce todavía, así que no se afecta a ningún agente). Las claves nuevas no se
+    devuelven: se generan de nuevo al entregar el acceso."""
+    with get_db() as db:
+        rows = fetch_all(db.cursor, """
+            SELECT id FROM chat_users
+            WHERE origen = 'provision' AND NOT COALESCE(acceso_entregado, FALSE)
+              AND password_hash = crypt(%s, password_hash)
+        """, (CLAVE_COMPARTIDA_VIEJA,))
+        for r in rows:
+            db.cursor.execute("UPDATE chat_users SET password_hash = crypt(%s, gen_salt('bf')) WHERE id = %s",
+                              (clave_nueva(), r["id"]))
+        db.conn.commit()
+    from src.services.auditoria import registrar
+    registrar("claves_rotadas", None, {"cuentas": len(rows)})
+    return {"ok": True, "rotadas": len(rows)}
 
 
 def renombrar_emails_friendly() -> Dict[str, Any]:

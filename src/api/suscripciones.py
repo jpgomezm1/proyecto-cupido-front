@@ -304,8 +304,14 @@ def admin_creditos(user_id: int):
 @token_required
 def admin_verificar_telefono(user_id: int):
     data = request.get_json(silent=True) or {}
-    return _admin_op(lambda: svc.verificar_telefono(user_id, bool(data.get('verificado', True))),
-                     'admin_verificar_telefono')
+    verificado = bool(data.get('verificado', True))
+
+    def _op():
+        from src.services.auditoria import registrar
+        res = svc.verificar_telefono(user_id, verificado)
+        registrar('telefono_verificado' if verificado else 'telefono_desverificado', user_id)
+        return res
+    return _admin_op(_op, 'admin_verificar_telefono')
 
 
 @suscripciones_admin_bp.route('/<int:suscripcion_id>/cancelar', methods=['POST'])

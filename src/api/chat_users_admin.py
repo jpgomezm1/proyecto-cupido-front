@@ -392,6 +392,11 @@ def update_user(user_id):
             user = db.cursor.fetchone()
             db.conn.commit()
 
+            if 'telefono' in data:
+                # Cargar el teléfono lo deja verificado (control sobre su inventario): queda registro.
+                from src.services.auditoria import registrar
+                registrar('telefono_cambiado', user_id, {'telefono': user.get('telefono')})
+
             print(f"✅ Usuario actualizado: {user['email']}")
 
             return jsonify({
@@ -524,6 +529,14 @@ def reset_password(user_id):
 # ============================================================================
 # GESTIÓN DE SESIONES
 # ============================================================================
+
+@chat_users_admin_bp.route('/conversaciones/<int:conversation_id>', methods=['GET'])
+@token_required
+def get_conversacion(conversation_id):
+    """Conversación de un agente con sus mensajes (solo el admin)."""
+    from src.api.conversations import conversacion_lectura
+    return conversacion_lectura(conversation_id)
+
 
 @chat_users_admin_bp.route('/<int:user_id>/sessions', methods=['GET'])
 @token_required
