@@ -56,6 +56,7 @@ from src.api.mapa import mapa_bp
 from src.api.logros import logros_bp
 from src.api.clientes import clientes_bp
 from src.api.herramientas import herramientas_bp
+from src.api.admin_negocio import admin_negocio_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -176,6 +177,7 @@ for _bp, _publicos in (
     (bulk_bp, ('get_progress', 'get_status', 'download_template_propias',
                'download_template_externas')),
     (share_analytics_bp, ('track_event',)),
+    (admin_negocio_bp, ()),
 ):
     proteger_admin(_bp, _publicos)
 
@@ -216,6 +218,7 @@ app.register_blueprint(mapa_bp)
 app.register_blueprint(logros_bp)
 app.register_blueprint(clientes_bp)
 app.register_blueprint(herramientas_bp)
+app.register_blueprint(admin_negocio_bp)
 
 # Inicializar bot
 bot = WhatsAppBot()
