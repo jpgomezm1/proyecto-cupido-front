@@ -40,6 +40,9 @@ def _insertar(tool: str, user_id: Optional[int], ok: bool, error: Optional[str],
 def _registrar_y_evaluar(tool: str, user_id: Optional[int], ok: bool, error: Optional[str],
                          duracion_ms: int, argumentos: list) -> None:
     _insertar(tool, user_id, ok, error, duracion_ms, argumentos)
+    # Medición de uso (PostHog): solo la tool, si salió bien y cuánto tardó; nunca argumentos.
+    from src.services.analytics import capturar
+    capturar("mcp_herramienta", user_id, {"tool": tool, "ok": ok, "duracion_ms": duracion_ms, "canal": "mcp"})
     if ok:
         # Rachas y misiones (llaves de premio): ya con esta llamada registrada.
         from src.services.logros_service import evaluar_tras_mcp

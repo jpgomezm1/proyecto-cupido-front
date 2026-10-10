@@ -211,6 +211,10 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
         db.conn.commit()
     print(f"💳 Pago {referencia} → {nuevo} ({fuente})")
     if nuevo in ("aprobado", "rechazado"):
+        from src.services.analytics import capturar
+        capturar("pago_" + nuevo, pago.get("user_id"), {"plan": pago.get("plan_codigo"),
+                 "monto_cop": pago.get("monto_cop"), "pasarela": "wompi"})
+    if nuevo in ("aprobado", "rechazado"):
         _notificar(referencia, nuevo)
     return {"ok": True, "estado": nuevo, "suscripcion_id": suscripcion_id}
 
