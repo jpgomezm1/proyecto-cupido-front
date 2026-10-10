@@ -569,7 +569,7 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
     limit = max(1, min(int(limit or 50), 200))
     with get_db() as db:
         rows = fetch_all(db.cursor, """
-            SELECT d.id, d.tipo, d.ref_id, d.fuente_credito, d.motivo_gratis, d.estado,
+            SELECT d.id, d.tipo, d.ref_id, d.fuente_credito, d.motivo_gratis, d.estado, d.canal,
                    d.contacto_telefono, d.contacto_nombre, d.contacto_agencia, d.created_at,
                    p.codigo_propiedad, p.titulo, p.zona, p.ciudad,
                    p.imagen_principal, p.precio, p.tipo_propiedad, p.area_construida,
@@ -599,6 +599,7 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             "zona": d.get("zona"),
             "ciudad": d.get("ciudad"),
             "estado": d["estado"],
+            "canal": d.get("canal"),
             "cobrado": d["fuente_credito"] != "gratis",
             "fecha": d["created_at"].isoformat() if d.get("created_at") else None,
             "reportado": d.get("reporte_id") is not None,
