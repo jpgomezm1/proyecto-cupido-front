@@ -115,9 +115,48 @@ def _hogql(q: str) -> List[list]:
     return r.json().get("results") or []
 
 
+def interfaz(dias: int = 30) -> Dict[str, Any]:
+    """Lo mismo que se pide a PostHog, calculado con `eventos_uso` (migración 054)."""
+    d = int(dias)
+    try:
+        with get_db() as db:
+            cur = db.cursor
+            pasos = {f["evento"]: int(f["agentes"]) for f in fetch_all(cur, """
+                SELECT evento, COUNT(DISTINCT user_id) AS agentes FROM eventos_uso
+                WHERE created_at > NOW() - (%s * INTERVAL '1 day') AND evento = ANY(%s)
+                GROUP BY evento
+            """, (d, PASOS_WEB))}
+            por_dia = fetch_all(cur, """
+                WITH dias AS (SELECT generate_series((NOW() - (%s - 1) * INTERVAL '1 day')::date, NOW()::date, '1 day')::date AS dia)
+                SELECT d.dia,
+                       (SELECT COUNT(*) FROM eventos_uso e WHERE e.created_at::date = d.dia) AS web,
+                       (SELECT COUNT(*) FROM mcp_tool_calls m WHERE m.created_at::date = d.dia) AS mcp,
+                       (SELECT COUNT(DISTINCT u) FROM (
+                            SELECT user_id AS u FROM eventos_uso WHERE created_at::date = d.dia
+                            UNION SELECT user_id FROM mcp_tool_calls WHERE created_at::date = d.dia) x) AS agentes
+                FROM dias d ORDER BY d.dia
+            """, (d,))
+            paginas = fetch_all(cur, """
+                SELECT COALESCE(ruta, '/') AS pagina, COUNT(*) AS vistas, COUNT(DISTINCT user_id) AS agentes
+                FROM eventos_uso WHERE evento = 'pagina_vista' AND created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY 1 ORDER BY 2 DESC LIMIT 15
+            """, (d,))
+            eventos = fetch_all(cur, """
+                SELECT evento, COUNT(*) AS total, COUNT(DISTINCT user_id) AS agentes
+                FROM eventos_uso WHERE evento <> 'pagina_vista' AND created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+            """, (d,))
+    except Exception as e:  # noqa: BLE001 — sin la migración 054
+        return {"configurado": False, "error": f"Falta la tabla de eventos (migración 054): {str(e)[:120]}"}
+    return {"configurado": True, "fuente": "fynder", "dias": d,
+            "embudo": [{"paso": p, "agentes": pasos.get(p, 0)} for p in PASOS_WEB],
+            "por_dia": _iso(por_dia), "paginas": _iso(paginas), "eventos": _iso(eventos)}
+
+
 def posthog(dias: int = 30) -> Dict[str, Any]:
     if not _posthog_config():
-        return {"configurado": False}
+        # Sin llave de lectura de PostHog: los mismos eventos, guardados en Fynder.
+        return interfaz(dias)
     clave = ("posthog", dias)
     if clave in _CACHE and time.time() - _CACHE[clave][0] < _TTL:
         return _CACHE[clave][1]
@@ -142,7 +181,7 @@ def posthog(dias: int = 30) -> Dict[str, Any]:
             SELECT event, count(), count(DISTINCT distinct_id) FROM events
             WHERE timestamp > now() - INTERVAL {d} DAY AND {agentes} AND event NOT LIKE '$%'
             GROUP BY event ORDER BY count() DESC LIMIT 20""")]
-        res = {"configurado": True, "dias": d,
+        res = {"configurado": True, "fuente": "posthog", "dias": d,
                "embudo": [{"paso": p, "agentes": pasos.get(p, 0)} for p in PASOS_WEB],
                "por_dia": por_dia, "paginas": paginas, "eventos": eventos}
     except Exception as e:  # noqa: BLE001

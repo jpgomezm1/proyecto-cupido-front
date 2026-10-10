@@ -98,3 +98,12 @@ def fotos_aplicar(property_id, mejora_id):
     user = request.chat_user
     return _manejar(lambda: _ok(fotos_ia.aplicar(user['id'], _tel10_verificado(user), property_id, mejora_id)),
                     'fotos_aplicar')
+
+
+@herramientas_bp.route('/chat/eventos', methods=['POST'])
+@require_chat_auth
+def registrar_eventos():
+    """Lote de eventos de uso de la interfaz {eventos: [{evento, ruta?, props?}]} (máx. 30)."""
+    from src.services.eventos_uso_service import registrar
+    datos = request.get_json(silent=True) or {}
+    return jsonify({"success": True, "data": {"guardados": registrar(request.chat_user['id'], datos.get('eventos') or [])}})
