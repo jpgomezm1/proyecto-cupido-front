@@ -8,6 +8,8 @@ API del admin para el modelo actual (suscripción + llaves). Solo lectura.
     GET /api/admin/negocio/verificacion         → salud de la verificación de links
     GET /api/admin/negocio/visitas?abiertas=1   → cola de "solicitar visita"
     GET /api/admin/negocio/soporte              → solicitudes de soporte
+    GET /api/admin/negocio/tablero?dias=30      → tablero de uso (base de Fynder)
+    GET /api/admin/negocio/tablero/posthog      → tablero de uso (PostHog)
 
 Protegido con el JWT del admin (`proteger_admin` en main.py): trae datos de
 contacto de agentes, que es lo que Fynder cobra.
@@ -244,3 +246,23 @@ def soporte():
         return _ok([_iso(f) for f in filas])
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'soporte')
+
+
+@admin_negocio_bp.route('/tablero', methods=['GET'])
+def tablero():
+    """Actividad, agentes activos, embudo del negocio y retención (base de Fynder)."""
+    try:
+        from src.services.tablero_service import sistema
+        return _ok(sistema(_int('dias', 30, minimo=7, maximo=180)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'tablero')
+
+
+@admin_negocio_bp.route('/tablero/posthog', methods=['GET'])
+def tablero_posthog():
+    """Embudo de la web, páginas y web vs MCP (PostHog; {configurado: false} sin llave)."""
+    try:
+        from src.services.tablero_service import posthog
+        return _ok(posthog(_int('dias', 30, minimo=7, maximo=180)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'tablero_posthog')
