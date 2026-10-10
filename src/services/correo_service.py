@@ -255,9 +255,9 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     html_ = _layout(preheader=f"Tu plan {plan} está activo: {llaves} para abrir contactos.",
                     icono=ICONO_PLAN.get(pago.get("plan") or "", "llave"), eyebrow="Pago aprobado",
                     titulo=f"Tu plan {plan} está activo", intro=f"Tienes {_e(llaves)} listas para usar.",
-                    cuerpo=cuerpo, cta=("Usar mis llaves", f"{_frontend()}/chat/propiedades"))
+                    cuerpo=cuerpo, cta=("Usar mis llaves", f"{_frontend()}/chat/mercado"))
     texto = (f"{n}, tu plan {plan} está activo: {llaves} hasta el {_fecha(pago.get('vence'))}.\n"
-             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/propiedades")
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
 
 
@@ -284,9 +284,9 @@ def llave_comprada(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     )
     html_ = _layout(preheader=f"{llaves} más en tu saldo. No vencen.", icono="llave", eyebrow="Pago aprobado",
                     titulo="Tu llave ya está lista", intro=f"Tienes {_e(llaves)} más para abrir contactos.",
-                    cuerpo=cuerpo, cta=("Usar mi llave", f"{_frontend()}/chat/propiedades"))
+                    cuerpo=cuerpo, cta=("Usar mi llave", f"{_frontend()}/chat/mercado"))
     texto = (f"{n}, tu compra está lista: {llaves} más en tu saldo (no vencen).\n"
-             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/propiedades")
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
     enviar(email, "✅ Tu llave ya está lista", html_, texto, "pago_aprobado", **kw)
 
 
@@ -298,7 +298,7 @@ def resumen_alertas(nombre: str, email: str, alertas: List[Dict[str, Any]], **kw
 
     def tarjeta(a: Dict[str, Any]) -> str:
         p = a.get("propiedad") or {}
-        url = f"{_frontend()}/chat/propiedades?p={p.get('slug') or p.get('id')}"
+        url = f"{_frontend()}/chat/mercado?p={p.get('slug') or p.get('id')}"
         foto = (f'<img src="{_e(p["imagen_principal"])}" width="88" height="66" alt="" '
                 f'style="display:block;border:0;border-radius:10px;object-fit:cover;" />') if p.get("imagen_principal") else ""
         color = "#088650" if a["tipo"] == "baja_precio" else TEXTO

@@ -50,7 +50,7 @@ MISIONES = {
                "url": "/chat/cuenta"},
     "mapa": {"titulo": "Explora el mapa de mercado", "llaves": 0,
              "detalle": "Mira qué zonas tienen más compradores que oferta.",
-             "url": "/chat/mapa"},
+             "url": "/chat/mercado/mapa"},
 }
 
 
