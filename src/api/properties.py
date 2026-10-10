@@ -495,7 +495,8 @@ def get_property_by_slug(slug: str):
                 p.fecha_actualizacion as updated_at,
                 p.agente_captador_telefono as owner_phone,
                 p.grupo_origen as source_group,
-                a.nombre as owner_name
+                a.nombre as owner_name,
+                p.fecha_ultima_validacion as verified_at
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
             WHERE (p.codigo_propiedad = %s OR p.id::text = %s) AND p.activa = true
@@ -540,6 +541,7 @@ def get_property_by_slug(slug: str):
             'featured': prop.get('featured'),
             'source': prop.get('source'),
             'source_url': prop.get('source_url'),
+            'verificada_hace_dias': frescura(prop.get('verified_at'))['verificada_hace_dias'],
             'created_at': str(prop.get('created_at')) if prop.get('created_at') else None,
             'updated_at': str(prop.get('updated_at')) if prop.get('updated_at') else None,
             'owner_phone': prop.get('owner_phone'),
