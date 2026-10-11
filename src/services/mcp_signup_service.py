@@ -7,8 +7,11 @@ Permite que un agente que NO tiene acceso al chat obtenga por sí mismo un
 inutilizable — el usuario nunca inicia sesión con contraseña, solo usa el token)
 y emite el token sobre `chat_user_sessions` (tipo='mcp').
 
-Gate opcional por código de invitación vía `MCP_SIGNUP_CODE`. Si la variable
-`MCP_SIGNUP_ENABLED` está en 'false', el alta se desactiva.
+Apagado por defecto (`MCP_SIGNUP_ENABLED=true` lo enciende; `MCP_SIGNUP_CODE`
+exige un código de invitación): crea cuentas sin clave ni correo verificado y con
+un token que no vence, así que cualquiera podía reservar correos ajenos o crear
+cuentas en masa. Las cuentas nuevas se crean en la web (/chat/registro, con clave
+y celular verificado) y se conectan a la IA con "Iniciar sesión".
 
 Seguridad: un correo que ya existe NUNCA recibe un token por aquí (se conecta con
 OAuth, con su clave). El celular declarado queda SIN verificar: no da acceso al
@@ -33,7 +36,7 @@ class SignupError(Exception):
 
 
 def _signup_enabled() -> bool:
-    return os.getenv("MCP_SIGNUP_ENABLED", "true").strip().lower() != "false"
+    return os.getenv("MCP_SIGNUP_ENABLED", "false").strip().lower() == "true"
 
 
 def _placeholder_password_hash() -> str:
@@ -52,7 +55,9 @@ def self_register(nombre: str, email: str, telefono: Optional[str] = None,
     correo gaste los desbloqueos de otro.
     """
     if not _signup_enabled():
-        raise SignupError("El auto-registro está temporalmente deshabilitado.")
+        front = os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
+        raise SignupError(f"Crea tu cuenta en {front}/chat/registro y luego conecta Fynder desde tu IA "
+                          "con \"Iniciar sesión\" (tu correo y tu clave).")
 
     required_code = os.getenv("MCP_SIGNUP_CODE")
     if required_code and (invite_code or "").strip() != required_code:

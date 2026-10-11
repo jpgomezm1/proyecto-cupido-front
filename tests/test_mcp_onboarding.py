@@ -11,6 +11,19 @@ import pytest
 from src.services import mcp_signup_service as sus
 
 
+@pytest.fixture(autouse=True)
+def _alta_encendida(monkeypatch):
+    # Las validaciones se prueban con el alta encendida (por defecto está apagada).
+    monkeypatch.setenv("MCP_SIGNUP_ENABLED", "true")
+    monkeypatch.delenv("MCP_SIGNUP_CODE", raising=False)
+
+
+def test_signup_apagado_por_defecto(monkeypatch):
+    monkeypatch.delenv("MCP_SIGNUP_ENABLED", raising=False)
+    with pytest.raises(sus.SignupError, match="registro"):
+        sus.self_register(nombre="Agente Real", email="a@b.com", acepta_terminos=True)
+
+
 def test_rejects_short_name():
     with pytest.raises(sus.SignupError):
         sus.self_register(nombre="A", email="a@b.com")

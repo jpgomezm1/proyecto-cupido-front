@@ -38,6 +38,9 @@ def get_current_user():
                 FROM chat_users u
                 JOIN chat_user_sessions s ON s.user_id = u.id
                 WHERE s.token = %s
+                  -- Solo sesiones de la web: un token del MCP (OAuth o código de
+                  -- acceso) no abre la cuenta en el navegador.
+                  AND COALESCE(s.tipo, 'chat') = 'chat'
                   AND s.activa = TRUE
                   AND (s.fecha_expiracion IS NULL OR s.fecha_expiracion > NOW())
                   AND u.activo = TRUE

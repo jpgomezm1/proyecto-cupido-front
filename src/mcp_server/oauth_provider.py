@@ -242,8 +242,11 @@ def _mint_refresh_token(db, user_id: int, client_id: str, scopes: List[str]) -> 
 
 def load_pending(rid: str) -> Optional[dict]:
     with get_db() as db:
-        row = fetch_one(db.cursor,
-            "SELECT * FROM oauth_pending_auth WHERE rid = %s", (rid,))
+        row = fetch_one(db.cursor, """
+            SELECT p.*, c.client_name FROM oauth_pending_auth p
+            LEFT JOIN oauth_clients c ON c.client_id = p.client_id
+            WHERE p.rid = %s
+        """, (rid,))
     if not row or row["expires_at"] < time.time():
         return None
     return row

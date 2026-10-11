@@ -11,6 +11,8 @@ Rutas:
 """
 
 import html
+import time
+from typing import Optional
 
 import anyio
 
@@ -26,7 +28,7 @@ from src.mcp_server.oauth_provider import (
 
 
 def _page(rid: str, error: str = "", email: str = "") -> str:
-    return _render_login(rid, error, email)
+    return _render_login(rid, error, email, _destino(load_pending(rid)))
 
 
 async def login_get(request: Request) -> HTMLResponse:
@@ -34,6 +36,55 @@ async def login_get(request: Request) -> HTMLResponse:
     if not rid or not load_pending(rid):
         return HTMLResponse(_EXPIRED_HTML, status_code=400)
     return HTMLResponse(_page(rid))
+
+
+# Destinos conocidos de la conexión (redirect_uri). Cualquiera puede registrar un
+# cliente OAuth, así que la página dice A QUIÉN se le da acceso y advierte si no es
+# Claude, ChatGPT o una app local (Claude Code, Cursor).
+_DESTINOS = {
+    "claude.ai": "Claude", "claude.com": "Claude", "anthropic.com": "Claude",
+    "chatgpt.com": "ChatGPT", "openai.com": "ChatGPT",
+}
+
+
+def _destino(pending: Optional[dict]) -> dict:
+    from urllib.parse import urlsplit
+    host = (urlsplit((pending or {}).get("redirect_uri") or "").hostname or "").lower()
+    nombre = ((pending or {}).get("client_name") or "").strip()[:60]
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return {"host": "esta computadora", "nombre": nombre or "Una app en tu computadora", "conocido": True}
+    for dominio, app in _DESTINOS.items():
+        if host == dominio or host.endswith("." + dominio):
+            return {"host": host, "nombre": app, "conocido": True}
+    return {"host": host or "desconocido", "nombre": nombre or "Una aplicación", "conocido": False}
+
+
+# Intentos fallidos por IP y por correo (en memoria, por proceso): frena la
+# fuerza bruta de claves, que aquí no tenía ningún límite.
+_FALLOS: dict = {}
+_VENTANA_S = 15 * 60
+_MAX_POR_IP = 20
+_MAX_POR_CORREO = 8
+
+
+def _bloqueado(*claves: str) -> bool:
+    ahora = time.time()
+    for k in claves:
+        _FALLOS[k] = [t for t in _FALLOS.get(k, []) if ahora - t < _VENTANA_S]
+    return (len(_FALLOS.get(claves[0], [])) >= _MAX_POR_IP
+            or any(len(_FALLOS.get(k, [])) >= _MAX_POR_CORREO for k in claves[1:]))
+
+
+def _fallo(*claves: str) -> None:
+    for k in claves:
+        _FALLOS.setdefault(k, []).append(time.time())
+    if len(_FALLOS) > 5000:  # no crecer sin límite
+        _FALLOS.clear()
+
+
+def _ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    return "ip:" + (xff.split(",")[-1].strip() if xff else (request.client.host if request.client else "?"))
 
 
 async def login_post(request: Request):
@@ -45,8 +96,13 @@ async def login_post(request: Request):
     if not rid or not load_pending(rid):
         return HTMLResponse(_EXPIRED_HTML, status_code=400)
 
+    claves = (_ip(request), "correo:" + email.lower())
+    if _bloqueado(*claves):
+        return HTMLResponse(_page(rid, "Demasiados intentos. Espera 15 minutos e inténtalo de nuevo.", email),
+                            status_code=429)
     user = authenticate_chat_user(email, password)
     if not user:
+        _fallo(*claves)
         return HTMLResponse(_page(rid, "Correo o clave incorrectos.", email), status_code=401)
     if not form.get("acepta_terminos"):
         return HTMLResponse(_page(rid, "Para conectar Fynder debes aceptar los términos.", email), status_code=400)
@@ -78,6 +134,8 @@ main{ flex:1; display:flex; align-items:center; padding:12px 0 8px; }
 .card h1{ text-align:center; font-size:22px; }
 .card .lead{ text-align:center; font-size:14.5px; margin-top:6px; }
 .olvido{ text-align:center; font-size:13.5px; margin-top:14px; }
+.destino{ text-align:center; font-size:14px; margin:14px 0 4px; }
+.destino span{ color:var(--muted); }
 .seguro{ text-align:center; color:var(--muted); font-size:12.5px; margin-top:16px; line-height:1.55; }
 """
 
@@ -90,6 +148,7 @@ _LOGIN_BODY = """
     <div class="findy"><img src="__FINDY__" alt="Findy, el asistente de Fynder"></div>
     <h1>Conecta Fynder con tu IA</h1>
     <p class="lead">Inicia sesión con tu cuenta de Fynder para autorizar la conexión.</p>
+    __DESTINO__
     __ERROR__
     <input type="hidden" name="rid" value="__RID__">
     <div class="field"><label for="email">Correo electrónico</label>
@@ -127,10 +186,18 @@ _SCRIPT = """<script>
 </script>"""
 
 
-def _render_login(rid: str, error: str = "", email: str = "") -> str:
+def _render_login(rid: str, error: str = "", email: str = "", destino: Optional[dict] = None) -> str:
     from src.services.suscripcion_service import url_terminos
     err_html = (f'<div class="alert-error" id="login-error" role="alert">{html.escape(error)}</div>'
                 if error else "")
+    d = destino or {"nombre": "Una aplicación", "host": "desconocido", "conocido": False}
+    destino_html = (
+        f'<p class="destino"><b>{html.escape(d["nombre"])}</b> quiere acceder a tu cuenta de Fynder'
+        f' <span>({html.escape(d["host"])})</span></p>')
+    if not d["conocido"]:
+        destino_html += ('<div class="alert-error" role="alert">Esta conexión no es de Claude ni de ChatGPT. '
+                         'Autorízala solo si tú mismo agregaste esta aplicación; si alguien te mandó este '
+                         'enlace, ciérralo.</div>')
     body = (_LOGIN_BODY
             .replace("__HEADER__", brand.header())
             .replace("__FOOTER__", brand.footer())
@@ -139,6 +206,7 @@ def _render_login(rid: str, error: str = "", email: str = "") -> str:
             .replace("__URL_TERMINOS__", html.escape(url_terminos()))
             .replace("__DESCRIBED__", 'aria-describedby="login-error" aria-invalid="true"' if error else "")
             .replace("__ERROR__", err_html)
+            .replace("__DESTINO__", destino_html)
             # valores del usuario al final, para que no se reinterpreten como placeholders
             .replace("__EMAIL__", html.escape(email))
             .replace("__RID__", html.escape(rid)))
