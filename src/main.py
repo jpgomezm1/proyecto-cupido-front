@@ -185,6 +185,7 @@ for _bp, _publicos in (
     (share_analytics_bp, ('track_event',)),
     (admin_negocio_bp, ()),
     (admin_agentes_bp, ()),
+    (dependencies_bp, ()),
 ):
     proteger_admin(_bp, _publicos)
 
@@ -235,6 +236,13 @@ for _ep, _lim in (
     ("property_chat.chat_with_property_by_slug", "15 per hour;60 per day"),
     ("api.improve_description", "60 per hour"),
     ("transcribe.transcribe_audio", "60 per hour"),
+    # Directorio de agentes y selecciones: evita recorrer ids en bloque.
+    ("chat_auth.get_agent_public_info", "60 per hour;300 per day"),
+    ("shared_selections.create_selection", "60 per hour"),
+    ("shared_selections.generate_pdf", "10 per hour"),
+    # Fuerza bruta de claves.
+    ("auth.login", "5 per minute;30 per hour"),
+    ("chat_auth.login", "8 per minute;40 per hour"),
 ):
     if _ep in app.view_functions:
         app.view_functions[_ep] = limiter.limit(_lim)(app.view_functions[_ep])

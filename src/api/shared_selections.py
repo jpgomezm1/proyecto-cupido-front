@@ -55,9 +55,20 @@ def create_selection():
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
 
-        property_ids = data.get('property_ids', [])
+        # Quien firma la selección sale de la sesión, nunca del body: si no,
+        # cualquiera publicaba "propuestas" a nombre de otro agente y veía su teléfono.
+        from src.api.access import es_admin, usuario_chat
+        usuario = usuario_chat()
+        if usuario:
+            user_id = usuario['id']
+        elif es_admin():
+            user_id = data.get('user_id')
+        else:
+            return jsonify({'success': False, 'error': 'Inicia sesión para compartir'}), 401
+
+        property_ids = [int(i) for i in (data.get('property_ids') or [])
+                        if str(i).strip().isdigit()][:30]
         conversation_id = data.get('conversation_id')
-        user_id = data.get('user_id')  # ID del chat_user que crea el share
 
         if not property_ids or len(property_ids) == 0:
             return jsonify({'success': False, 'error': 'Se requiere al menos una propiedad'}), 400
@@ -145,7 +156,7 @@ def get_selection(share_id: str):
                 s.created_at,
                 s.user_id,
                 cu.nombre as agent_name,
-                cu.telefono as agent_phone
+                CASE WHEN cu.telefono_verificado THEN cu.telefono END as agent_phone
             FROM shared_property_selections s
             LEFT JOIN chat_users cu ON s.user_id = cu.id
             WHERE s.share_id = %s
@@ -257,7 +268,7 @@ def generate_pdf(share_id: str):
                 s.property_ids,
                 s.user_id,
                 cu.nombre as agent_name,
-                cu.telefono as agent_phone
+                CASE WHEN cu.telefono_verificado THEN cu.telefono END as agent_phone
             FROM shared_property_selections s
             LEFT JOIN chat_users cu ON s.user_id = cu.id
             WHERE s.share_id = %s
@@ -280,7 +291,7 @@ def generate_pdf(share_id: str):
             if pid not in seen:
                 seen.add(pid)
                 unique_ids.append(pid)
-        property_ids = unique_ids
+        property_ids = unique_ids[:30]
 
         # Build agent info
         agent_info = None
@@ -313,6 +324,10 @@ def generate_pdf(share_id: str):
         """, (property_ids, property_ids))
 
         properties = [dict(row) for row in db.cursor.fetchall()]
+        # Las descripciones scrapeadas traen a veces el teléfono del captador.
+        from src.services.redact import redact_phones
+        for p in properties:
+            p['descripcion'] = redact_phones(p.get('descripcion'), cut_signatures=True)
 
         if not properties:
             return jsonify({'success': False, 'error': 'No se encontraron propiedades'}), 404

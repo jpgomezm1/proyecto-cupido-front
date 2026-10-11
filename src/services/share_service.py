@@ -9,6 +9,7 @@ WhatsApp. NUNCA expone datos de contacto de agentes (es para el cliente final).
 - `datos_comparativa` / `datos_brochure`: proyección limpia para renderizar.
 """
 
+import re
 import base64
 import hashlib
 import hmac
@@ -137,10 +138,23 @@ def _prop_limpia(cur, pid: int, agente_id: Optional[int] = None) -> Optional[Dic
         "amenidades": [a.strip() for a in
                        ((p.get("amenidades_internas") or "") + "|" + (p.get("amenidades_externas") or "")).split("|")
                        if a.strip()],
-        "descripcion": p.get("descripcion_ai") or p.get("descripcion"),
+        # Página pública: sin teléfonos, correos ni links en el texto libre.
+        "descripcion": _texto_publico(p.get("descripcion_ai") or p.get("descripcion")),
         "imagenes": p.get("imagenes_urls") or ([p["imagen_principal"]] if p.get("imagen_principal") else []),
         "imagen_principal": p.get("imagen_principal"),
     }
+
+
+_RE_CORREO = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_RE_LINK = re.compile(r"(?:https?://|www\.)\S+", re.I)
+
+
+def _texto_publico(texto: Optional[str]) -> Optional[str]:
+    if not texto:
+        return texto
+    from src.services.redact import redact_phones
+    texto = redact_phones(texto, cut_signatures=True)
+    return _RE_LINK.sub("", _RE_CORREO.sub("", texto)).strip()
 
 
 def datos_comparativa(ids: List[int], agente_id: Optional[int] = None) -> Dict[str, Any]:

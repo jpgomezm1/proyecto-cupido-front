@@ -215,6 +215,9 @@ def search_history():
     """
     Retorna historial de búsquedas recientes (últimas 20)
     """
+    from src.api.access import es_admin
+    if not es_admin():  # son los pedidos de todos los agentes
+        return jsonify({'success': False, 'error': 'Solo administradores'}), 401
     try:
         with DatabaseManager() as db:
             query = """
