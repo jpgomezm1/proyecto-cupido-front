@@ -76,7 +76,8 @@ def mejorar(user_id: int, tel10: str, propiedad_id: int, url: str) -> Dict[str, 
         raise FotoError("no_disponible", "La mejora de fotos no está disponible en este momento.", 503)
 
     try:
-        r = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        from src.services import url_segura  # la URL de la foto la pudo poner el agente
+        r = url_segura.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         original = r.content
         tipo = (r.headers.get("content-type") or "image/jpeg").split(";")[0]

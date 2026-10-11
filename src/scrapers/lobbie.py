@@ -44,7 +44,8 @@ class LobbieScraper:
             verbose: Si True, muestra mensajes de progreso
         """
         self.verbose = verbose
-        self.session = requests.Session()
+        from src.services.url_segura import SesionSegura  # links del usuario: sin redes internas
+        self.session = SesionSegura()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',

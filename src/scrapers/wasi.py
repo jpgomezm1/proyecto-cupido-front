@@ -88,7 +88,9 @@ class WasiScraper:
 
             # Descargar página (usar request directo en lugar de session para evitar acumulación de cookies)
             download_start = time.time()
-            response = requests.get(url, headers=self.session.headers, timeout=30)
+            # Link que pega el usuario: sin redes internas (ver url_segura).
+            from src.services import url_segura
+            response = url_segura.get(url, headers=self.session.headers, timeout=30)
             response.raise_for_status()
             download_elapsed = (time.time() - download_start) * 1000
 
