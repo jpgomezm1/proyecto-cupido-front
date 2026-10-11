@@ -139,13 +139,18 @@ def enviar_codigo(user_id: int, telefono: Optional[str] = None) -> Dict[str, Any
             cur.execute("UPDATE chat_users SET telefono = %s WHERE id = %s", (tel, user_id))
         db.conn.commit()
 
+    enviado = True
     try:
         enviar_whatsapp(tel, f"Tu código de Fynder es *{codigo}*.\n\nVence en 10 minutos. "
                              "Si no lo pediste, ignora este mensaje.")
     except WhatsAppSendError as e:
+        # Sin WhatsApp saliente la app ofrece el respaldo: el agente le escribe a
+        # Fynder DESDE ese celular y el equipo lo verifica en el admin (Atención ›
+        # Celulares). Nunca por correo: no prueba que el número sea suyo.
         print(f"⚠️ No se pudo enviar el código a usuario {user_id}: {e}")
-        raise RegistroError("envio", "No pudimos enviar el WhatsApp. Revisa el número o intenta en un momento.")
-    return {"ok": True, "telefono": tel, "vence_minutos": int(VIGENCIA_CODIGO.total_seconds() // 60)}
+        enviado = False
+    return {"ok": True, "telefono": tel, "enviado": enviado,
+            "vence_minutos": int(VIGENCIA_CODIGO.total_seconds() // 60)}
 
 
 def verificar_codigo(user_id: int, codigo: str) -> Dict[str, Any]:

@@ -831,6 +831,12 @@ def agregar_creditos(user_id: int, cantidad: int, tipo: str = "extra",
 def verificar_telefono(user_id: int, verificado: bool = True) -> Dict[str, Any]:
     with get_db() as db:
         cur = db.cursor
+        if verificado and scalar(cur, """
+            SELECT 1 FROM chat_users o JOIN chat_users u ON u.id = %s
+            WHERE o.id <> u.id AND o.activo AND o.telefono_verificado AND o.telefono = u.telefono
+        """, (user_id,)):
+            # Un celular verificado es de UNA cuenta ("propio" y "mis inmuebles" salen de él).
+            raise SuscripcionError("Ese celular ya está verificado en otra cuenta activa")
         cur.execute("""
             UPDATE chat_users SET telefono_verificado = %s,
                    telefono_verificado_at = CASE WHEN %s THEN NOW() ELSE NULL END

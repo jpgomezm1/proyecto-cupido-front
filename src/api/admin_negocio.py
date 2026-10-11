@@ -248,6 +248,28 @@ def soporte():
         return _fallo(e, 'soporte')
 
 
+@admin_negocio_bp.route('/celulares', methods=['GET'])
+def celulares():
+    """Agentes que pidieron código en los últimos 14 días y siguen sin verificar: el
+    respaldo cuando el WhatsApp de Fynder no envía. Se verifica solo si el agente
+    escribió desde ESE número."""
+    try:
+        with get_db() as db:
+            filas = fetch_all(db.cursor, """
+                SELECT u.id AS user_id, u.nombre, u.email, u.telefono,
+                       MAX(c.created_at) AS pidio_at, COUNT(*) AS codigos,
+                       EXISTS (SELECT 1 FROM chat_users o WHERE o.id <> u.id AND o.activo
+                                 AND o.telefono_verificado AND o.telefono = u.telefono) AS en_otra_cuenta
+                FROM codigos_telefono c JOIN chat_users u ON u.id = c.user_id
+                WHERE c.created_at > NOW() - INTERVAL '14 days'
+                  AND u.activo AND NOT COALESCE(u.telefono_verificado, FALSE)
+                GROUP BY u.id ORDER BY MAX(c.created_at) DESC LIMIT 200
+            """)
+        return _ok([_iso(f) for f in filas])
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'celulares')
+
+
 @admin_negocio_bp.route('/tablero', methods=['GET'])
 def tablero():
     """Actividad, agentes activos, embudo del negocio y retención (base de Fynder)."""
