@@ -28,6 +28,7 @@ SENSITIVE_KEYS = {
     "agente_comprador_telefono", "agente_vendedor_telefono",
     "comprador_telefono", "correo_personal", "email", "nombre_agente",
     "phone", "celular", "whatsapp",
+    "owner_name", "source_group", "contacto_responsable",
 }
 
 # Claves que exponen el PORTAL de origen (link original). Nunca deben salir del

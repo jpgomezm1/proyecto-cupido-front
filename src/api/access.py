@@ -27,6 +27,8 @@ CAMPOS_CONTACTO = {
     "agente_captador_telefono", "agente_captador_id", "agente_telefono", "agente_nombre",
     "captador_nombre", "captador_whatsapp", "whatsapp", "celular", "email",
     "url_original", "link_original", "enlace_original",
+    "correo_personal", "comprador_telefono", "agente_comprador_telefono",
+    "agente_vendedor_telefono", "nombre_agente",
 }
 
 

@@ -35,6 +35,16 @@ def _salida(props: List[Dict]) -> List[Dict]:
             p['contacto_desbloqueado'] = p.get('id') in vistos
             dueno = ''.join(ch for ch in (p.get('owner_phone') or '') if ch.isdigit())[-10:]
             p['es_propia'] = bool(user.get('telefono_verificado') and tel and dueno == tel)
+    for p in props:
+        # El portal de origen y la dirección exacta llevan al aviso original (y a su
+        # contacto, que es lo que se cobra): fuera del admin y del dueño, se ocultan.
+        if p.get('source') not in ('Fynder', 'Propia') and not p.get('es_propia'):
+            p['source'] = 'Red Fynder'
+        if p.get('location_approximate', True) and not p.get('es_propia'):
+            p['address'] = None
+            for k in ('lat', 'lng'):
+                if isinstance(p.get(k), (int, float)):
+                    p[k] = round(float(p[k]), 3)  # ~100 m: la zona, no el edificio
     return para_cliente(props)
 
 
