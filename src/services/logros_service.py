@@ -13,7 +13,8 @@ Incentiva el uso diario de Fynder, y sobre todo el uso desde la IA del agente
     3 días +1 · 7 días +2 · 14 días +3; el doble si esos días también fueron
     días con IA (racha del MCP al menos igual de larga).
 
-"Uso real" = una búsqueda con IA (uso justo), una tool del MCP o un desbloqueo.
+"Uso real" = una búsqueda con IA (uso justo), una tool del MCP que no sea de la
+cuenta (mi_plan, mis_desbloqueos) o un desbloqueo.
 Las llaves solo se abonan con el celular verificado (igual que la prueba) y hay
 un tope de llaves de premio por mes; lo que pase del tope queda como logro sin
 llaves. Todo es idempotente: `evaluar` se puede llamar cuantas veces se quiera.
@@ -30,7 +31,7 @@ from src.services.db import get_db, fetch_all, fetch_one, scalar
 logger = logging.getLogger(__name__)
 
 TZ = "America/Bogota"
-TOPE_MES = 8
+TOPE_MES = 4   # llaves de premio por mes (rachas y misiones); más que eso regalaba un plan
 HITOS = ((3, 1), (7, 2), (14, 3))   # (días, llaves); con IA, el doble
 VENTANA_DIAS = 60
 _LOCK_LOGROS = 7102
@@ -117,11 +118,13 @@ def _dias(cur, user_id: int) -> Dict[str, Set[date]]:
             -- mcp_tool_calls.created_at es TIMESTAMP sin zona, guardado en UTC
             SELECT (created_at AT TIME ZONE 'UTC' AT TIME ZONE '{TZ}')::date, TRUE FROM mcp_tool_calls
              WHERE user_id = %(u)s AND ok AND created_at > (NOW() AT TIME ZONE 'UTC') - make_interval(days => %(v)s)
+               -- Consultar la cuenta (mi_plan, mis_desbloqueos) no es uso real.
+               AND tool <> ALL(%(cuenta)s)
             UNION ALL
             SELECT (created_at AT TIME ZONE '{TZ}')::date, FALSE FROM desbloqueos
              WHERE user_id = %(u)s AND created_at > NOW() - make_interval(days => %(v)s)
         ) t GROUP BY fecha
-    """, {"u": user_id, "v": VENTANA_DIAS})
+    """, {"u": user_id, "v": VENTANA_DIAS, "cuenta": list(_TOOLS_CUENTA)})
     return {"todos": {f["fecha"] for f in filas}, "ia": {f["fecha"] for f in filas if f["ia"]}}
 
 

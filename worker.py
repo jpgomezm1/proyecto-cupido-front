@@ -28,6 +28,16 @@ if redis_url.startswith('rediss://'):
 else:
     conn = redis.from_url(redis_url)
 
+def _reportar(job: str, e: Exception) -> None:
+    """Error de un job programado: al log y a Sentry (un print no lo ve nadie)."""
+    print(f"[{job}] Error: {e}")
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 if __name__ == '__main__':
     print(f"[WORKER] Iniciando worker...")
     print(f"[WORKER] Redis URL: {redis_url[:30]}...")
@@ -45,7 +55,7 @@ if __name__ == '__main__':
             try:
                 print(f"[REVALIDACION] {revalidar_lote()}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
-                print(f"[REVALIDACION] Error: {e}")
+                _reportar("REVALIDACION", e)
 
         scheduler = BackgroundScheduler()
         scheduler.add_job(_revalidar, 'interval',
@@ -64,7 +74,7 @@ if __name__ == '__main__':
             try:
                 print(f"[PEDIDOS-IA] {estructurar_pendientes(limit=100, concurrencia=4)}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
-                print(f"[PEDIDOS-IA] Error: {e}")
+                _reportar("PEDIDOS-IA", e)
 
         sched_pedidos = BackgroundScheduler()
         sched_pedidos.add_job(_pedidos, 'interval', minutes=15, id='pedidos_ia',
@@ -83,7 +93,7 @@ if __name__ == '__main__':
                 con_ia = os.getenv('FICHAS_IA', 'true').lower() == 'true'
                 print(f"[FICHAS] {enriquecer(limite=60, hilos=3, con_ia=con_ia)}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
-                print(f"[FICHAS] Error: {e}")
+                _reportar("FICHAS", e)
 
         sched_fichas = BackgroundScheduler()
         sched_fichas.add_job(_fichas, 'interval', minutes=30, id='fichas',
@@ -98,11 +108,15 @@ if __name__ == '__main__':
         from src.services import alertas_service
 
         def _alertas():
+            # Por separado: si generar falla, los resúmenes pendientes igual salen.
             try:
                 print(f"[ALERTAS] {alertas_service.generar()}")
-                print(f"[ALERTAS] correo {alertas_service.enviar_resumenes()}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
-                print(f"[ALERTAS] Error: {e}")
+                _reportar("ALERTAS", e)
+            try:
+                print(f"[ALERTAS] correo {alertas_service.enviar_resumenes()}")
+            except Exception as e:  # noqa: BLE001
+                _reportar("ALERTAS-CORREO", e)
 
         sched_alertas = BackgroundScheduler()
         sched_alertas.add_job(_alertas, 'interval', minutes=30, id='alertas',
@@ -119,13 +133,30 @@ if __name__ == '__main__':
             try:
                 print(f"[CORREOS] Recordatorios de plan: {recordatorios_plan()}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
-                print(f"[CORREOS] Error: {e}")
+                _reportar("CORREOS", e)
 
         sched_correos = BackgroundScheduler()
         sched_correos.add_job(_recordatorios, 'interval', hours=6, id='correos_plan',
                               next_run_time=datetime.now(), max_instances=1, coalesce=True)
         sched_correos.start()
         print("[WORKER] Recordatorios de plan programados (cada 6 h)")
+
+    # Conciliación de pagos de Wompi: los que quedaron pendientes o rechazados.
+    if os.getenv('PAGOS_RECONCILIAR_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services.pagos_service import reconciliar
+
+        def _reconciliar():
+            try:
+                print(f"[PAGOS] Conciliación: {reconciliar()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                _reportar("PAGOS", e)
+
+        sched_pagos = BackgroundScheduler()
+        sched_pagos.add_job(_reconciliar, 'interval', minutes=15, id='pagos_reconciliar',
+                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_pagos.start()
+        print("[WORKER] Conciliación de pagos programada (cada 15 min)")
 
     # Crear worker con la conexión (API moderna de RQ)
     worker = Worker([queue], connection=conn)

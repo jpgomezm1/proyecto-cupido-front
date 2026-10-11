@@ -173,6 +173,12 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
             return {"ok": False, "error": "desconocido"}
         # Un aprobado es definitivo; un rechazo/error aún puede pasar a aprobado
         # si el agente reintenta en el mismo checkout.
+        if pago["estado"] == "aprobado" and nuevo == "anulado":
+            # Wompi anuló una transacción ya aprobada (el plan sigue activo): se
+            # deja constancia y se avisa para revisarlo a mano.
+            db.conn.rollback()
+            _avisar(f"Pago {referencia} APROBADO y luego ANULADO por Wompi: revisar el plan del usuario {pago['user_id']}")
+            return {"ok": True, "estado": pago["estado"], "anulado_despues": True}
         if nuevo is None or pago["estado"] == "aprobado" or (pago["estado"] in _FINALES and nuevo != "aprobado"):
             db.conn.rollback()
             return {"ok": True, "estado": pago["estado"], "sin_cambios": True}
@@ -200,7 +206,7 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
                 res = suscripcion_service.activar_plan_en(
                     cur, pago["user_id"], pago["plan_codigo"], referencia_pago=referencia,
                     notas=f"Wompi {tx.get('payment_method_type') or ''} {tx.get('id') or ''}".strip(),
-                    admin="wompi", precio_cop=pago["monto_cop"])
+                    admin="wompi", precio_cop=pago["monto_cop"], ya_pagado=True)
                 suscripcion_id = res["suscripcion_id"]
         cur.execute("""
             UPDATE pagos SET estado = %s, transaccion_id = %s, metodo = %s,
@@ -312,7 +318,8 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
     if not pago:
         raise PagoError("no_encontrado", "No encontramos ese pago.")
 
-    if pago["estado"] == "pendiente" and habilitado():
+    # Un rechazo puede pasar a aprobado si el agente reintenta en el mismo checkout.
+    if pago["estado"] in ("pendiente", "rechazado", "error") and habilitado():
         try:
             tx = _consultar_transaccion(transaccion_id) if transaccion_id else None
             if not tx or tx.get("reference") != referencia:
@@ -329,6 +336,42 @@ def verificar(user_id: int, referencia: str, transaccion_id: Optional[str] = Non
                 WHERE pg.referencia = %s
             """, (referencia,))
     return {"ok": True, **_salida(pago)}
+
+
+def _avisar(mensaje: str) -> None:
+    print(f"⚠️ {mensaje}")
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(mensaje, level="warning")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def reconciliar(horas: int = 48) -> Dict[str, Any]:
+    """Pregunta a Wompi por los pagos recientes sin aprobar (pendientes, rechazados o
+    con error) y los aplica. Cubre el webhook que nunca llegó y el agente que cerró
+    la pestaña antes de volver a /chat/pago: sin esto, un pago cobrado podía quedar
+    pendiente para siempre."""
+    if not habilitado():
+        return {"omitido": "wompi_deshabilitado"}
+    with get_db() as db:
+        filas = fetch_all(db.cursor, """
+            SELECT referencia FROM pagos
+            WHERE pasarela = 'wompi' AND estado IN ('pendiente', 'rechazado', 'error')
+              AND created_at > NOW() - (%s * INTERVAL '1 hour')
+            ORDER BY created_at
+        """, (horas,))
+    aplicados = consultados = 0
+    for f in filas:
+        try:
+            tx = _consultar_por_referencia(f["referencia"])
+            consultados += 1
+            if tx and tx.get("reference") == f["referencia"]:
+                res = _aplicar(tx, "reconciliacion")
+                aplicados += int(bool(res.get("ok") and not res.get("sin_cambios")))
+        except Exception as e:  # noqa: BLE001 — un pago no frena a los demás
+            print(f"⚠️ Reconciliación {f['referencia']}: {e}")
+    return {"revisados": len(filas), "consultados": consultados, "actualizados": aplicados}
 
 
 def historial(user_id: int, limit: int = 12) -> list:

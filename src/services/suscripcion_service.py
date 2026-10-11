@@ -326,6 +326,20 @@ def _desbloqueo_existente(cur, user_id: int, tipo: str, ref_id: int) -> Optional
     """, (user_id, tipo, ref_id))
 
 
+DIAS_VERIFICACION_RECIENTE = 3
+
+
+def _verificado_hace_poco(propiedad_id: int) -> bool:
+    """El validador confirmó el inmueble publicado hace pocos días (respaldo cuando la
+    verificación en vivo no es concluyente)."""
+    with get_db() as db:
+        return bool(scalar(db.cursor, """
+            SELECT 1 FROM propiedades
+            WHERE id = %s AND activa
+              AND fecha_ultima_validacion > NOW() - (%s * INTERVAL '1 day')
+        """, (propiedad_id, DIAS_VERIFICACION_RECIENTE)))
+
+
 def publicacion_original(url: Optional[str]) -> Optional[str]:
     """Link de la publicación en el portal de origen (Wasi, Lobbie, Pulppo…).
     Lleva al contacto, así que SOLO sale junto a un contacto desbloqueado: en
@@ -471,11 +485,13 @@ def desbloquear(user_id: int, tipo: str, ref, canal: str = "mcp") -> Dict[str, A
             return _error("no_disponible",
                           "Verifiqué el inmueble y ya no está publicado. No se cobra; "
                           "lo marqué como no disponible.")
-        if disp.get("de_red"):
-            # El portal de origen no respondió ni al reintento: no se cobra sin saber si existe.
+        if disp.get("estado") != "disponible" and not _verificado_hace_poco(r["ref_id"]):
+            # Solo se cobra con el inmueble CONFIRMADO publicado: en vivo ahora, o por el
+            # validador en los últimos días. Un portal que no responde, que bloquea al
+            # robot (403/429) o una página que no se reconoce no bastan para cobrar.
             return _error("verificacion_pendiente",
-                          "No pude confirmar en el portal de origen que el inmueble siga publicado "
-                          "(no responde). No se usó ninguna llave; inténtalo de nuevo en unos minutos.")
+                          "No pude confirmar en el portal de origen que el inmueble siga publicado. "
+                          "No se usó ninguna llave; inténtalo de nuevo en unos minutos.")
         disponibilidad = {"estado": disp.get("estado"), "verificado_en": disp.get("verificado_en"),
                           "cambio_precio": disp.get("cambio_precio")}
 
@@ -603,9 +619,14 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             "cobrado": d["fuente_credito"] != "gratis",
             "fecha": d["created_at"].isoformat() if d.get("created_at") else None,
             "reportado": d.get("reporte_id") is not None,
-            "contacto": {"telefono": d.get("contacto_telefono"), "nombre": d.get("contacto_nombre"),
-                         "agencia": d.get("contacto_agencia"),
-                         "publicacion_original": publicacion_original(d.get("url"))},
+            # Reembolsado (el agente reportó que no servía y recuperó la llave): ya no
+            # tiene derecho al contacto; si no, el reporte regalaría contactos.
+            "contacto": ({"telefono": None, "nombre": d.get("contacto_nombre"), "agencia": d.get("contacto_agencia"),
+                          "publicacion_original": None}
+                         if d["estado"] == "reembolsado" else
+                         {"telefono": d.get("contacto_telefono"), "nombre": d.get("contacto_nombre"),
+                          "agencia": d.get("contacto_agencia"),
+                          "publicacion_original": publicacion_original(d.get("url"))}),
             # Para mostrar el contacto con su inmueble o su pedido (sin datos de contacto)
             "inmueble": {
                 "imagen": d.get("imagen_principal"),
@@ -733,10 +754,12 @@ def activar_plan(user_id: int, plan_codigo: str, referencia_pago: Optional[str] 
 
 def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Optional[str] = None,
                     notas: Optional[str] = None, admin: Optional[str] = None,
-                    precio_cop: Optional[int] = None) -> Dict[str, Any]:
+                    precio_cop: Optional[int] = None, ya_pagado: bool = False) -> Dict[str, Any]:
     """`activar_plan` dentro de una transacción del caller (no hace commit).
-    `precio_cop` registra lo realmente pagado (si no, el precio del plan hoy)."""
-    plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND activo", (plan_codigo,))
+    `precio_cop` registra lo realmente pagado (si no, el precio del plan hoy).
+    `ya_pagado`: el agente ya pagó (Wompi), así que se activa aunque el plan se
+    haya desactivado entre el checkout y la aprobación."""
+    plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND (activo OR %s)", (plan_codigo, ya_pagado))
     if not plan or plan_codigo == "prueba" or plan.get("tipo") == "paquete":
         raise SuscripcionError(f"Plan inválido: {plan_codigo}")
     if not _usuario(cur, user_id):
