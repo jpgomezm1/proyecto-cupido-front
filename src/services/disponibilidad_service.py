@@ -456,7 +456,6 @@ def verificar_disponibilidad(propiedad_id, actualizar: bool = True, origen: str 
 # =========================================================================
 
 # Lock de sesión para que solo una instancia del worker revalide a la vez.
-_LOCK_REVALIDACION = 7102
 
 # De cada lote, esta fracción revisa inmuebles que el validador bajó hace más de
 # una semana, por si volvieron a publicarse (p. ej. "comercialización suspendida
@@ -504,10 +503,12 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
     dias = int(os.getenv("REVALIDACION_DIAS_OBJETIVO", "7"))
     intervalo = int(os.getenv("REVALIDACION_INTERVALO_MIN", "30"))
 
+    from src.services import job_lock
+    # Lock con vencimiento (job_lock): el advisory lock de sesión se quedaba
+    # tomado con el pooler de Neon y la revalidación se saltaba.
+    if not job_lock.tomar("revalidacion", minutos=max(10, intervalo - 5)):
+        return {"omitido": True}
     with get_db() as db:
-        # Lock de sesión: se libera al final (o si la conexión se cierra).
-        if not scalar(db.cursor, "SELECT pg_try_advisory_lock(%s)", (_LOCK_REVALIDACION,)):
-            return {"omitido": True}
         try:
             if n is None:
                 cuenta = fetch_one(db.cursor, f"""
@@ -547,8 +548,7 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
                 inciertas += v.veredicto == INCIERTO
             db.conn.commit()
         finally:
-            db.cursor.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_REVALIDACION,))
-            db.conn.commit()
+            job_lock.soltar("revalidacion")
 
     return {"revisadas": len(props), "desactivadas": cuenta["desactivada"],
             "reactivadas": cuenta["reactivada"], "inciertas": inciertas,

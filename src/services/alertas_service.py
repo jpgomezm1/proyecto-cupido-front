@@ -22,7 +22,6 @@ from src.services.db import fetch_all, fetch_one, get_db, scalar
 UMBRAL = float(os.getenv("FYNDER_ALERTA_UMBRAL", "72"))
 HORAS_CORREO = float(os.getenv("FYNDER_ALERTA_CORREO_HORAS", "12"))
 MAX_POR_CLIENTE = 5          # alertas nuevas por cliente en una corrida (lo mejor primero)
-_LOCK = 7103
 
 
 def _m(v) -> str:
@@ -145,10 +144,12 @@ def _insertar(cur, user_id, cliente_id, tipo, propiedad_id, score=None, razones=
 def generar(max_inmuebles: int = 400) -> Dict[str, int]:
     """Alertas por inmuebles nuevos y cambios de precio desde la última corrida."""
     creadas = {"nuevo_inmueble": 0, "baja_precio": 0, "sube_precio": 0}
+    from src.services import job_lock
+    # Lock con vencimiento: el advisory lock de sesión se quedaba tomado con el pooler.
+    if not job_lock.tomar("alertas", minutos=25):
+        return {"omitido": 1}
     with get_db() as db:
         cur = db.cursor
-        if not scalar(cur, "SELECT pg_try_advisory_lock(%s)", (_LOCK,)):
-            return {"omitido": 1}
         try:
             desde_i, desde_p = _cursor(cur, "inmuebles"), _cursor(cur, "precios")
             nuevos = fetch_all(cur, """
@@ -210,8 +211,7 @@ def generar(max_inmuebles: int = 400) -> Dict[str, int]:
                             (max(ch["created_at"] for ch in cambios),))
             db.conn.commit()
         finally:
-            cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK,))
-            db.conn.commit()
+            job_lock.soltar("alertas")
     return creadas
 
 
