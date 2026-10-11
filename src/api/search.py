@@ -58,6 +58,9 @@ def ai_search():
         }
     }
     """
+    from src.api.access import es_admin
+    if not es_admin():  # búsqueda con IA del admin (Pedidos); los agentes usan Findy
+        return jsonify({'success': False, 'error': 'Solo administradores'}), 401
     try:
         data = request.get_json()
 

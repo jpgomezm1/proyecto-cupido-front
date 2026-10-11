@@ -91,11 +91,12 @@ def _origenes_frontend():
     origenes = {
         "https://fyndercol.netlify.app",
         "https://dash-admin-hrjg.netlify.app",
-        "http://localhost:8080",
-        "http://localhost:5173",
-        "http://localhost:4242",
         FRONTEND_URL,
     }
+    # Orígenes locales solo en desarrollo: en producción (Heroku, DYNO) un sitio
+    # en localhost no debe poder llamar la API con credenciales.
+    if not os.getenv("DYNO") or os.getenv("CORS_PERMITIR_LOCALHOST") == "1":
+        origenes |= {"http://localhost:8080", "http://localhost:5173", "http://localhost:4242"}
     esquema, _, host = FRONTEND_URL.partition("://")
     if host:
         origenes.add(f"{esquema}://{host[4:]}" if host.startswith("www.") else f"{esquema}://www.{host}")
@@ -121,12 +122,12 @@ def rate_limit_key_func():
     if request.method == 'OPTIONS':
         return None  # None = no aplicar rate limit
 
-    # Heroku pasa la IP real en X-Forwarded-For
-    # Formato: "client_ip, proxy1_ip, proxy2_ip"
+    # Heroku agrega la IP real del cliente AL FINAL de X-Forwarded-For. Lo que
+    # venga antes lo puede escribir el cliente (falsificable), así que se usa la
+    # última entrada.
     forwarded_for = request.headers.get('X-Forwarded-For', '')
     if forwarded_for:
-        # Tomar la primera IP (cliente original)
-        client_ip = forwarded_for.split(',')[0].strip()
+        client_ip = forwarded_for.split(',')[-1].strip()
         if client_ip:
             return client_ip
 
@@ -154,7 +155,11 @@ limiter = Limiter(
     app=app,
     key_func=rate_limit_key_func,
     default_limits=["5000 per day", "500 per hour"],
-    storage_uri=storage_uri
+    storage_uri=storage_uri,
+    # Si Redis no responde, se sigue atendiendo (con límites en memoria) en vez
+    # de devolver 500 en todas las rutas.
+    swallow_errors=True,
+    in_memory_fallback_enabled=True,
 )
 print("[OK] Rate limiter inicializado")
 
@@ -223,6 +228,17 @@ app.register_blueprint(herramientas_bp)
 app.register_blueprint(admin_negocio_bp)
 app.register_blueprint(admin_agentes_bp)
 
+# Límites estrictos en lo que llama a la IA sin sesión (el chat del inmueble lo
+# usa el comprador en la página pública): por IP, para que no se pueda abusar.
+for _ep, _lim in (
+    ("property_chat.chat_with_property", "15 per hour;60 per day"),
+    ("property_chat.chat_with_property_by_slug", "15 per hour;60 per day"),
+    ("api.improve_description", "60 per hour"),
+    ("transcribe.transcribe_audio", "60 per hour"),
+):
+    if _ep in app.view_functions:
+        app.view_functions[_ep] = limiter.limit(_lim)(app.view_functions[_ep])
+
 # Inicializar bot
 bot = WhatsAppBot()
 
@@ -288,11 +304,19 @@ def home():
 @app.route('/health')
 def health():
     """Endpoint de health check"""
+    base_ok = True
+    try:
+        from src.services.db import get_db, scalar
+        with get_db() as db:
+            scalar(db.cursor, "SELECT 1")
+    except Exception:  # noqa: BLE001
+        base_ok = False
     return jsonify({
-        'status': 'healthy',
+        'status': 'healthy' if base_ok else 'degraded',
+        'database': base_ok,
         'timestamp': datetime.now().isoformat(),
         'bot_initialized': bot is not None
-    })
+    }), 200 if base_ok else 503
 
 
 @app.route('/webhook', methods=['POST'])
@@ -304,6 +328,17 @@ def webhook():
     UltraMSG envía los mensajes entrantes a este endpoint.
     El formato típico incluye: from, body, type, id, etc.
     """
+    # Token secreto (ULTRAMSG_WEBHOOK_TOKEN): configura en UltraMSG la URL
+    # .../webhook?token=<valor>. Sin la variable se acepta (con aviso) para no
+    # cortar el bot mientras se configura.
+    esperado = os.getenv('ULTRAMSG_WEBHOOK_TOKEN')
+    if esperado:
+        import hmac
+        if not hmac.compare_digest(request.args.get('token', ''), esperado):
+            return jsonify({'status': 'error', 'error': 'token inválido'}), 403
+    else:
+        print("⚠️ /webhook sin ULTRAMSG_WEBHOOK_TOKEN: cualquiera puede simular mensajes")
+
     # === FASE 3: New Relic - webhook recibido ===
     newrelic.agent.record_custom_metric('Custom/Webhook/Received', 1)
 
@@ -355,6 +390,9 @@ def test():
     Endpoint de prueba para simular un webhook
     Útil para testing sin necesidad de mensajes reales de WhatsApp
     """
+    from src.api.access import es_admin
+    if not es_admin():
+        return jsonify({'status': 'error', 'error': 'Solo administradores'}), 401
     try:
         data = request.get_json()
 
@@ -393,6 +431,9 @@ def send():
         "message": "Hola, esto es una prueba"
     }
     """
+    from src.api.access import es_admin
+    if not es_admin():
+        return jsonify({'status': 'error', 'error': 'Solo administradores'}), 401
     try:
         data = request.get_json()
 
@@ -431,6 +472,9 @@ def search():
         "query": "Busco apto en Laureles, 2 habitaciones, hasta 500 millones"
     }
     """
+    from src.api.access import es_admin
+    if not es_admin():
+        return jsonify({'status': 'error', 'error': 'Solo administradores'}), 401
     try:
         data = request.get_json()
 

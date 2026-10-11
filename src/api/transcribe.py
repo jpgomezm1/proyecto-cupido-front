@@ -6,6 +6,7 @@ Utiliza OpenAI Whisper para convertir audio a texto
 """
 
 from flask import Blueprint, jsonify, request
+from src.api.chat_auth import require_chat_auth
 from flask_cors import CORS
 import os
 import time
@@ -19,6 +20,7 @@ CORS(transcribe_bp, supports_credentials=True)
 
 
 @transcribe_bp.route('/transcribe', methods=['POST'])
+@require_chat_auth  # Whisper cuesta: solo agentes con sesión
 def transcribe_audio():
     """
     POST /api/transcribe
