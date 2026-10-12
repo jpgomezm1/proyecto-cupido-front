@@ -65,8 +65,18 @@ def ambiente() -> Optional[str]:
     valores = [_cfg(n) for n in _LLAVES]
     for nombre, prefijos in _PREFIJOS.items():
         if all(v.startswith(pre) for v, pre in zip(valores, prefijos)):
+            if nombre == "sandbox" and not _sandbox_permitido():
+                return None
             return nombre
     return None
+
+
+def _sandbox_permitido() -> bool:
+    """En el servidor (Heroku pone DYNO) las llaves de prueba activarían planes
+    pagados con tarjetas de prueba: solo se aceptan si se pide explícitamente."""
+    if not os.getenv("DYNO"):
+        return True
+    return os.getenv("WOMPI_SANDBOX_EN_SERVIDOR", "").lower() == "true"
 
 
 def habilitado() -> bool:
