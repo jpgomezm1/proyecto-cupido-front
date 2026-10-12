@@ -19,12 +19,28 @@ _CREAR = """
         hasta TIMESTAMPTZ NOT NULL
     )
 """
+_tabla_lista = False
+
+
+def _asegurar_tabla(db) -> None:
+    """Crea la tabla una vez por proceso. Dos jobs que la crean a la vez chocan en
+    `pg_type` aun con IF NOT EXISTS; el que pierde la encuentra ya creada."""
+    global _tabla_lista
+    if _tabla_lista:
+        return
+    try:
+        db.cursor.execute(_CREAR)
+        db.conn.commit()
+    except Exception:
+        db.conn.rollback()
+        db.cursor.execute("SELECT 1 FROM job_locks LIMIT 1")
+    _tabla_lista = True
 
 
 def tomar(nombre: str, minutos: int) -> bool:
     with get_db() as db:
+        _asegurar_tabla(db)
         cur = db.cursor
-        cur.execute(_CREAR)
         tomado = scalar(cur, """
             INSERT INTO job_locks (nombre, hasta) VALUES (%s, NOW() + make_interval(mins => %s))
             ON CONFLICT (nombre) DO UPDATE SET hasta = EXCLUDED.hasta
