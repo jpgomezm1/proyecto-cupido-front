@@ -127,13 +127,18 @@ if __name__ == '__main__':
     # Correos de recordatorio del plan (por vencer / vencido), idempotentes.
     if os.getenv('CORREOS_RECORDATORIO_ENABLED', 'true').lower() == 'true':
         from apscheduler.schedulers.background import BackgroundScheduler
-        from src.services.correo_service import recordatorios_plan
+        from src.services.correo_service import recordatorios_activacion, recordatorios_plan
 
         def _recordatorios():
             try:
                 print(f"[CORREOS] Recordatorios de plan: {recordatorios_plan()}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
                 _reportar("CORREOS", e)
+            if os.getenv('CORREOS_ACTIVACION_ENABLED', 'true').lower() == 'true':
+                try:
+                    print(f"[CORREOS] Activación: {recordatorios_activacion()}")
+                except Exception as e:  # noqa: BLE001
+                    _reportar("CORREOS", e)
 
         sched_correos = BackgroundScheduler()
         sched_correos.add_job(_recordatorios, 'interval', hours=6, id='correos_plan',

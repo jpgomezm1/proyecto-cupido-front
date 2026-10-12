@@ -10,6 +10,11 @@ Momentos:
   - cuenta_eliminada      confirmación de que la cuenta se cerró
   - soporte_recibido      al agente: recibimos tu mensaje
   - soporte_nuevo         al equipo: llegó un mensaje de soporte
+  - activación (job del worker, una vez por agente):
+      act_verifica          ~1 día después de registrarse sin verificar el celular
+      act_primera_busqueda  verificado hace 2+ días y aún no ha buscado nada
+      act_llaves_esperando  busca pero en 5+ días no ha abierto ningún contacto
+      act_sin_llaves        gastó sus llaves y no tiene plan
 
 Diseño: HTML de tablas con estilos en línea (Gmail, Outlook, Apple Mail), sin
 WebP (los íconos van en PNG en {FRONTEND}/email/). Cada correo trae su versión
@@ -27,8 +32,9 @@ FYNDER_FRONTEND_URL.
 import html
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import resend
 
@@ -57,6 +63,18 @@ MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto
 
 def _frontend() -> str:
     return os.getenv("FYNDER_FRONTEND_URL", "https://getfynder.com").rstrip("/")
+
+
+def _dominios_relleno() -> set:
+    """Dominios de las cuentas precargadas (correos inventados): nunca se les escribe."""
+    return {d.strip().lower() for d in os.getenv("CORREO_DOMINIOS_RELLENO", "fynder.co,fynder.com").split(",") if d.strip()}
+
+
+def destinatario_real(email: Optional[str]) -> bool:
+    email = (email or "").strip().lower()
+    if "@" not in email or email.endswith(".invalid"):
+        return False
+    return email.rsplit("@", 1)[1] not in _dominios_relleno()
 
 
 def _remitente() -> str:
@@ -188,8 +206,8 @@ def _layout(*, preheader: str, icono: str, eyebrow: str, titulo: str, intro: str
 def _enviar_ya(para: str, asunto: str, html_: str, texto: str, etiqueta: str,
                responder_a: Optional[str] = None) -> bool:
     resend.api_key = resend.api_key or os.getenv("RESEND_API_KEY", "")
-    if not resend.api_key or not para or para.endswith(".invalid"):
-        print(f"[CORREO] Omitido {etiqueta}: sin RESEND_API_KEY o sin destinatario")
+    if not resend.api_key or not destinatario_real(para):
+        print(f"[CORREO] Omitido {etiqueta}: sin RESEND_API_KEY o sin destinatario real")
         return False
     try:
         params: Dict[str, Any] = {"from": _remitente(), "to": [para], "subject": asunto, "html": html_,
@@ -426,6 +444,173 @@ def soporte_nuevo(ticket: int, usuario: Dict[str, Any], categoria: str, asunto: 
     texto = f"Caso #{ticket} de {usuario.get('nombre')} <{usuario.get('email')}>\n{asunto}\n\n{mensaje}"
     enviar(buzon_soporte(), f"[Soporte #{ticket}] {asunto}", html_, texto, "soporte_nuevo",
            responder_a=usuario.get("email"), **kw)
+
+
+# ---------------------------------------------------------------------------
+# Activación: llevar al agente nuevo a su primer contacto
+# ---------------------------------------------------------------------------
+
+def act_verifica(nombre: str, email: str, **kw) -> None:
+    n = _primer_nombre(nombre)
+    url = f"{_frontend()}/chat/verificar"
+    cuerpo = _parrafo(f"{_e(n)}, tu cuenta está lista pero falta un paso: verificar tu celular. "
+                      "Es lo que te da tus <b>2 llaves de prueba</b> y lo que hace que tus inmuebles aparezcan como tuyos.") + \
+        _pasos([
+            ("verificado", "Toma menos de un minuto", "Te llega un código por WhatsApp y lo escribes en Fynder."),
+            ("llave", "Estrenas 2 llaves", "Con cada una abres el contacto de quien tiene un inmueble o de un comprador."),
+        ]) + \
+        _parrafo('<span style="color:#6B6B6B;font-size:13px;">¿No te llega el código? En la misma pantalla hay un botón '
+                 "para escribirnos por WhatsApp desde tu celular y lo verificamos.</span>")
+    html_ = _layout(preheader="Verifica tu celular y recibe 2 llaves de prueba.", icono="verificado",
+                    eyebrow="Te falta un paso", titulo="Verifica tu celular y estrena 2 llaves",
+                    intro="Sin verificar no puedes abrir contactos.", cuerpo=cuerpo, cta=("Verificar mi celular", url))
+    texto = f"{n}, verifica tu celular en Fynder y recibe 2 llaves de prueba para abrir contactos.\n\n{url}"
+    enviar(email, f"{n}, te faltan tus 2 llaves de prueba", html_, texto, "act_verifica", **kw)
+
+
+_EJEMPLOS = [
+    "Apartamento en Laureles, 3 alcobas, hasta 650 millones",
+    "Casa en Envigado con patio, hasta 900 millones",
+    "¿Quién está buscando un apartamento como el que tengo en El Poblado?",
+]
+
+
+def act_primera_busqueda(nombre: str, email: str, llaves: int, **kw) -> None:
+    n = _primer_nombre(nombre)
+    base = f"{_frontend()}/chat/findy"
+    ejemplos = "".join(
+        f'<tr><td style="padding:6px 0;"><a href="{_e(base + "?q=" + quote(t))}" target="_blank" '
+        f'style="display:block;padding:12px 16px;border:1px solid #E6E3DA;border-radius:12px;font-family:{FUENTE};'
+        f'font-size:14px;color:{TEXTO};text-decoration:none;">🔎 {_e(t)}</a></td></tr>'
+        for t in _EJEMPLOS)
+    cuerpo = _parrafo(f"{_e(n)}, pruébalo con lo que busca uno de tus clientes. Escríbele a Findy como se lo dirías "
+                      "a un colega y te muestra lo que encaja en la red, con el precio comparado contra la zona.") + \
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 16px;">{ejemplos}</table>' + \
+        (_parrafo(f"Y tienes <b>{_e(_llaves(llaves))}</b> para abrir el contacto del que te guste.") if llaves else "") + \
+        _parrafo('<span style="color:#6B6B6B;font-size:13px;">Buscar y analizar es gratis. '
+                 "Si usas Claude o ChatGPT, también puedes conectar Fynder ahí, en “Conecta tu IA”.</span>")
+    html_ = _layout(preheader="Escribe lo que busca tu cliente y mira qué hay en la red.", icono="findy-busca",
+                    eyebrow="Tu primera búsqueda", titulo="¿Qué está buscando tu cliente?",
+                    intro="Findy cruza su pedido con más de 6.500 inmuebles de la red.", cuerpo=cuerpo,
+                    cta=("Buscar con Findy", base))
+    texto = (f"{n}, escríbele a Findy lo que busca tu cliente, por ejemplo: \"{_EJEMPLOS[0]}\".\n"
+             + (f"Tienes {_llaves(llaves)} para abrir contactos.\n" if llaves else "") + f"\n{base}")
+    enviar(email, f"{n}, ¿qué busca tu cliente? Pruébalo con Findy", html_, texto, "act_primera_busqueda", **kw)
+
+
+def act_llaves_esperando(nombre: str, email: str, llaves: int, **kw) -> None:
+    n = _primer_nombre(nombre)
+    url = f"{_frontend()}/chat/mercado"
+    cuerpo = _parrafo(f"{_e(n)}, ya buscaste en Fynder, pero aún no abres ningún contacto. Tienes "
+                      f"<b>{_e(_llaves(llaves))}</b> esperando.") + \
+        _pasos([
+            ("llave", "Una llave = un contacto", "Hablas directo con quien tiene el inmueble o con el comprador."),
+            ("verificado", "Solo se gasta si sirve", "Si el inmueble ya no está o el número no sirve, la llave vuelve a ti."),
+        ])
+    html_ = _layout(preheader=f"Tienes {_llaves(llaves)} sin usar. Abre tu primer contacto.", icono="llave",
+                    eyebrow="Tus llaves te esperan", titulo=f"Tienes {_llaves(llaves)} sin usar",
+                    intro="Abre el contacto del inmueble que le sirve a tu cliente.", cuerpo=cuerpo,
+                    cta=("Ver el inventario", url))
+    texto = f"{n}, tienes {_llaves(llaves)} sin usar en Fynder. Abre tu primer contacto: {url}"
+    enviar(email, f"{n}, tienes {_llaves(llaves)} esperando", html_, texto, "act_llaves_esperando", **kw)
+
+
+def act_sin_llaves(nombre: str, email: str, **kw) -> None:
+    n = _primer_nombre(nombre)
+    url = f"{_frontend()}/chat/cuenta/plan#planes"
+    planes = [(ICONO_PLAN.get(p["codigo"], "llave"), p["nombre"], f"{p['desbloqueos_mes']} llaves al mes · {_pesos(p['precio_cop'])}")
+              for p in _planes_mensuales()]
+    cuerpo = _parrafo(f"{_e(n)}, usaste todas tus llaves. Buscar y analizar sigue siendo gratis; para abrir más "
+                      "contactos elige un plan o compra una llave suelta.") + \
+        (_pasos(planes) if planes else "") + \
+        _parrafo('<span style="color:#6B6B6B;font-size:13px;">No se renueva solo: cada mes decides si sigues.</span>')
+    html_ = _layout(preheader="Elige un plan o una llave suelta para seguir abriendo contactos.", icono="findy-piensa",
+                    eyebrow="Te quedaste sin llaves", titulo="Sigue abriendo contactos",
+                    intro="Activa un plan en un minuto.", acento=ORO, cuerpo=cuerpo, cta=("Ver planes", url))
+    texto = f"{n}, usaste todas tus llaves de Fynder. Elige un plan para seguir abriendo contactos: {url}"
+    enviar(email, f"{n}, te quedaste sin llaves", html_, texto, "act_sin_llaves", **kw)
+
+
+def _planes_mensuales() -> List[Dict[str, Any]]:
+    """Planes a la venta, con el precio de hoy (no copiado en el correo)."""
+    try:
+        with get_db() as db:
+            return fetch_all(db.cursor, """
+                SELECT codigo, nombre, desbloqueos_mes, precio_cop FROM planes
+                WHERE activo AND codigo <> 'prueba' AND COALESCE(tipo, 'plan') <> 'paquete' ORDER BY orden
+            """)
+    except Exception as e:  # noqa: BLE001
+        print(f"[CORREO] No se pudieron leer los planes: {e}")
+        return []
+
+
+# Cuentas reales (no precargadas sin entregar), con la dirección a la que sí se puede escribir.
+_CANDIDATOS_ACTIVACION = """
+    SELECT u.id, u.nombre, COALESCE(NULLIF(TRIM(u.correo_personal), ''), u.email) AS destino,
+           GREATEST(u.fecha_creacion, u.telefono_verificado_at, u.acceso_entregado_at) AS desde,
+           COALESCE(u.telefono_verificado, FALSE) AS verificado,
+           (COALESCE(u.total_busquedas, 0) > 0
+              OR EXISTS (SELECT 1 FROM mcp_tool_calls m WHERE m.user_id = u.id)) AS busco,
+           (SELECT COUNT(*) FROM desbloqueos d WHERE d.user_id = u.id) AS contactos,
+           (SELECT MAX(d.created_at) FROM desbloqueos d WHERE d.user_id = u.id) AS ultimo_contacto
+    FROM chat_users u
+    WHERE u.activo AND u.eliminada_at IS NULL
+      AND (u.origen IS DISTINCT FROM 'provision' OR u.acceso_entregado)
+      AND GREATEST(u.fecha_creacion, u.telefono_verificado_at, u.acceso_entregado_at) > NOW() - INTERVAL '45 days'
+"""
+
+TOPE_ACTIVACION = 60  # por corrida: un error de segmento nunca se vuelve un envío masivo
+
+
+def momento_activacion(u: Dict[str, Any], ahora: datetime, disponibles: int, con_plan: bool) -> Optional[str]:
+    """Qué correo de activación le toca a este agente hoy (o None)."""
+    desde = u.get("desde")
+    if not desde:
+        return None
+    edad = ahora - desde
+    if not u.get("verificado"):
+        return "act_verifica" if timedelta(hours=20) <= edad <= timedelta(days=7) else None
+    if not u.get("contactos"):
+        if not u.get("busco") and timedelta(days=2) <= edad <= timedelta(days=14):
+            return "act_primera_busqueda"
+        if u.get("busco") and disponibles > 0 and timedelta(days=5) <= edad <= timedelta(days=21):
+            return "act_llaves_esperando"
+        return None
+    ultimo = u.get("ultimo_contacto")
+    if disponibles == 0 and not con_plan and ultimo and ahora - ultimo <= timedelta(days=14):
+        return "act_sin_llaves"
+    return None
+
+
+def recordatorios_activacion() -> Dict[str, int]:
+    """Un correo por momento y por agente (registrado en `correos_enviados`)."""
+    from src.services import suscripcion_service
+    enviados: Dict[str, int] = {}
+    with get_db() as db:
+        cur = db.cursor
+        ahora = fetch_all(cur, "SELECT NOW() AS t")[0]["t"]
+        for u in fetch_all(cur, _CANDIDATOS_ACTIVACION):
+            if sum(enviados.values()) >= TOPE_ACTIVACION:
+                break
+            if not destinatario_real(u["destino"]):
+                continue
+            saldos = suscripcion_service._saldos(cur, u["id"])
+            disponibles = int(saldos["disponibles"])
+            momento = momento_activacion(u, ahora, disponibles, bool(saldos["periodo"]))
+            if not momento or not _marcar(cur, momento, str(u["id"]), u["id"]):
+                continue
+            db.conn.commit()
+            if momento == "act_verifica":
+                act_verifica(u["nombre"], u["destino"], esperar=True)
+            elif momento == "act_primera_busqueda":
+                act_primera_busqueda(u["nombre"], u["destino"], disponibles, esperar=True)
+            elif momento == "act_llaves_esperando":
+                act_llaves_esperando(u["nombre"], u["destino"], disponibles, esperar=True)
+            else:
+                act_sin_llaves(u["nombre"], u["destino"], esperar=True)
+            enviados[momento] = enviados.get(momento, 0) + 1
+        db.conn.commit()
+    return enviados
 
 
 # ---------------------------------------------------------------------------
