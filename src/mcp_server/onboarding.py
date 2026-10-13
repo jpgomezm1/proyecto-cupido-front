@@ -80,8 +80,9 @@ def _resumen_planes() -> str:
         from src.services.suscripcion_service import planes_activos
         with get_db() as db:
             planes = planes_activos(db.cursor)
-        if planes:
-            p = min(planes, key=lambda x: x["precio_cop"])
+        if any(x.get("tipo", "suscripcion") == "suscripcion" for x in planes):
+            p = min((x for x in planes if x.get("tipo", "suscripcion") == "suscripcion"),
+                    key=lambda x: x["precio_cop"])
             return f"planes desde ${p['precio_cop']:,.0f}".replace(",", ".") + " al mes"
     except Exception:
         pass

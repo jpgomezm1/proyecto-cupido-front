@@ -26,6 +26,7 @@ PRICING = {
     'openai': {
         'text-embedding-3-small': {'input': 0.02, 'output': 0.0},
         'gpt-4o-mini-transcribe': {'per_minute': 0.006},
+        'gpt-image-1': {'input': 10.00, 'output': 40.00},
     }
 }
 

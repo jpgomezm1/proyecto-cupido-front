@@ -236,6 +236,7 @@ for _ep, _lim in (
     ("property_chat.chat_with_property_by_slug", "15 per hour;60 per day"),
     ("api.improve_description", "60 per hour"),
     ("transcribe.transcribe_audio", "60 per hour"),
+    ("herramientas.fotos_mejorar", "20 per hour"),
     # Directorio de agentes y selecciones: evita recorrer ids en bloque.
     ("chat_auth.get_agent_public_info", "60 per hour;300 per day"),
     ("shared_selections.create_selection", "60 per hour"),

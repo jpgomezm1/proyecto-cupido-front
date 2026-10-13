@@ -257,6 +257,8 @@ def bienvenida(nombre: str, email: str, **kw) -> None:
 def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     if pago.get("tipo") == "paquete":
         return llave_comprada(nombre, email, pago, **kw)
+    if pago.get("tipo") == "fotos":
+        return fotos_compradas(nombre, email, pago, **kw)
     n = _primer_nombre(nombre)
     plan = pago.get("plan_nombre") or "tu plan"
     llaves = _llaves(pago.get("llaves"))
@@ -277,6 +279,35 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     texto = (f"{n}, tu plan {plan} está activo: {llaves} hasta el {_fecha(pago.get('vence'))}.\n"
              f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
+
+
+def fotos_compradas(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
+    """Paquete de fotos con IA: se suman al cupo y no vencen."""
+    n = _primer_nombre(nombre)
+    fotos = f"{pago.get('fotos') or ''} fotos con IA".strip()
+    comprobante = (
+        f'<div style="margin:18px 0 22px;padding:18px 20px;border:1px dashed #DAD7CE;border-radius:16px;">'
+        f'<div style="font-family:{FUENTE};font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;'
+        f'color:{SUAVE};margin-bottom:6px;">Comprobante</div>'
+        + _filas([("Compra", _e(fotos)), ("Valor", _e(_pesos(pago.get("monto_cop")))),
+                  ("Medio de pago", _e(METODO.get(pago.get("metodo") or "", pago.get("metodo") or "—"))),
+                  ("Fecha", _e(_fecha(pago.get("creado")))),
+                  ("Referencia", f'<span style="font-family:monospace;font-size:13px;">{_e(pago.get("referencia"))}</span>')])
+        + "</div>"
+    )
+    cuerpo = (
+        _parrafo(f"{_e(n)}, recibimos tu pago: <b>{_e(fotos)}</b> más para dejar las fotos de tus inmuebles "
+                 "como de fotógrafo profesional. Se usan después del cupo de tu plan y no vencen.")
+        + comprobante
+        + _parrafo('<span style="color:#6B6B6B;font-size:13px;">Procesado por Wompi (Bancolombia). '
+                   "Fynder no ve ni guarda los datos de tu tarjeta.</span>")
+    )
+    html_ = _layout(preheader=f"{fotos} más en tu cupo. No vencen.", icono="findy-celebra", eyebrow="Pago aprobado",
+                    titulo="Tus fotos con IA están listas", intro=f"Tienes {_e(fotos)} más.",
+                    cuerpo=cuerpo, cta=("Mejorar mis fotos", f"{_frontend()}/chat/mis-propiedades"))
+    texto = (f"{n}, tu compra está lista: {fotos} más (no vencen).\n"
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mis-propiedades")
+    enviar(email, "✅ Tus fotos con IA están listas", html_, texto, "pago_aprobado", **kw)
 
 
 def llave_comprada(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
@@ -537,7 +568,7 @@ def _planes_mensuales() -> List[Dict[str, Any]]:
         with get_db() as db:
             return fetch_all(db.cursor, """
                 SELECT codigo, nombre, desbloqueos_mes, precio_cop FROM planes
-                WHERE activo AND codigo <> 'prueba' AND COALESCE(tipo, 'plan') <> 'paquete' ORDER BY orden
+                WHERE activo AND codigo <> 'prueba' AND COALESCE(tipo, 'suscripcion') = 'suscripcion' ORDER BY orden
             """)
     except Exception as e:  # noqa: BLE001
         print(f"[CORREO] No se pudieron leer los planes: {e}")

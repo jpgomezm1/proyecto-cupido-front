@@ -70,6 +70,10 @@ def activar_plan(user_id: int, plan_codigo: str, forma: str, referencia: Optiona
             if plan.get("tipo") == "paquete":
                 res = svc.abonar_paquete_en(cur, user_id, plan_codigo, ref or nota, admin)
                 sus_id, mov_id = None, res["movimiento_id"]
+            elif plan.get("tipo") == "fotos":
+                from src.services import fotos_ia_service
+                res = fotos_ia_service.abonar_en(cur, user_id, plan_codigo, ref or nota, admin)
+                sus_id, mov_id = None, None
             else:
                 res = svc.activar_plan_en(cur, user_id, plan_codigo, ref, nota, admin,
                                           precio_cop=monto if pagado else 0)

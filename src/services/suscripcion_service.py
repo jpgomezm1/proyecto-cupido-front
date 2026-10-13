@@ -198,9 +198,10 @@ def _reembolsos_este_mes(cur, user_id: int) -> int:
 
 
 def planes_activos(cur) -> List[Dict[str, Any]]:
-    """Planes a la venta. `tipo`: 'suscripcion' (mensual) o 'paquete' (llaves sueltas que no vencen)."""
+    """Planes a la venta. `tipo`: 'suscripcion' (mensual), 'paquete' (llaves sueltas que no
+    vencen) o 'fotos' (fotos con IA que no vencen). `fotos_ia`: fotos al mes o del paquete."""
     return fetch_all(cur, """
-        SELECT codigo, nombre, precio_cop, desbloqueos_mes, tipo
+        SELECT codigo, nombre, precio_cop, desbloqueos_mes, fotos_ia, tipo
         FROM planes WHERE activo AND codigo <> 'prueba' ORDER BY orden
     """)
 
@@ -760,7 +761,7 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     `ya_pagado`: el agente ya pagó (Wompi), así que se activa aunque el plan se
     haya desactivado entre el checkout y la aprobación."""
     plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND (activo OR %s)", (plan_codigo, ya_pagado))
-    if not plan or plan_codigo == "prueba" or plan.get("tipo") == "paquete":
+    if not plan or plan_codigo == "prueba" or plan.get("tipo") in ("paquete", "fotos"):
         raise SuscripcionError(f"Plan inválido: {plan_codigo}")
     if not _usuario(cur, user_id):
         raise SuscripcionError(f"Usuario {user_id} no existe")
@@ -773,11 +774,11 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     inicio = max(_ahora(), previo["fin"]) if previo else _ahora()
     fin = inicio + timedelta(days=DIAS_PERIODO)
     cur.execute("""
-        INSERT INTO suscripciones (user_id, plan_codigo, desbloqueos_incluidos, precio_cop,
+        INSERT INTO suscripciones (user_id, plan_codigo, desbloqueos_incluidos, fotos_ia_incluidas, precio_cop,
                                    inicio, fin, gracia_hasta, referencia_pago, notas, activada_por)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, inicio, fin, gracia_hasta
-    """, (user_id, plan_codigo, plan["desbloqueos_mes"],
+    """, (user_id, plan_codigo, plan["desbloqueos_mes"], plan.get("fotos_ia") or 0,
           plan["precio_cop"] if precio_cop is None else precio_cop, inicio, fin,
           fin + timedelta(days=DIAS_GRACIA), referencia_pago, notas, admin))
     row = cur.fetchone()
@@ -851,7 +852,7 @@ def verificar_telefono(user_id: int, verificado: bool = True) -> Dict[str, Any]:
 
 
 def actualizar_plan(codigo: str, **campos) -> Dict[str, Any]:
-    permitidos = {"nombre", "precio_cop", "desbloqueos_mes", "activo"}
+    permitidos = {"nombre", "precio_cop", "desbloqueos_mes", "fotos_ia", "activo"}
     sets = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not sets:
         raise SuscripcionError("Nada que actualizar")
