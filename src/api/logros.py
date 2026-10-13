@@ -65,6 +65,14 @@ def evento():
     return _manejar(lambda: _ok({"nuevos": svc.registrar_evento(_uid(), str(_json().get("evento") or ""))}), 'evento')
 
 
+@logros_bp.route('/beneficios', methods=['GET'])
+@require_chat_auth
+def beneficios():
+    """Lo que el agente tiene por su plan y sus complementos (completo o borroso, y cuántos usos)."""
+    from src.services import beneficios_service
+    return _manejar(lambda: _ok(beneficios_service.beneficios(_uid())), 'beneficios')
+
+
 @logros_bp.route('/fyns', methods=['GET'])
 @require_chat_auth
 def fyns_estado():

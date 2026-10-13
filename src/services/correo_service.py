@@ -259,6 +259,8 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
         return llave_comprada(nombre, email, pago, **kw)
     if pago.get("tipo") == "fotos":
         return fotos_compradas(nombre, email, pago, **kw)
+    if pago.get("tipo") == "complemento":
+        return complemento_activo(nombre, email, pago, **kw)
     n = _primer_nombre(nombre)
     plan = pago.get("plan_nombre") or "tu plan"
     llaves = _llaves(pago.get("llaves"))
@@ -279,6 +281,24 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     texto = (f"{n}, tu plan {plan} está activo: {llaves} hasta el {_fecha(pago.get('vence'))}.\n"
              f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
+
+
+def complemento_activo(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
+    """Complemento mensual (Findy trabaja por ti / Tu marca): 30 días que se suman al plan."""
+    n = _primer_nombre(nombre)
+    comp = pago.get("plan_nombre") or "tu complemento"
+    cuerpo = _parrafo(f"{_e(n)}, recibimos tu pago: <b>{_e(comp)}</b> ya está activo por 30 días, sumado a tu plan.") + \
+        f'<div style="margin:18px 0 22px;padding:18px 20px;border:1px dashed #DAD7CE;border-radius:16px;">' + \
+        _filas([("Complemento", _e(comp)), ("Valor", _e(_pesos(pago.get("monto_cop")))),
+                ("Medio de pago", _e(METODO.get(pago.get("metodo") or "", pago.get("metodo") or "—"))),
+                ("Fecha", _e(_fecha(pago.get("creado")))),
+                ("Referencia", f'<span style="font-family:monospace;font-size:13px;">{_e(pago.get("referencia"))}</span>')]) + \
+        "</div>" + _parrafo('<span style="color:#6B6B6B;font-size:13px;">No se renueva solo: cada mes decides si sigues.</span>')
+    html_ = _layout(preheader=f"{comp} está activo por 30 días.", icono="findy-celebra", eyebrow="Pago aprobado",
+                    titulo=f"{comp} está activo", intro="Ya lo tienes en tu cuenta.",
+                    cuerpo=cuerpo, cta=("Ir a Fynder", f"{_frontend()}/chat"))
+    texto = f"{n}, {comp} está activo por 30 días. Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}"
+    enviar(email, f"✅ {comp} está activo", html_, texto, "pago_aprobado", **kw)
 
 
 def fotos_compradas(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:

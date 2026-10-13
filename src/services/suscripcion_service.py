@@ -199,7 +199,8 @@ def _reembolsos_este_mes(cur, user_id: int) -> int:
 
 def planes_activos(cur) -> List[Dict[str, Any]]:
     """Planes a la venta. `tipo`: 'suscripcion' (mensual), 'paquete' (llaves sueltas que no
-    vencen) o 'fotos' (fotos con IA que no vencen). `fotos_ia`: fotos al mes o del paquete."""
+    vencen), 'fotos' (fotos con IA que no vencen) o 'complemento' (mensual que se suma a un
+    plan). `fotos_ia`: fotos al mes o del paquete."""
     return fetch_all(cur, """
         SELECT codigo, nombre, precio_cop, desbloqueos_mes, fotos_ia, tipo
         FROM planes WHERE activo AND codigo <> 'prueba' ORDER BY orden
@@ -764,7 +765,7 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     `ya_pagado`: el agente ya pagó (Wompi), así que se activa aunque el plan se
     haya desactivado entre el checkout y la aprobación."""
     plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND (activo OR %s)", (plan_codigo, ya_pagado))
-    if not plan or plan_codigo == "prueba" or plan.get("tipo") in ("paquete", "fotos"):
+    if not plan or plan_codigo == "prueba" or plan.get("tipo") in ("paquete", "fotos", "complemento"):
         raise SuscripcionError(f"Plan inválido: {plan_codigo}")
     if not _usuario(cur, user_id):
         raise SuscripcionError(f"Usuario {user_id} no existe")

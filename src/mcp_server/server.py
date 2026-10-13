@@ -1024,6 +1024,8 @@ def mi_plan() -> Dict[str, Any]:
         r = logros.resumen(uid)
         res["racha"] = {k: r["racha"][k] for k in ("dias", "dias_ia", "hoy", "en_riesgo", "siguiente", "record")}
         res["fyns"] = {k: r["fyns"][k] for k in ("saldo", "ganados_mes", "tope_mes", "restante_mes")}
+        from src.services import beneficios_service
+        res["beneficios"] = beneficios_service.beneficios(uid)
         res["misiones_pendientes"] = [m["titulo"] + (f" (+{m['fyns']} Fyns)" if m["fyns"] else "")
                                       for m in r["misiones"] if not m["hecha"]]
     except Exception:

@@ -74,6 +74,11 @@ def activar_plan(user_id: int, plan_codigo: str, forma: str, referencia: Optiona
                 from src.services import fotos_ia_service
                 res = fotos_ia_service.abonar_en(cur, user_id, plan_codigo, ref or nota, admin)
                 sus_id, mov_id = None, None
+            elif plan.get("tipo") == "complemento":
+                from src.services import beneficios_service
+                res = beneficios_service.activar_complemento_en(cur, user_id, plan_codigo, ref or nota, admin,
+                                                                precio_cop=monto if pagado else 0)
+                sus_id, mov_id = None, None
             else:
                 res = svc.activar_plan_en(cur, user_id, plan_codigo, ref, nota, admin,
                                           precio_cop=monto if pagado else 0)

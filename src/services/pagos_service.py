@@ -207,7 +207,7 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
             print(f"⚠️ Pago {referencia}: monto {tx.get('amount_in_cents')} ≠ esperado {esperado}")
             return {"ok": False, "error": "monto_no_coincide", "estado": "error"}
 
-        suscripcion_id = movimiento_id = fotos_movimiento_id = None
+        suscripcion_id = movimiento_id = fotos_movimiento_id = complemento_periodo_id = None
         if nuevo == "aprobado":
             tipo = scalar(cur, "SELECT tipo FROM planes WHERE codigo = %s", (pago["plan_codigo"],))
             if tipo == "paquete":
@@ -217,6 +217,11 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
                 from src.services import fotos_ia_service
                 fotos_movimiento_id = fotos_ia_service.abonar_en(
                     cur, pago["user_id"], pago["plan_codigo"], referencia, admin="wompi")["movimiento_id"]
+            elif tipo == "complemento":
+                from src.services import beneficios_service
+                complemento_periodo_id = beneficios_service.activar_complemento_en(
+                    cur, pago["user_id"], pago["plan_codigo"], referencia, admin="wompi",
+                    precio_cop=pago["monto_cop"])["periodo_id"]
             else:
                 res = suscripcion_service.activar_plan_en(
                     cur, pago["user_id"], pago["plan_codigo"], referencia_pago=referencia,
@@ -225,10 +230,11 @@ def _aplicar(tx: Dict[str, Any], fuente: str) -> Dict[str, Any]:
                 suscripcion_id = res["suscripcion_id"]
         cur.execute("""
             UPDATE pagos SET estado = %s, transaccion_id = %s, metodo = %s, suscripcion_id = %s,
-                   movimiento_id = %s, fotos_movimiento_id = %s, detalle = %s, updated_at = NOW()
+                   movimiento_id = %s, fotos_movimiento_id = %s, complemento_periodo_id = %s,
+                   detalle = %s, updated_at = NOW()
             WHERE id = %s
         """, (nuevo, tx.get("id"), tx.get("payment_method_type"), suscripcion_id, movimiento_id,
-              fotos_movimiento_id, detalle, pago["id"]))
+              fotos_movimiento_id, complemento_periodo_id, detalle, pago["id"]))
         db.conn.commit()
     print(f"💳 Pago {referencia} → {nuevo} ({fuente})")
     if nuevo in ("aprobado", "rechazado"):
