@@ -30,7 +30,7 @@ from src.services.db import fetch_one, get_db, scalar
 MODELO = os.getenv("FYNDER_MODELO_FOTOS", "gpt-image-1")
 CALIDAD = os.getenv("FYNDER_FOTOS_IA_CALIDAD", "medium")
 LIMITE_DIA = int(os.getenv("FYNDER_FOTOS_IA_DIA", "40"))
-_LOCK_FOTOS = 7102
+_LOCK_FOTOS = 7103
 
 # Una foto cuenta si salió bien o si está en curso (reservada hace menos de 10 min).
 _CUENTA = "(url_mejorada IS NOT NULL OR (error IS NULL AND created_at > NOW() - INTERVAL '10 minutes'))"
