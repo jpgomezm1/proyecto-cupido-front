@@ -19,9 +19,12 @@ UPDATE planes SET fotos_ia = 10 WHERE codigo = 'basico' AND fotos_ia = 0;
 UPDATE planes SET fotos_ia = 20 WHERE codigo = 'medio'  AND fotos_ia = 0;
 UPDATE planes SET fotos_ia = 30 WHERE codigo = 'pro'    AND fotos_ia = 0;
 
-INSERT INTO planes (codigo, nombre, precio_cop, desbloqueos_mes, fotos_ia, orden, tipo)
-VALUES ('fotos_10', '10 fotos con IA', 10000, 0, 10, 20, 'fotos'),
-       ('fotos_30', '30 fotos con IA', 25000, 0, 30, 21, 'fotos')
+-- Los paquetes nacen APAGADOS: el front anterior los mostraría como planes
+-- mensuales. Se encienden después de publicar backend y front:
+--   UPDATE planes SET activo = TRUE WHERE tipo = 'fotos';
+INSERT INTO planes (codigo, nombre, precio_cop, desbloqueos_mes, fotos_ia, orden, tipo, activo)
+VALUES ('fotos_10', '10 fotos con IA', 10000, 0, 10, 20, 'fotos', FALSE),
+       ('fotos_30', '30 fotos con IA', 25000, 0, 30, 21, 'fotos', FALSE)
 ON CONFLICT (codigo) DO NOTHING;
 
 ALTER TABLE suscripciones ADD COLUMN IF NOT EXISTS fotos_ia_incluidas INTEGER;
