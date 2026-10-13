@@ -35,6 +35,7 @@ Agente en Claude.ai/Desktop ──Bearer token──▶ Fynder MCP (Streamable H
 | Diagnóstico | `diagnose_property`, `find_buyers_for_property`, `compradores_para_inmueble` (búsqueda inversa: link de Wasi/Lobbie, link o código de Fynder, o descripción → pedidos que encajan, con score y razones) |
 | Inventario | `list_my_properties` |
 | Contactos y plan (lo que se cobra) | `ver_contacto`, `ver_contacto_pedido`, `mi_plan`, `mis_desbloqueos`, `reportar_contacto_invalido` |
+| Fyns (la divisa: se ganan usando Fynder, mucho más desde la IA) | `mis_fyns`, `canjear_fyns` |
 | Escritura (propose→apply, scoped) | `propose_price_update_tool`, `propose_description_update_tool`, `propose_status_update_tool`, `propose_fields_update_tool`, `apply_change` |
 
 La tabla no es exhaustiva: la lista completa está en `server.py` y en

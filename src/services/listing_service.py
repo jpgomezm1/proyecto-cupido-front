@@ -44,7 +44,8 @@ def _requerido(data: Dict[str, Any], campo: str, etiqueta: str):
 
 def crear_listing(agente_telefono: str, data: Dict[str, Any],
                   agente_nombre: Optional[str] = None,
-                  agente_user_id: Optional[int] = None) -> Dict[str, Any]:
+                  agente_user_id: Optional[int] = None,
+                  canal: str = "web") -> Dict[str, Any]:
     """
     Crea un listing nativo de Fynder y lo guarda en Neon.
 
@@ -168,7 +169,9 @@ def crear_listing(agente_telefono: str, data: Dict[str, Any],
                 agente_telefono=agente_telefono,
                 propiedad_id=prop_id,
                 datos_evento={"codigo": codigo, "precio": precio, "origen": "Fynder_App",
-                              "imagenes": len(imgs), "borrador": es_borrador},
+                              "imagenes": len(imgs), "borrador": es_borrador,
+                              # Para los Fyns por publicar (logros_service): quién y desde dónde.
+                              "user_id": agente_user_id, "canal": canal},
             )
         except Exception:
             pass

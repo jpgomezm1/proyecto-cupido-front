@@ -32,7 +32,7 @@ EXPECTED_TOOLS = {
     # Coordinación por Fynder (red de seguridad sin contacto)
     "solicitar_visita",
     # Suscripción: desbloqueo de contactos y plan
-    "ver_contacto", "ver_contacto_pedido", "mi_plan", "mis_desbloqueos",
+    "ver_contacto", "ver_contacto_pedido", "mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns",
     "reportar_contacto_invalido",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",

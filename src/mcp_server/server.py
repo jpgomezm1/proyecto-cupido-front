@@ -89,11 +89,13 @@ _INSTRUCTIONS = (
     "'mi_plan'). Si un contacto no sirve, ofrece 'reportar_contacto_invalido'.\n"
     "- Si un inmueble no tiene contacto válido o el pedido no es desbloqueable, "
     "ofrece 'solicitar_visita': el equipo de Fynder coordina por el agente.\n\n"
-    "PREMIOS: usar Fynder desde aquí (su IA) le da llaves gratis al agente: "
-    "+2 al conectar, +1 en su primera consulta, y rachas de días seguidos (3, 7 y 14 "
-    "días) que pagan EL DOBLE cuando son con su IA. Si una respuesta trae "
-    "'premio_fynder', felicítalo en UNA línea al final (cuántas llaves ganó y por qué). "
-    "'mi_plan' trae su racha: menciónala si pregunta por sus llaves.\n\n"
+    "FYNS: usar Fynder desde aquí (su IA) le da Fyns, la divisa de Fynder, unas 5 "
+    "veces más que desde la web: +15 por cada día de uso, +75 cada 7 días seguidos, "
+    "+40 por subir un inmueble, +300 al conectar su IA. Los Fyns se canjean por "
+    "llaves (100 Fyns = 1 llave) o fotos con IA ('mis_fyns' muestra saldo y catálogo; "
+    "'canjear_fyns' canjea, pidiéndole antes un sí). Di siempre 'Fyns'. Si una "
+    "respuesta trae 'premio_fynder', felicítalo en UNA línea al final (cuántos Fyns "
+    "ganó y por qué). Si pregunta por sus llaves y tiene Fyns de sobra, menciónalo.\n\n"
     "PUBLICAR PROPIEDADES: para crear un listing, primero reúne los datos mínimos "
     "obligatorios (precio, área, tipo, ubicación) y adviértele al agente que "
     "necesitará FOTOS. Redacta una descripción VENDEDORA y COMPLETA (3-4 párrafos, "
@@ -684,7 +686,7 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
             "tipo_negocio": tipo_negocio, "imagenes_urls": imagenes_urls,
         }
         return lst.crear_listing(agent.telefono, data,
-                                 agente_nombre=agent.nombre, agente_user_id=agent.user_id)
+                                 agente_nombre=agent.nombre, agente_user_id=agent.user_id, canal="mcp")
     except lst.ListingError as e:
         return {"error": "datos_incompletos", "mensaje": str(e)}
 
@@ -1021,12 +1023,45 @@ def mi_plan() -> Dict[str, Any]:
     try:
         r = logros.resumen(uid)
         res["racha"] = {k: r["racha"][k] for k in ("dias", "dias_ia", "hoy", "en_riesgo", "siguiente", "record")}
-        res["premios_mes"] = r["premios_mes"]
-        res["misiones_pendientes"] = [m["titulo"] + (f" (+{m['llaves']} llaves)" if m["llaves"] else "")
+        res["fyns"] = {k: r["fyns"][k] for k in ("saldo", "ganados_mes", "tope_mes", "restante_mes")}
+        res["misiones_pendientes"] = [m["titulo"] + (f" (+{m['fyns']} Fyns)" if m["fyns"] else "")
                                       for m in r["misiones"] if not m["hecha"]]
     except Exception:
         pass  # sin la migración 049, mi_plan sigue funcionando
     return res
+
+
+@mcp.tool(title="Mis Fyns", annotations=_LECTURA)
+def mis_fyns() -> Dict[str, Any]:
+    """
+    Fyns del agente: la divisa de Fynder. Saldo, cuántos ganó este mes (y el tope
+    de su plan), cómo se ganan (desde su IA valen ~5 veces más) y el catálogo de
+    canje (llaves, fotos con IA) con lo que le alcanza.
+
+    Úsala para "¿cuántos Fyns tengo?", "¿en qué gasto mis Fyns?" o "¿cómo gano Fyns?".
+    """
+    from src.services import fyns_service
+    uid = current_agent().user_id
+    try:
+        logros.evaluar(uid)
+    except Exception:
+        pass
+    return fyns_service.estado(uid)
+
+
+@mcp.tool(title="Canjear Fyns", annotations=_escritura())
+def canjear_fyns(producto: str) -> Dict[str, Any]:
+    """
+    Canjea Fyns por un producto del catálogo de 'mis_fyns': "llave" (100 Fyns,
+    una llave que no vence) o "fotos_5" (60 Fyns, 5 fotos con IA).
+
+    Antes de canjear, dile al agente qué recibe y cuántos Fyns le quedan, y pídele un sí.
+    """
+    from src.services import fyns_service
+    try:
+        return fyns_service.canjear(current_agent().user_id, producto)
+    except fyns_service.FynsError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
 
 
 @mcp.tool(title="Mis contactos desbloqueados", annotations=_LECTURA, revela_contacto=True)

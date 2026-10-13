@@ -1,55 +1,64 @@
 """
-Misiones, rachas y llaves de premio (migración 049).
+Misiones, rachas y premios en Fyns (migraciones 049 y 057).
 
 Incentiva el uso diario de Fynder, y sobre todo el uso desde la IA del agente
-(Claude/ChatGPT vía MCP), con llaves que se abonan al saldo que no vence:
+(Claude/ChatGPT vía MCP), con Fyns (la divisa de Fynder, `fyns_service`) que se
+canjean por llaves, fotos con IA y complementos. Desde su IA paga ~5 veces más:
 
-  Misiones (una vez):
-    conectar_ia   Conectar Fynder a su IA (sesión MCP o primera tool OK)  +2 llaves
-    consulta_ia   Primera consulta desde su IA (una tool de datos)         +1 llave
-    perfil        Perfil completo (nombre, correo, celular verificado)     insignia
-    mapa          Explorar el mapa de mercado                               insignia
-  Racha (días seguidos con uso real, hora de Bogotá):
-    3 días +1 · 7 días +2 · 14 días +3; el doble si esos días también fueron
-    días con IA (racha del MCP al menos igual de larga).
+  Día con uso real ................ IA +15 · web +3   (desde FYNS_DESDE)
+  Cada 7 días seguidos ............ IA +75 · web +15  (con IA si la racha del MCP es igual de larga)
+  Subir un inmueble a la red ...... IA +40 · web +10  (cuando queda publicado)
+  Misiones (una vez): conectar su IA +300 · primera consulta desde su IA +100 ·
+  perfil completo +50 · explorar el mapa +20.
 
 "Uso real" = una búsqueda con IA (uso justo), una tool del MCP que no sea de la
-cuenta (mi_plan, mis_desbloqueos) o un desbloqueo.
-Las llaves solo se abonan con el celular verificado (igual que la prueba) y hay
-un tope de llaves de premio por mes; lo que pase del tope queda como logro sin
-llaves. Todo es idempotente: `evaluar` se puede llamar cuantas veces se quiera.
+cuenta (mi_plan, mis_desbloqueos, mis_fyns) o un desbloqueo. Un día se paga
+cuando termina (si fue con IA, se paga en el momento: ya vale lo máximo).
+Los Fyns solo se abonan con el celular verificado y hasta el tope mensual del
+plan; lo que pase del tope queda como logro sin Fyns. Los logros anteriores a
+Fyns conservan sus llaves. Todo es idempotente: `evaluar` se puede llamar
+cuantas veces se quiera.
 """
 
 import logging
+import os
 import time
 from datetime import date, timedelta
 from threading import Lock
 from typing import Any, Dict, Iterable, List, Optional, Set
 
+from src.services import fyns_service as fyns
 from src.services.db import get_db, fetch_all, fetch_one, scalar
 
 logger = logging.getLogger(__name__)
 
 TZ = "America/Bogota"
-TOPE_MES = 4   # llaves de premio por mes (rachas y misiones); más que eso regalaba un plan
-HITOS = ((3, 1), (7, 2), (14, 3))   # (días, llaves); con IA, el doble
 VENTANA_DIAS = 60
 _LOCK_LOGROS = 7102
 
+# Fyns por logro: (desde su IA, desde la web).
+FYNS_DIA = (15, 3)
+FYNS_RACHA = (75, 15)       # cada 7 días seguidos
+FYNS_PUBLICAR = (40, 10)
+CADA_RACHA = 7
+# Los días y rachas se pagan desde que existen los Fyns (no hacia atrás).
+FYNS_DESDE = date.fromisoformat(os.getenv("FYNS_DESDE", "2026-10-14"))
+DIAS_ATRAS = 7              # un día sin evaluar se paga hasta una semana después
+
 # Tools que no cuentan como "consulta" (solo administran la cuenta).
-_TOOLS_CUENTA = ("mi_plan", "mis_desbloqueos")
+_TOOLS_CUENTA = ("mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns")
 
 MISIONES = {
-    "conectar_ia": {"titulo": "Conecta Fynder a tu IA", "llaves": 2,
+    "conectar_ia": {"titulo": "Conecta Fynder a tu IA", "fyns": 300,
                     "detalle": "Agrega Fynder en Claude o ChatGPT y entra con tu cuenta.",
                     "url": "/chat/conectar-ia"},
-    "consulta_ia": {"titulo": "Haz tu primera consulta desde tu IA", "llaves": 1,
+    "consulta_ia": {"titulo": "Haz tu primera consulta desde tu IA", "fyns": 100,
                     "detalle": "Pregúntale a Claude o ChatGPT, p. ej. «¿cuánto vale el m² en Laureles?».",
                     "url": "/chat/conectar-ia"},
-    "perfil": {"titulo": "Completa tu perfil", "llaves": 0,
+    "perfil": {"titulo": "Completa tu perfil", "fyns": 50,
                "detalle": "Tu nombre y tu celular verificado: así firmas lo que compartes.",
                "url": "/chat/cuenta"},
-    "mapa": {"titulo": "Explora el mapa de mercado", "llaves": 0,
+    "mapa": {"titulo": "Explora el mapa de mercado", "fyns": 20,
              "detalle": "Mira qué zonas tienen más compradores que oferta.",
              "url": "/chat/mercado/mapa"},
 }
@@ -89,16 +98,26 @@ def record(dias: Set[date]) -> int:
 
 
 def hitos_ganados(racha: int, racha_ia: int) -> List[Dict[str, Any]]:
-    """Hitos que la racha actual ya alcanzó, con su premio (doble si fue con IA)."""
-    return [{"hito": h, "con_ia": racha_ia >= h, "llaves": ll * (2 if racha_ia >= h else 1)}
-            for h, ll in HITOS if racha >= h]
+    """Cada 7 días seguidos de la racha actual, con su premio (el de IA si la racha con IA llega)."""
+    return [{"hito": h, "con_ia": racha_ia >= h, "fyns": FYNS_RACHA[0] if racha_ia >= h else FYNS_RACHA[1]}
+            for h in range(CADA_RACHA, racha + 1, CADA_RACHA)]
 
 
-def siguiente_hito(racha: int) -> Optional[Dict[str, int]]:
-    for h, ll in HITOS:
-        if racha < h:
-            return {"dias": h, "faltan": h - racha, "llaves": ll, "llaves_ia": ll * 2}
-    return None
+def siguiente_hito(racha: int) -> Dict[str, int]:
+    h = (racha // CADA_RACHA + 1) * CADA_RACHA
+    return {"dias": h, "faltan": h - racha, "fyns": FYNS_RACHA[1], "fyns_ia": FYNS_RACHA[0]}
+
+
+def dias_a_pagar(dias: Set[date], dias_ia: Set[date], hoy: date) -> List[Dict[str, Any]]:
+    """Días con uso que ya se pueden pagar: los terminados de la última semana y hoy si fue con IA."""
+    desde = max(FYNS_DESDE, hoy - timedelta(days=DIAS_ATRAS))
+    out = []
+    for d in sorted(dias):
+        if d < desde or (d == hoy and d not in dias_ia):
+            continue
+        ia = d in dias_ia
+        out.append({"fecha": d, "con_ia": ia, "fyns": FYNS_DIA[0] if ia else FYNS_DIA[1]})
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -154,22 +173,27 @@ def _misiones_cumplidas(cur, u: Dict[str, Any]) -> Set[str]:
     return hechas
 
 
-def _llaves_mes(cur, user_id: int) -> int:
-    return int(scalar(cur, f"""
-        SELECT COALESCE(SUM(llaves), 0) FROM logros
-        WHERE user_id = %s
-          AND created_at >= date_trunc('month', NOW() AT TIME ZONE '{TZ}') AT TIME ZONE '{TZ}'
-    """, (user_id,)) or 0)
+def _publicados(cur, user_id: int) -> List[Dict[str, Any]]:
+    """Inmuebles que el agente subió a la red (ya publicados) desde que existen los Fyns."""
+    return fetch_all(cur, """
+        SELECT e.propiedad_id, COALESCE(e.datos_evento->>'canal', 'web') = 'mcp' AS con_ia
+        FROM eventos_log e JOIN propiedades p ON p.id = e.propiedad_id AND p.activa
+        WHERE e.tipo_evento = 'listing_creado_fynder'
+          AND e.datos_evento->>'user_id' = %s AND e.fecha_evento >= %s
+    """, (str(user_id), FYNS_DESDE))
 
 
-def _otorgar(cur, user_id: int, codigo: str, referencia: str, llaves: int,
+def _otorgar(cur, user_id: int, codigo: str, referencia: str, premio: int,
              con_ia: bool, verificado: bool) -> Optional[int]:
-    """Registra el logro (si no existía) y abona sus llaves respetando el tope. Devuelve id o None."""
-    if llaves > 0 and not verificado:
+    """Registra el logro (si no existía) y abona sus Fyns respetando el tope del mes. Devuelve id o None."""
+    if premio > 0 and not verificado:
         return None  # se cobra cuando verifique el celular (la condición se re-evalúa)
-    pagar = min(llaves, max(0, TOPE_MES - _llaves_mes(cur, user_id))) if llaves > 0 else 0
+    pagar = 0
+    if premio > 0:
+        disponible = fyns.tope_mes_en(cur, user_id) - fyns.ganados_mes_en(cur, user_id)
+        pagar = min(premio, max(0, disponible))
     cur.execute("""
-        INSERT INTO logros (user_id, codigo, referencia, llaves, con_ia, avisado_mcp)
+        INSERT INTO logros (user_id, codigo, referencia, fyns, con_ia, avisado_mcp)
         VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, codigo, referencia) DO NOTHING
         RETURNING id
@@ -179,8 +203,8 @@ def _otorgar(cur, user_id: int, codigo: str, referencia: str, llaves: int,
         return None
     if pagar:
         cur.execute("""
-            INSERT INTO creditos_movimientos (user_id, tipo, cantidad, referencia, creado_por)
-            VALUES (%s, 'premio', %s, %s, 'sistema')
+            INSERT INTO fyns_movimientos (user_id, cantidad, motivo, referencia)
+            VALUES (%s, %s, 'logro', %s)
         """, (user_id, pagar, f"logro:{fila['id']}"))
     return fila["id"]
 
@@ -199,16 +223,21 @@ def evaluar(user_id: int) -> List[int]:
         if not u:
             return []
         verificado = bool(u.get("telefono_verificado"))
-        for codigo in _misiones_cumplidas(cur, u):
-            i = _otorgar(cur, user_id, codigo, "", MISIONES[codigo]["llaves"], codigo != "perfil", verificado)
-            if i:
-                nuevos.append(i)
+        premios = [(codigo, "", MISIONES[codigo]["fyns"], codigo in ("conectar_ia", "consulta_ia"))
+                   for codigo in _misiones_cumplidas(cur, u)]
         dias = _dias(cur, user_id)
         hoy = _hoy(cur)
+        premios += [("dia", d["fecha"].isoformat(), d["fyns"], d["con_ia"])
+                    for d in dias_a_pagar(dias["todos"], dias["ia"], hoy)]
         r, ria = racha_hasta(dias["todos"], hoy), racha_hasta(dias["ia"], hoy)
         for h in hitos_ganados(r["dias"], ria["dias"]):
-            i = _otorgar(cur, user_id, "racha", f"{r['inicio'].isoformat()}:{h['hito']}",
-                         h["llaves"], h["con_ia"], verificado)
+            # Solo rachas que se completan desde que existen los Fyns.
+            if r["inicio"] + timedelta(days=h["hito"] - 1) >= FYNS_DESDE:
+                premios.append(("racha", f"{r['inicio'].isoformat()}:{h['hito']}", h["fyns"], h["con_ia"]))
+        premios += [("publicar", str(p["propiedad_id"]), FYNS_PUBLICAR[0] if p["con_ia"] else FYNS_PUBLICAR[1],
+                     p["con_ia"]) for p in _publicados(cur, user_id)]
+        for codigo, ref, premio, con_ia in premios:
+            i = _otorgar(cur, user_id, codigo, ref, premio, con_ia, verificado)
             if i:
                 nuevos.append(i)
         db.conn.commit()
@@ -220,21 +249,28 @@ def registrar_evento(user_id: int, evento: str) -> List[int]:
     if evento != "mapa":
         raise LogrosError("Evento desconocido")
     with get_db() as db:
-        i = _otorgar(db.cursor, user_id, "mapa", "", 0, False, True)
+        u = _usuario(db.cursor, user_id)
+        i = _otorgar(db.cursor, user_id, "mapa", "", MISIONES["mapa"]["fyns"], False,
+                     bool(u and u.get("telefono_verificado")))
         db.conn.commit()
     return [i] if i else []
 
 
 def _titulo(l: Dict[str, Any]) -> str:
+    ia = " con tu IA" if l["con_ia"] else ""
     if l["codigo"] == "racha":
         dias = l["referencia"].split(":")[-1]
-        return f"Racha de {dias} días" + (" con tu IA" if l["con_ia"] else "")
+        return f"Racha de {dias} días{ia}"
+    if l["codigo"] == "dia":
+        return f"Un día usando Fynder{ia}"
+    if l["codigo"] == "publicar":
+        return "Subiste un inmueble a la red" + (" desde tu IA" if l["con_ia"] else "")
     return MISIONES.get(l["codigo"], {}).get("titulo", l["codigo"])
 
 
 def _logro_salida(l: Dict[str, Any]) -> Dict[str, Any]:
     return {"id": l["id"], "codigo": l["codigo"], "titulo": _titulo(l), "llaves": l["llaves"],
-            "con_ia": l["con_ia"], "fecha": l["created_at"].isoformat()}
+            "fyns": l.get("fyns") or 0, "con_ia": l["con_ia"], "fecha": l["created_at"].isoformat()}
 
 
 def resumen(user_id: int) -> Dict[str, Any]:
@@ -248,11 +284,11 @@ def resumen(user_id: int) -> Dict[str, Any]:
         dias = _dias(cur, user_id)
         hoy = _hoy(cur)
         logros = fetch_all(cur, """
-            SELECT id, codigo, referencia, llaves, con_ia, visto, created_at
+            SELECT id, codigo, referencia, llaves, fyns, con_ia, visto, created_at
             FROM logros WHERE user_id = %s ORDER BY created_at DESC LIMIT 60
         """, (user_id,))
         cumplidas = _misiones_cumplidas(cur, u)
-        mes = _llaves_mes(cur, user_id)
+    billetera = fyns.estado(user_id)
     r, ria = racha_hasta(dias["todos"], hoy), racha_hasta(dias["ia"], hoy)
     cobradas = {l["codigo"] for l in logros if l["codigo"] in MISIONES}
     verificado = bool(u.get("telefono_verificado"))
@@ -265,16 +301,16 @@ def resumen(user_id: int) -> Dict[str, Any]:
             "semana": [{"fecha": (hoy - timedelta(days=k)).isoformat(),
                         "activo": hoy - timedelta(days=k) in dias["todos"],
                         "ia": hoy - timedelta(days=k) in dias["ia"]} for k in range(6, -1, -1)],
-            "hitos": [{"dias": h, "llaves": ll, "llaves_ia": ll * 2} for h, ll in HITOS],
+            "cada": CADA_RACHA, "fyns_dia": FYNS_DIA[1], "fyns_dia_ia": FYNS_DIA[0],
         },
         "misiones": [{
             "codigo": c, "titulo": m["titulo"], "detalle": m["detalle"], "url": m["url"],
-            "llaves": m["llaves"], "hecha": c in cumplidas or c in cobradas, "cobrada": c in cobradas,
+            "fyns": m["fyns"], "hecha": c in cumplidas or c in cobradas, "cobrada": c in cobradas,
         } for c, m in MISIONES.items()],
-        "premios_mes": {"ganadas": mes, "tope": TOPE_MES},
+        "fyns": billetera,
         "verificado": verificado,
         "onboarding": {"completado": bool(u.get("onboarding_at"))},
-        "nuevos": [_logro_salida(l) for l in logros if not l["visto"]],
+        "nuevos": [_logro_salida(l) for l in logros if not l["visto"] and l["codigo"] != "dia"],
         "recientes": [_logro_salida(l) for l in logros[:8]],
     }
 
@@ -321,27 +357,34 @@ def evaluar_tras_mcp(user_id: Optional[int]) -> None:
 
 
 def aviso_mcp(user_id: int) -> Optional[Dict[str, Any]]:
-    """Premios con llaves que el agente aún no conoce por su IA (y los marca como avisados)."""
+    """Fyns que el agente aún no conoce por su IA (y los marca como avisados).
+    Los días sueltos se avisan solo junto con algo más, para no felicitar a diario."""
     try:
         with get_db() as db:
-            filas = fetch_all(db.cursor, """
+            cur = db.cursor
+            filas = fetch_all(cur, """
                 UPDATE logros SET avisado_mcp = TRUE
-                WHERE user_id = %s AND NOT avisado_mcp AND llaves > 0
-                RETURNING id, codigo, referencia, llaves, con_ia, created_at
-            """, (user_id,))
+                WHERE user_id = %s AND NOT avisado_mcp AND fyns > 0
+                  AND EXISTS (SELECT 1 FROM logros x WHERE x.user_id = %s AND NOT x.avisado_mcp
+                              AND x.fyns > 0 AND x.codigo <> 'dia')
+                RETURNING id, codigo, referencia, fyns, con_ia, created_at
+            """, (user_id, user_id))
             if not filas:
+                db.conn.rollback()
                 return None
-            saldo_premio = TOPE_MES - _llaves_mes(db.cursor, user_id)
+            saldo = fyns.saldo_en(cur, user_id)
+            restante = fyns.tope_mes_en(cur, user_id) - fyns.ganados_mes_en(cur, user_id)
             db.conn.commit()
     except Exception:
         return None
-    total = sum(f["llaves"] for f in filas)
+    total = sum(f["fyns"] for f in filas)
+    motivos = [_titulo(f) for f in filas if f["codigo"] != "dia"]
     return {
-        "llaves_ganadas": total,
-        "logros": [_titulo(f) for f in filas],
-        "mensaje": (f"🎉 El agente ganó {total} {'llave' if total == 1 else 'llaves'} de Fynder por: "
-                    + ", ".join(_titulo(f) for f in filas)
-                    + ". Felicítalo brevemente al final de tu respuesta. Usar Fynder desde su IA "
-                      "paga el doble en las rachas (3, 7 y 14 días seguidos)."),
-        "premios_restantes_mes": max(0, saldo_premio),
+        "fyns_ganados": total,
+        "saldo_fyns": saldo,
+        "logros": motivos,
+        "mensaje": (f"🎉 El agente ganó {total} Fyns (la divisa de Fynder) por: " + ", ".join(motivos)
+                    + f". Ahora tiene {saldo} Fyns. Felicítalo en UNA línea al final de tu respuesta; "
+                      "si le alcanza, recuérdale que puede canjearlos (100 Fyns = 1 llave) con 'canjear_fyns'."),
+        "fyns_restantes_mes": max(0, restante),
     }

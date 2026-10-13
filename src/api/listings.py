@@ -93,7 +93,7 @@ def create_listing():
     try:
         res = lst.crear_listing(telefono, body,
                                 agente_nombre=user.get("nombre"),
-                                agente_user_id=user.get("id"))
+                                agente_user_id=user.get("id"), canal="web")
         return jsonify({"success": True, "data": res})
     except lst.ListingError as e:
         return jsonify({"success": False, "error": str(e)}), 400
