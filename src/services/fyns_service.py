@@ -29,6 +29,7 @@ COMO_GANAR: List[Dict[str, Any]] = [
     {"accion": "Un día usando Fynder", "ia": 15, "web": 3},
     {"accion": "7 días seguidos", "ia": 75, "web": 15},
     {"accion": "Subir un inmueble a la red", "ia": 40, "web": 10},
+    {"accion": "Compartir un pedido con la red", "ia": 40, "web": 10},
     {"accion": "Conectar tu IA (una vez)", "ia": 300, "web": None},
     {"accion": "Primera consulta desde tu IA (una vez)", "ia": 100, "web": None},
 ]

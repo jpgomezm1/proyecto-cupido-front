@@ -97,6 +97,11 @@ def propiedades_mini(ids: List[int]) -> Dict[int, Dict[str, Any]]:
     return out
 
 
+def _falta_para_red(perfil: Dict[str, Any]) -> Optional[str]:
+    from src.services.red_service import _publicable
+    return _publicable(perfil)
+
+
 def _salida(c: Dict[str, Any]) -> Dict[str, Any]:
     perfil = c.get("perfil") or {}
     return {
@@ -106,6 +111,9 @@ def _salida(c: Dict[str, Any]) -> Dict[str, Any]:
         "perfil": perfil, "chips": busqueda.chips(perfil),
         "n_busquedas": int(c.get("n_busquedas") or 0), "n_inmuebles": int(c.get("n_inmuebles") or 0),
         "alertas_nuevas": int(c.get("alertas_nuevas") or 0),
+        # Pedido compartido con la red (red_service): si está, y qué le falta al perfil para poder.
+        "en_red": bool(c.get("en_red")), "pedido_id": c.get("pedido_id") if c.get("en_red") else None,
+        "falta_para_red": _falta_para_red(perfil),
         "created_at": c["created_at"].isoformat(), "updated_at": c["updated_at"].isoformat(),
     }
 
@@ -114,7 +122,8 @@ _SELECT = """
     SELECT c.*,
            (SELECT COUNT(*) FROM conversaciones_busqueda b WHERE b.cliente_id = c.id AND b.activa) AS n_busquedas,
            (SELECT COUNT(*) FROM cliente_inmuebles i WHERE i.cliente_id = c.id AND i.estado <> 'descartado') AS n_inmuebles,
-           (SELECT COUNT(*) FROM alertas a WHERE a.cliente_id = c.id AND a.leida_at IS NULL) AS alertas_nuevas
+           (SELECT COUNT(*) FROM alertas a WHERE a.cliente_id = c.id AND a.leida_at IS NULL) AS alertas_nuevas,
+           (SELECT p.estado <> 'retirado' FROM pedidos p WHERE p.id = c.pedido_id) AS en_red
     FROM clientes_agente c
 """
 
@@ -239,6 +248,9 @@ def actualizar(user_id: int, cliente_id: int, datos: Dict[str, Any]) -> Dict[str
             db.cursor.execute(f"UPDATE clientes_agente SET {sets}, updated_at = NOW() WHERE id = %s AND user_id = %s",
                               list(campos.values()) + [cliente_id, user_id])
             db.conn.commit()
+        if "perfil" in campos or "estado" in campos:
+            from src.services import red_service
+            red_service.sincronizar(user_id, cliente_id)
     with get_db() as db:
         return _salida(_propio(db.cursor, user_id, cliente_id))
 

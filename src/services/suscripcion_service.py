@@ -296,6 +296,7 @@ def _resolver(cur, tipo: str, ref) -> Dict[str, Any]:
             "codigo": f"pedido-{row['id']}",
             "titulo": (texto[:120] + "…") if len(texto) > 120 else texto,
             "fecha_captura": row.get("fecha_captura"),
+            "estado": row.get("estado"),
             "contacto": {"telefono": row.get("agente_telefono"),
                          "nombre": _limpiar_texto_captador(row.get("agente_nombre")),
                          "agencia": None},
@@ -383,6 +384,8 @@ def _evaluar(cur, usuario: Dict[str, Any], tipo: str, ref) -> Dict[str, Any]:
         return _error("no_disponible", "Este inmueble ya no está disponible. No se cobra.")
 
     if tipo == "pedido":
+        if r.get("estado") == "retirado":
+            return _error("no_disponible", "Quien hizo este pedido ya no lo está compartiendo. No se cobra.")
         fecha = r.get("fecha_captura")
         if fecha and fecha < (_ahora().replace(tzinfo=None) - timedelta(days=DIAS_VIGENCIA_PEDIDO)):
             return _error("pedido_vencido",

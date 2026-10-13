@@ -40,6 +40,7 @@ _LOCK_LOGROS = 7102
 FYNS_DIA = (15, 3)
 FYNS_RACHA = (75, 15)       # cada 7 días seguidos
 FYNS_PUBLICAR = (40, 10)
+FYNS_PEDIDO = (40, 10)      # compartir el pedido de un cliente con la red
 CADA_RACHA = 7
 # Los días y rachas se pagan desde que existen los Fyns (no hacia atrás).
 FYNS_DESDE = date.fromisoformat(os.getenv("FYNS_DESDE", "2026-10-14"))
@@ -183,6 +184,14 @@ def _publicados(cur, user_id: int) -> List[Dict[str, Any]]:
     """, (str(user_id), FYNS_DESDE))
 
 
+def _pedidos_compartidos(cur, user_id: int) -> List[Dict[str, Any]]:
+    """Pedidos que el agente compartió con la red (y siguen compartidos) desde que existen los Fyns."""
+    return fetch_all(cur, """
+        SELECT id, canal = 'fynder_mcp' AS con_ia FROM pedidos
+        WHERE user_id = %s AND canal LIKE 'fynder%%' AND estado <> 'retirado' AND fecha_captura >= %s
+    """, (user_id, FYNS_DESDE))
+
+
 def _otorgar(cur, user_id: int, codigo: str, referencia: str, premio: int,
              con_ia: bool, verificado: bool) -> Optional[int]:
     """Registra el logro (si no existía) y abona sus Fyns respetando el tope del mes. Devuelve id o None."""
@@ -236,6 +245,8 @@ def evaluar(user_id: int) -> List[int]:
                 premios.append(("racha", f"{r['inicio'].isoformat()}:{h['hito']}", h["fyns"], h["con_ia"]))
         premios += [("publicar", str(p["propiedad_id"]), FYNS_PUBLICAR[0] if p["con_ia"] else FYNS_PUBLICAR[1],
                      p["con_ia"]) for p in _publicados(cur, user_id)]
+        premios += [("pedido", str(p["id"]), FYNS_PEDIDO[0] if p["con_ia"] else FYNS_PEDIDO[1], p["con_ia"])
+                    for p in _pedidos_compartidos(cur, user_id)]
         for codigo, ref, premio, con_ia in premios:
             i = _otorgar(cur, user_id, codigo, ref, premio, con_ia, verificado)
             if i:
@@ -265,6 +276,8 @@ def _titulo(l: Dict[str, Any]) -> str:
         return f"Un día usando Fynder{ia}"
     if l["codigo"] == "publicar":
         return "Subiste un inmueble a la red" + (" desde tu IA" if l["con_ia"] else "")
+    if l["codigo"] == "pedido":
+        return "Compartiste un pedido con la red" + (" desde tu IA" if l["con_ia"] else "")
     return MISIONES.get(l["codigo"], {}).get("titulo", l["codigo"])
 
 

@@ -380,7 +380,8 @@ _SQL_DESBLOQUEABLE = f"""
 def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None,
                        dias: int = DIAS_PEDIDOS, limit: int = 15) -> Dict[str, Any]:
     precio = ficha.get("precio")
-    condiciones = ["p.criterios IS NOT NULL", "p.fecha_captura > NOW() - make_interval(days => %s)"]
+    condiciones = ["p.criterios IS NOT NULL", "p.fecha_captura > NOW() - make_interval(days => %s)",
+                   "p.estado <> 'retirado'"]
     params: List[Any] = [dias]
     if precio:
         # Prefiltro barato: presupuesto desconocido o que alcance (techo 1.3x ya lo descarta puntuar)

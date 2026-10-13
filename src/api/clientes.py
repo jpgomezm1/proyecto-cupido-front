@@ -86,6 +86,23 @@ def archivar(cliente_id):
     return _manejar(lambda: _ok(svc.archivar(_uid(), cliente_id)), 'archivar')
 
 
+@clientes_bp.route('/clientes/<int:cliente_id>/compartir', methods=['POST'])
+@require_chat_auth
+def compartir(cliente_id):
+    """{activo: bool}: publica (o retira) el pedido del cliente en la red de Fynder."""
+    from src.services import red_service
+    try:
+        activo = _json().get('activo', True) is not False
+        return _ok(red_service.compartir_pedido(_uid(), cliente_id, activo=activo, canal="web"))
+    except red_service.RedError as e:
+        estado = 404 if e.codigo == "no_encontrado" else 400
+        return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), estado
+    except Exception as e:
+        print(f"❌ Error en clientes/compartir: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": "Error en el servidor"}), 500
+
+
 @clientes_bp.route('/clientes/<int:cliente_id>/buscar', methods=['POST'])
 @require_chat_auth
 def buscar(cliente_id):

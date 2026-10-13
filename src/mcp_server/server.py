@@ -1031,6 +1031,31 @@ def mi_plan() -> Dict[str, Any]:
     return res
 
 
+@mcp.tool(title="Compartir un pedido con la red", annotations=_escritura(), costo_ia=True)
+def compartir_pedido(descripcion: str, nombre_cliente: str = "Cliente") -> Dict[str, Any]:
+    """
+    Publica en la red de Fynder lo que busca un cliente del agente, para que
+    otros agentes con inmuebles que encajan lo encuentren y lo contacten.
+    `descripcion`: lo que busca, en palabras del agente ("apto en Laureles, 3
+    alcobas, hasta 650 millones, con balcón"). `nombre_cliente` es solo para que
+    el agente lo reconozca en Clientes: NUNCA sale en la red.
+
+    Queda guardado como cliente del agente (con alertas) y su pedido compartido.
+    Necesita celular verificado y términos aceptados. Da Fyns (40 desde aquí).
+    Antes de publicarlo, confirma con el agente lo que va a salir en la red.
+    """
+    from src.services import clientes_service, red_service
+    uid = current_agent().user_id
+    try:
+        c = clientes_service.crear(uid, {"nombre": (nombre_cliente or "Cliente")[:120], "descripcion": descripcion})
+        res = red_service.compartir_pedido(uid, c["id"], activo=True, canal="mcp")
+        return {**res, "cliente_id": c["id"], "busca": c.get("chips")}
+    except red_service.RedError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+    except clientes_service.ClienteError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+
+
 @mcp.tool(title="Mis Fyns", annotations=_LECTURA)
 def mis_fyns() -> Dict[str, Any]:
     """
