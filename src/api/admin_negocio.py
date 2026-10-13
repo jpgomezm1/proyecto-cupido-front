@@ -288,3 +288,26 @@ def tablero_posthog():
         return _ok(posthog(_int('dias', 30, minimo=7, maximo=180)))
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'tablero_posthog')
+
+
+@admin_negocio_bp.route('/vitrina/candidatos', methods=['GET'])
+def vitrina_candidatos():
+    """Cola de la Vitrina: lo que Findy propone esta semana (pendiente de revisión)."""
+    from src.services import vitrina_service
+    try:
+        return _ok(vitrina_service.candidatos(request.args.get('estado', 'pendiente')))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'vitrina_candidatos')
+
+
+@admin_negocio_bp.route('/vitrina/candidatos/<int:candidato_id>', methods=['POST'])
+def vitrina_revisar(candidato_id):
+    """{aprobar: bool}: entra (o no) a la próxima Vitrina."""
+    from src.services import vitrina_service
+    try:
+        datos = request.get_json(silent=True) or {}
+        return _ok(vitrina_service.revisar(candidato_id, datos.get('aprobar') is True, admin="admin"))
+    except vitrina_service.VitrinaError as e:
+        return jsonify({"success": False, "error": e.mensaje}), 400
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'vitrina_revisar')

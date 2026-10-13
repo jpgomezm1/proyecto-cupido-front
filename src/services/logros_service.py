@@ -41,6 +41,7 @@ FYNS_DIA = (15, 3)
 FYNS_RACHA = (75, 15)       # cada 7 días seguidos
 FYNS_PUBLICAR = (40, 10)
 FYNS_PEDIDO = (40, 10)      # compartir el pedido de un cliente con la red
+FYNS_CONECTA = 25           # presentación de Findy Conecta aceptada (a los dos)
 CADA_RACHA = 7
 # Los días y rachas se pagan desde que existen los Fyns (no hacia atrás).
 FYNS_DESDE = date.fromisoformat(os.getenv("FYNS_DESDE", "2026-10-14"))
@@ -247,6 +248,10 @@ def evaluar(user_id: int) -> List[int]:
                      p["con_ia"]) for p in _publicados(cur, user_id)]
         premios += [("pedido", str(p["id"]), FYNS_PEDIDO[0] if p["con_ia"] else FYNS_PEDIDO[1], p["con_ia"])
                     for p in _pedidos_compartidos(cur, user_id)]
+        premios += [("conecta", str(r["id"]), FYNS_CONECTA, False) for r in fetch_all(cur, """
+            SELECT id FROM presentaciones WHERE estado = 'aceptada' AND respondida_at >= %s
+              AND (solicitante_id = %s OR receptor_id = %s)
+        """, (FYNS_DESDE, user_id, user_id))]
         for codigo, ref, premio, con_ia in premios:
             i = _otorgar(cur, user_id, codigo, ref, premio, con_ia, verificado)
             if i:
@@ -278,6 +283,8 @@ def _titulo(l: Dict[str, Any]) -> str:
         return "Subiste un inmueble a la red" + (" desde tu IA" if l["con_ia"] else "")
     if l["codigo"] == "pedido":
         return "Compartiste un pedido con la red" + (" desde tu IA" if l["con_ia"] else "")
+    if l["codigo"] == "conecta":
+        return "Una presentación de Findy Conecta aceptada"
     return MISIONES.get(l["codigo"], {}).get("titulo", l["codigo"])
 
 

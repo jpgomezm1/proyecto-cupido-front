@@ -103,6 +103,77 @@ def compartir(cliente_id):
         return jsonify({"success": False, "error": "Error en el servidor"}), 500
 
 
+def _encargo(fn, contexto: str):
+    from src.services import encargos_service as enc
+    try:
+        return _ok(fn(enc))
+    except enc.EncargoError as e:
+        estado = 404 if e.codigo == "no_encontrado" else 400
+        return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), estado
+    except Exception as e:
+        print(f"❌ Error en encargos/{contexto}: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": "Error en el servidor"}), 500
+
+
+@clientes_bp.route('/encargos', methods=['GET'])
+@require_chat_auth
+def encargos_listar():
+    """Encargos de Findy, su cupo y las presentaciones de Findy Conecta (recibidas y enviadas)."""
+    return _encargo(lambda enc: enc.listar(_uid()), 'listar')
+
+
+@clientes_bp.route('/encargos/resumen', methods=['GET'])
+@require_chat_auth
+def encargos_resumen():
+    """Para el Inicio: opciones nuevas de sus encargos y presentaciones por responder."""
+    return _encargo(lambda enc: enc.resumen_inicio(_uid()), 'resumen')
+
+
+@clientes_bp.route('/encargos', methods=['POST'])
+@require_chat_auth
+def encargos_crear():
+    """{tipo: buscar_inmueble|buscar_comprador, cliente_id?, propiedad_id?}"""
+    d = _json()
+    return _encargo(lambda enc: enc.crear(_uid(), d.get('tipo'), d.get('cliente_id'), d.get('propiedad_id'), canal="web"),
+                    'crear')
+
+
+@clientes_bp.route('/encargos/<int:encargo_id>', methods=['GET'])
+@require_chat_auth
+def encargos_detalle(encargo_id):
+    def f(enc):
+        r = enc.detalle(_uid(), encargo_id)
+        enc.marcar_vistos(_uid(), encargo_id)
+        return r
+    return _encargo(f, 'detalle')
+
+
+@clientes_bp.route('/encargos/<int:encargo_id>', methods=['DELETE'])
+@require_chat_auth
+def encargos_cerrar(encargo_id):
+    return _encargo(lambda enc: enc.cerrar(_uid(), encargo_id), 'cerrar')
+
+
+@clientes_bp.route('/encargos/opciones/<int:match_id>/descartar', methods=['POST'])
+@require_chat_auth
+def encargos_descartar(match_id):
+    return _encargo(lambda enc: (enc.descartar_match(_uid(), match_id), {"ok": True})[1], 'descartar')
+
+
+@clientes_bp.route('/encargos/opciones/<int:match_id>/presentacion', methods=['POST'])
+@require_chat_auth
+def encargos_presentacion(match_id):
+    return _encargo(lambda enc: enc.pedir_presentacion(_uid(), match_id, _json().get('mensaje')), 'presentacion')
+
+
+@clientes_bp.route('/presentaciones/<int:presentacion_id>/responder', methods=['POST'])
+@require_chat_auth
+def presentaciones_responder(presentacion_id):
+    """{aceptar: bool}"""
+    return _encargo(lambda enc: enc.responder(_uid(), presentacion_id, _json().get('aceptar') is True), 'responder')
+
+
 @clientes_bp.route('/clientes/<int:cliente_id>/buscar', methods=['POST'])
 @require_chat_auth
 def buscar(cliente_id):

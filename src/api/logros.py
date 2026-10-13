@@ -73,6 +73,43 @@ def beneficios():
     return _manejar(lambda: _ok(beneficios_service.beneficios(_uid())), 'beneficios')
 
 
+@logros_bp.route('/marca', methods=['GET'])
+@require_chat_auth
+def marca():
+    """Tu marca: cupos y usos del mes (piezas con marca, informes, links seguidos) y quién vio sus links."""
+    from src.services import beneficios_service, marca_service
+    from src.services.db import get_db
+
+    def f():
+        with get_db() as db:
+            ben = beneficios_service.beneficios_en(db.cursor, _uid())
+            usos = marca_service.usos_mes_en(db.cursor, _uid())
+            informes = marca_service.cupo_informes_en(db.cursor, _uid())
+        return _ok({"cupos": {k: ben[k] for k in ("marca_piezas", "informes", "links")}, "usos": usos,
+                    "informes": informes, "ilimitado": beneficios_service.ILIMITADO, **marca_service.vistas(_uid())})
+    return _manejar(f, 'marca')
+
+
+@logros_bp.route('/informes', methods=['POST'])
+@require_chat_auth
+def informes():
+    """{propiedad_id} o {ciudad, zona, tipo, area, habitaciones?}: informe de captación para el propietario."""
+    from src.services import marca_service
+    d = _json()
+    try:
+        return _ok(marca_service.generar_informe(_uid(), d.get('propiedad_id'), d))
+    except marca_service.MarcaError as e:
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), 400
+
+
+@logros_bp.route('/vitrina', methods=['GET'])
+@require_chat_auth
+def vitrina():
+    """La Vitrina de esta semana (completa si tiene acceso; si no, solo las cifras)."""
+    from src.services import vitrina_service
+    return _manejar(lambda: _ok(vitrina_service.ver(_uid(), abrir=request.args.get('abrir', '1') != '0')), 'vitrina')
+
+
 @logros_bp.route('/fyns', methods=['GET'])
 @require_chat_auth
 def fyns_estado():

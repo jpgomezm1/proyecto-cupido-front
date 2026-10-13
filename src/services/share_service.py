@@ -59,20 +59,29 @@ def _agente_int(agente_id: Any) -> Optional[int]:
     return n if n > 0 else None
 
 
-def make_token(kind: str, ids: List[int], agente_id: Optional[int] = None) -> str:
+def make_token(kind: str, ids: List[int], agente_id: Optional[int] = None, marca: bool = False) -> str:
     payload: Dict[str, Any] = {"k": kind, "ids": [int(i) for i in ids]}
     a = _agente_int(agente_id)
     if a:
         payload["a"] = a  # agente que comparte (atribución + contacto en la página)
+        if marca:
+            payload["m"] = 1  # "Tu marca": la página sale solo con la marca del agente (marca_service)
     return _sign(payload)
 
 
-def make_token_zona(ciudad, zona, tipo, agente_id: Optional[int] = None) -> str:
+def make_token_zona(ciudad, zona, tipo, agente_id: Optional[int] = None, marca: bool = False) -> str:
     payload: Dict[str, Any] = {"k": "zona", "ciudad": ciudad, "zona": zona, "tipo": tipo}
     a = _agente_int(agente_id)
     if a:
         payload["a"] = a
+        if marca:
+            payload["m"] = 1
     return _sign(payload)
+
+
+def _marca(agente_id: Optional[int], tipo: str, ref: str) -> bool:
+    from src.services import marca_service
+    return marca_service.firmar(_agente_int(agente_id), tipo, ref)
 
 
 def verify_token(token: str) -> Dict[str, Any]:
@@ -95,15 +104,18 @@ def _frontend_base() -> str:
 
 def link_comparativa(ids: List[int], agente_id: Optional[int] = None) -> str:
     # Link elegante con el dominio de Fynder (la página vive en el portal React).
-    return f"{_frontend_base()}/comparar/{make_token('cmp', ids, agente_id)}"
+    marca = _marca(agente_id, "comparativa", "cmp:" + ",".join(str(i) for i in ids))
+    return f"{_frontend_base()}/comparar/{make_token('cmp', ids, agente_id, marca=marca)}"
 
 
 def link_brochure(property_id: int, agente_id: Optional[int] = None) -> str:
-    return f"{_frontend_base()}/ficha/{make_token('fic', [property_id], agente_id)}"
+    marca = _marca(agente_id, "ficha", f"fic:{property_id}")
+    return f"{_frontend_base()}/ficha/{make_token('fic', [property_id], agente_id, marca=marca)}"
 
 
 def link_reporte_zona(ciudad, zona, tipo, agente_id: Optional[int] = None) -> str:
-    return f"{_frontend_base()}/zona/{make_token_zona(ciudad, zona, tipo, agente_id)}"
+    marca = _marca(agente_id, "zona", f"zona:{ciudad}:{zona}:{tipo}")
+    return f"{_frontend_base()}/zona/{make_token_zona(ciudad, zona, tipo, agente_id, marca=marca)}"
 
 
 # --------------------------------------------------------------------------

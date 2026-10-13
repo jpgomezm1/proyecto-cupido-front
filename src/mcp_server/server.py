@@ -1058,6 +1058,125 @@ def compartir_pedido(descripcion: str, nombre_cliente: str = "Cliente") -> Dict[
         return {"error": e.codigo, "mensaje": e.mensaje}
 
 
+@mcp.tool(title="Encargar a Findy", annotations=_escritura(), costo_ia=True)
+def encargar_a_findy(que_buscar: str, para: str) -> Dict[str, Any]:
+    """
+    Pone a Findy a trabajar solo, todos los días, buscando la mejor contraparte:
+      - que_buscar="inmueble": el mejor inmueble para un cliente. `para` = lo que
+        busca el cliente en palabras del agente ("apto en Laureles, 3 alcobas,
+        hasta 650 millones"); se guarda como cliente del agente.
+      - que_buscar="comprador": el mejor comprador para un inmueble del agente.
+        `para` = el código o link de Fynder de su inmueble.
+    Devuelve las primeras opciones; las nuevas llegan con 'mis_encargos'. Los
+    encargos vienen con Negocio (2), Cierre (5) o Findy trabaja por ti (+10), o
+    se canjean con Fyns (120 por 30 días).
+    """
+    from src.services import clientes_service, encargos_service as enc
+    uid = current_agent().user_id
+    try:
+        if (que_buscar or "").lower().startswith("comprador"):
+            from src.services.property_service import get_property
+            from src.services.db import get_db as _gdb
+            ref = (para or "").strip().rstrip("/").split("/")[-1].split("-")[0]
+            with _gdb() as db:
+                p = get_property(db.cursor, ref)
+            if not p:
+                return {"error": "no_encontrada", "mensaje": "No encontré ese inmueble. Usa su código o link de Fynder."}
+            return enc.crear(uid, "buscar_comprador", propiedad_id=p["id"], canal="mcp")
+        c = clientes_service.crear(uid, {"nombre": "Cliente (encargo)", "descripcion": para})
+        return enc.crear(uid, "buscar_inmueble", cliente_id=c["id"], canal="mcp")
+    except enc.EncargoError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+    except clientes_service.ClienteError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+
+
+@mcp.tool(title="Mis encargos de Findy", annotations=_LECTURA)
+def mis_encargos() -> Dict[str, Any]:
+    """
+    Encargos activos del agente con las mejores opciones que Findy encontró
+    (inmuebles para sus clientes o compradores para sus inmuebles), su cupo y las
+    presentaciones de Findy Conecta que tiene por responder o que pidió.
+    En cada opción, `conecta`=true significa que se puede pedir una presentación
+    ('pedir_presentacion'); si es false, se abre el contacto con 'ver_contacto' o
+    'ver_contacto_pedido' (una llave).
+    """
+    from src.services import encargos_service as enc
+    return enc.listar(current_agent().user_id)
+
+
+@mcp.tool(title="Pedir una presentación (Findy Conecta)", annotations=_escritura())
+def pedir_presentacion(opcion_id: int, mensaje: str = None) -> Dict[str, Any]:
+    """
+    Findy Conecta: pide que Fynder presente al agente con quien tiene la opción
+    (`opcion_id` = el id de una opción de 'mis_encargos' con conecta=true). Si la
+    otra parte acepta, cada uno recibe el contacto del otro y al agente se le
+    descuenta 1 llave (si ya no está disponible, no se cobra). Confirma antes con él.
+    """
+    from src.services import encargos_service as enc
+    try:
+        return enc.pedir_presentacion(current_agent().user_id, opcion_id, mensaje)
+    except enc.EncargoError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+
+
+@mcp.tool(title="Responder una presentación", annotations=_escritura())
+def responder_presentacion(presentacion_id: int, aceptar: bool) -> Dict[str, Any]:
+    """
+    Acepta o rechaza una presentación de Findy Conecta que recibió el agente (de
+    'mis_encargos' → presentaciones.recibidas). Si acepta, ambos reciben el
+    contacto del otro; a él no le cuesta nada.
+    """
+    from src.services import encargos_service as enc
+    try:
+        return enc.responder(current_agent().user_id, presentacion_id, bool(aceptar))
+    except enc.EncargoError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+
+
+@mcp.tool(title="Informe de captación", annotations=_escritura())
+def generar_informe_captacion(property_id: str = None, zona: str = None, ciudad: str = None,
+                              tipo_propiedad: str = None, area_construida: float = None,
+                              habitaciones: int = None) -> Dict[str, Any]:
+    """
+    Informe para convencer a un PROPIETARIO de darle el inmueble al agente: precio
+    sugerido y rango, comparables y cómo está la demanda en la zona, con la marca
+    del agente. Devuelve un link listo para mandarle (se imprime o guarda como PDF).
+    Usa `property_id` si el inmueble ya está en Fynder; si no, zona/ciudad, tipo y área.
+    Vienen con Negocio (1 al mes), Cierre (3) y Tu marca (10), o con 60 Fyns.
+    """
+    from src.services import marca_service
+    from src.services.property_service import get_property
+    from src.services.db import get_db as _gdb
+    uid = current_agent().user_id
+    try:
+        pid = None
+        if property_id:
+            with _gdb() as db:
+                p = get_property(db.cursor, str(property_id).strip().rstrip("/").split("/")[-1].split("-")[0])
+            if not p:
+                return {"error": "no_encontrada", "mensaje": "No encontré ese inmueble en Fynder."}
+            pid = p["id"]
+        return marca_service.generar_informe(uid, pid, {"zona": zona, "ciudad": ciudad, "tipo": tipo_propiedad,
+                                                        "area": area_construida, "habitaciones": habitaciones})
+    except marca_service.MarcaError as e:
+        return {"error": e.codigo, "mensaje": e.mensaje}
+
+
+@mcp.tool(title="La Vitrina de la semana", annotations=_LECTURA)
+def vitrina() -> Dict[str, Any]:
+    """
+    La Vitrina de Fynder: cada lunes, máximo 8 inmuebles a precio de oportunidad
+    y 8 pedidos top, curados. Los primeros 3 días son exclusivos para sus
+    miembros y cada contacto lo abren máximo 3 agentes. Si el agente no tiene
+    acceso (Cierre o Findy trabaja por ti cada semana; Negocio una al mes) viene
+    `borrosa` con las cifras: puede entrar con 100 Fyns ('canjear_fyns' "vitrina").
+    Abrir un contacto de la Vitrina usa 1 llave (ver_contacto / ver_contacto_pedido).
+    """
+    from src.services import vitrina_service
+    return vitrina_service.ver(current_agent().user_id)
+
+
 @mcp.tool(title="Mis Fyns", annotations=_LECTURA)
 def mis_fyns() -> Dict[str, Any]:
     """

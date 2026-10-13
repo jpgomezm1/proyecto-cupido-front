@@ -117,6 +117,12 @@ if __name__ == '__main__':
                 print(f"[ALERTAS] correo {alertas_service.enviar_resumenes()}")
             except Exception as e:  # noqa: BLE001
                 _reportar("ALERTAS-CORREO", e)
+            # Encargos de Findy (mismo ciclo: también es SQL y puntaje, sin IA).
+            try:
+                from src.services import encargos_service
+                print(f"[ENCARGOS] {encargos_service.correr()}")
+            except Exception as e:  # noqa: BLE001
+                _reportar("ENCARGOS", e)
 
         sched_alertas = BackgroundScheduler()
         sched_alertas.add_job(_alertas, 'interval', minutes=30, id='alertas',
@@ -134,6 +140,14 @@ if __name__ == '__main__':
                 print(f"[CORREOS] Recordatorios de plan: {recordatorios_plan()}")
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
                 _reportar("CORREOS", e)
+            # La Vitrina: candidatos a diario; el lunes se publica la semana (idempotente).
+            try:
+                from src.services import vitrina_service
+                print(f"[VITRINA] candidatos {vitrina_service.proponer()}")
+                if datetime.now().weekday() == 0 and datetime.now().hour >= 6:
+                    print(f"[VITRINA] {vitrina_service.publicar_semana()}")
+            except Exception as e:  # noqa: BLE001
+                _reportar("VITRINA", e)
             if os.getenv('CORREOS_ACTIVACION_ENABLED', 'true').lower() == 'true':
                 try:
                     print(f"[CORREOS] Activación: {recordatorios_activacion()}")

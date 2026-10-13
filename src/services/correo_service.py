@@ -283,6 +283,45 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
 
 
+def pieza_vista(nombre: str, email: str, titulo: str, vistas: int, **kw) -> None:
+    """Quién vio tu link: el cliente acaba de abrir lo que el agente le mandó."""
+    n = _primer_nombre(nombre)
+    veces = "por primera vez" if vistas <= 1 else f"(ya van {vistas} veces)"
+    cuerpo = _parrafo(f"{_e(n)}, tu cliente acaba de abrir <b>{_e(titulo)}</b> {_e(veces)}. "
+                      "Es el mejor momento para escribirle: todavía lo tiene en la cabeza.")
+    html_ = _layout(preheader=f"Tu cliente abrió {titulo}.", icono="findy-saludo", eyebrow="Quién vio tu link",
+                    titulo="Tu cliente lo está mirando", intro="Escríbele hoy.", cuerpo=cuerpo,
+                    cta=("Ver mis links", f"{_frontend()}/chat/clientes/contactos#links"))
+    texto = f"{n}, tu cliente acaba de abrir {titulo} {veces}. Escríbele hoy."
+    enviar(email, f"👀 Tu cliente abrió {titulo}", html_, texto, "pieza_vista", **kw)
+
+
+def presentacion_pedida(nombre: str, email: str, **kw) -> None:
+    """Findy Conecta: otro agente quiere que lo presentemos (tiene un comprador o un inmueble para ti)."""
+    n = _primer_nombre(nombre)
+    url = f"{_frontend()}/chat/clientes/encargos#presentaciones"
+    cuerpo = _parrafo(f"{_e(n)}, un agente de Fynder encontró algo que encaja con lo tuyo y quiere que los presentemos. "
+                      "Mira de qué se trata y decide: si aceptas, cada uno recibe el contacto del otro. A ti no te cuesta nada.") + \
+        _parrafo('<span style="color:#6B6B6B;font-size:13px;">Tienes 7 días para responder. Si no te interesa, recházala y listo.</span>')
+    html_ = _layout(preheader="Un agente quiere hacer negocio contigo.", icono="negocio", eyebrow="Findy Conecta",
+                    titulo="Un agente quiere conectar contigo", intro="Tiene algo que encaja con tu inmueble o tu cliente.",
+                    cuerpo=cuerpo, cta=("Ver la presentación", url))
+    texto = f"{n}, un agente de Fynder quiere que los presentemos. Míralo y decide: {url}"
+    enviar(email, f"{n}, un agente quiere hacer negocio contigo", html_, texto, "presentacion_pedida", **kw)
+
+
+def presentacion_aceptada(nombre: str, email: str, **kw) -> None:
+    n = _primer_nombre(nombre)
+    url = f"{_frontend()}/chat/clientes/encargos#presentaciones"
+    cuerpo = _parrafo(f"{_e(n)}, el otro agente aceptó la presentación. Ya tienes su contacto en Fynder (usaste 1 llave) "
+                      "y él tiene el tuyo. ¡Escríbele hoy!")
+    html_ = _layout(preheader="Ya tienes su contacto.", icono="findy-celebra", eyebrow="Findy Conecta",
+                    titulo="¡Aceptaron tu presentación!", intro="Ya pueden hablar directo.",
+                    cuerpo=cuerpo, cta=("Ver su contacto", url))
+    texto = f"{n}, aceptaron tu presentación. Ya tienes su contacto: {url}"
+    enviar(email, "✅ Aceptaron tu presentación", html_, texto, "presentacion_aceptada", **kw)
+
+
 def complemento_activo(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     """Complemento mensual (Findy trabaja por ti / Tu marca): 30 días que se suman al plan."""
     n = _primer_nombre(nombre)

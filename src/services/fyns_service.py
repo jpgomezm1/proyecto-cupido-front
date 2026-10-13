@@ -22,6 +22,12 @@ TZ = "America/Bogota"
 CATALOGO: Dict[str, Dict[str, Any]] = {
     "llave": {"titulo": "1 llave", "costo": 100, "detalle": "Abre un contacto. Queda en tu saldo y no vence."},
     "fotos_5": {"titulo": "5 fotos con IA", "costo": 60, "detalle": "Mejora 5 fotos de tus inmuebles. No vencen."},
+    "vitrina": {"titulo": "La Vitrina de esta semana", "costo": 100,
+                "detalle": "Las oportunidades curadas de la semana, con 72 h de exclusividad."},
+    "informe": {"titulo": "1 informe de captación", "costo": 60,
+                "detalle": "Precio sugerido, comparables y demanda de la zona, con tu marca, para el propietario."},
+    "encargo": {"titulo": "1 encargo de Findy por 30 días", "costo": 120,
+                "detalle": "Findy busca solo el mejor inmueble para un cliente o el mejor comprador para un inmueble tuyo."},
 }
 
 # Cómo se ganan (lo mismo que paga logros_service; aquí para mostrarlo).
@@ -30,6 +36,7 @@ COMO_GANAR: List[Dict[str, Any]] = [
     {"accion": "7 días seguidos", "ia": 75, "web": 15},
     {"accion": "Subir un inmueble a la red", "ia": 40, "web": 10},
     {"accion": "Compartir un pedido con la red", "ia": 40, "web": 10},
+    {"accion": "Una presentación de Findy Conecta aceptada", "ia": 25, "web": 25},
     {"accion": "Conectar tu IA (una vez)", "ia": 300, "web": None},
     {"accion": "Primera consulta desde tu IA (una vez)", "ia": 100, "web": None},
 ]
@@ -124,6 +131,19 @@ def canjear(user_id: int, producto: str) -> Dict[str, Any]:
                 INSERT INTO fotos_ia_movimientos (user_id, cantidad, referencia, creado_por)
                 VALUES (%s, 5, %s, 'fyns')
             """, (user_id, f"fyns:{mov}"))
+        elif producto == "encargo":
+            from src.services import encargos_service
+            encargos_service.abonar_extra_en(cur, user_id, f"fyns:{mov}")
+        elif producto == "informe":
+            from src.services import marca_service
+            marca_service.abonar_informes_en(cur, user_id, 1, f"fyns:{mov}")
+        elif producto == "vitrina":
+            from src.services import vitrina_service
+            if scalar(cur, "SELECT 1 FROM vitrina_accesos WHERE user_id = %s AND semana = %s",
+                      (user_id, vitrina_service.lunes())):
+                db.conn.rollback()
+                raise FynsError("ya_tienes", "Ya tienes la Vitrina de esta semana.")
+            vitrina_service.abrir_con_fyns_en(cur, user_id, f"fyns:{mov}")
         db.conn.commit()
         nuevo = saldo - item["costo"]
     return {"ok": True, "producto": producto, "titulo": item["titulo"], "costo": item["costo"],

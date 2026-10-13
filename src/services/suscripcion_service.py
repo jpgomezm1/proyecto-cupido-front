@@ -381,6 +381,12 @@ def _evaluar(cur, usuario: Dict[str, Any], tipo: str, ref) -> Dict[str, Any]:
     if _es_propio(usuario, tel10):
         return {"r": r, "existente": existente, "costo": 0, "motivo_gratis": "propia", "tel10": tel10}
 
+    # La Vitrina: 72 h solo para quien tiene acceso a esa semana y máximo 3 agentes por contacto.
+    from src.services import vitrina_service
+    regla = vitrina_service.regla_desbloqueo(cur, usuario["id"], tipo, r["ref_id"])
+    if regla:
+        return _error(regla["error"], regla["mensaje"])
+
     if tipo == "propiedad" and r.get("activa") is False:
         return _error("no_disponible", "Este inmueble ya no está disponible. No se cobra.")
 
