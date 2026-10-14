@@ -25,7 +25,7 @@ from src.services.db import get_db, fetch_all, fetch_one  # noqa: E402
 def disponible(monkeypatch):
     """Por defecto, todo inmueble verificado en vivo está disponible."""
     monkeypatch.setattr(svc, "verificar_disponibilidad",
-                        lambda pid: {"estado": "disponible", "activo": True, "verificado_en": "x"})
+                        lambda pid, **kw: {"estado": "disponible", "activo": True, "verificado_en": "x"})
 
 
 def _tel():
@@ -100,7 +100,7 @@ def test_cobro_reverlo_gratis_y_sin_creditos(inmuebles):
 
 def test_no_cobra_si_no_esta_disponible(inmuebles, monkeypatch):
     uid, _ = _crear_usuario()
-    monkeypatch.setattr(svc, "verificar_disponibilidad", lambda pid: {"estado": "404", "activo": False})
+    monkeypatch.setattr(svc, "verificar_disponibilidad", lambda pid, **kw: {"estado": "404", "activo": False})
     res = svc.desbloquear(uid, "propiedad", inmuebles[0]["id"])
     assert res["error"] == "no_disponible"
     assert svc.estado(uid)["disponibles"] == 2
@@ -152,7 +152,7 @@ def test_carrera_un_credito_dos_inmuebles(inmuebles, monkeypatch):
     uid, _ = _crear_usuario()
     svc.desbloquear(uid, "propiedad", inmuebles[0]["id"])     # queda 1 crédito
 
-    def lenta(pid):
+    def lenta(pid, **kw):
         time.sleep(0.5)
         return {"estado": "disponible", "activo": True}
     monkeypatch.setattr(svc, "verificar_disponibilidad", lenta)
@@ -168,7 +168,7 @@ def test_carrera_un_credito_dos_inmuebles(inmuebles, monkeypatch):
 def test_carrera_mismo_inmueble_cobra_una_vez(inmuebles, monkeypatch):
     uid, _ = _crear_usuario()
 
-    def lenta(pid):
+    def lenta(pid, **kw):
         time.sleep(0.5)
         return {"estado": "disponible", "activo": True}
     monkeypatch.setattr(svc, "verificar_disponibilidad", lenta)
