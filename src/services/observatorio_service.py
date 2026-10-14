@@ -231,12 +231,22 @@ def _calcular(d: Dict[str, Any], municipio: Optional[str], tipo: Optional[str]) 
     barrios.sort(key=lambda x: -x["activos"])
 
     # ── Por comuna ─────────────────────────────────────────────────────────
-    por_c = defaultdict(list)
-    for f in activas:
-        v = _m2(f)
-        if v and f["comuna"]:
-            por_c[f["comuna"]].append(v)
-    comunas = sorted([{"comuna": k, "activos": len(v), "m2_mediana": round(median(v))} for k, v in por_c.items() if len(v) >= 5],
+    # Las mismas métricas del mapa por barrio, sumando todos los barrios de la comuna.
+    por_c: Dict[str, Dict[str, Any]] = {}
+    for b in por_b.values():
+        if not b["comuna"]:
+            continue
+        # "Zona 9" de Envigado no es la comuna 9 de Medellín: fuera de Medellín va con su municipio.
+        nombre = b["comuna"] if b["municipio"] in (None, "Medellín") else f"{b['municipio']} · {b['comuna']}"
+        c = por_c.setdefault(nombre, {"m2": [], "dias": [], "activos": 0, "demanda": 0})
+        c["m2"] += b["m2"]
+        c["dias"] += b["dias"]
+        c["activos"] += b["activos"]
+        c["demanda"] += dem_barrio.get(b["id"], 0)
+    comunas = sorted([{"comuna": k, "activos": c["activos"], "m2_mediana": round(median(c["m2"])),
+                       "demanda": c["demanda"], "demanda_por_oferta": round(c["demanda"] / c["activos"], 2),
+                       "dias_salida": round(median(c["dias"])) if len(c["dias"]) >= 3 else None}
+                      for k, c in por_c.items() if len(c["m2"]) >= 5],
                      key=lambda x: -x["m2_mediana"])
 
     # ── Oferta vs demanda: habitaciones × presupuesto ──────────────────────

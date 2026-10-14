@@ -5,6 +5,7 @@ Carga el catálogo de barrios (migración 059) y, si se le pasa, los polígonos 
     python scripts/cargar_barrios.py                      # catálogo + alias desde data/barrios/mapeo_ia.json
     python scripts/cargar_barrios.py --geojson data/geo/barrios_medellin.geojson
     python scripts/cargar_barrios.py --asignar            # asigna barrio a todo el inventario y los pedidos
+    python scripts/cargar_barrios.py --comunas data/geo/comunas_medellin_osm.geojson   # después de --asignar
 
 Idempotente: vuelve a correr sin duplicar (los alias revisados por el admin no se tocan).
 El mapeo lo produjo una sola corrida de Claude Haiku sobre las ~2.100 formas en que los
@@ -25,7 +26,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(os.path.join(RAIZ, ".env"))
 
 from src.services import barrios_service as bs  # noqa: E402
-from src.services.db import fetch_one, get_db  # noqa: E402
+from src.services.db import fetch_all, fetch_one, get_db  # noqa: E402
 
 MAPEO = os.path.join(RAIZ, "data", "barrios", "mapeo_ia.json")
 
@@ -160,13 +161,62 @@ def cargar_poligonos(ruta: str, municipio: str = "Medellín") -> None:
     print(f"Polígonos: {act} barrios actualizados, {nuevos} barrios oficiales nuevos, {corregidas} comunas corregidas")
 
 
+# Corregimientos de Medellín (no tienen límite en OSM): su número oficial.
+CORREGIMIENTOS = {"san sebastian de palmitas": "50 - San Sebastián de Palmitas", "palmitas": "50 - San Sebastián de Palmitas",
+                  "san cristobal": "60 - San Cristóbal", "altavista": "70 - Altavista",
+                  "san antonio de prado": "80 - San Antonio de Prado", "santa elena": "90 - Santa Elena", "arvi": "90 - Santa Elena"}
+
+
+def cargar_comunas(ruta: str, municipio: str = "Medellín") -> None:
+    """Límites de comunas (OpenStreetMap) y, con ellos, la comuna correcta de cada barrio.
+
+    La comuna que puso la IA a veces está mal ("Ciudad del Río" en Santa Cruz); el centro
+    del barrio (calculado de sus inmuebles en --asignar) dice en qué comuna cae de verdad.
+    Sin centro (o fuera de toda comuna), la comuna se corrige por su nombre: la IA a veces
+    acierta el nombre y no el número ("6 - El Poblado" → "14 - El Poblado").
+    """
+    gj = json.load(open(ruta, encoding="utf-8"))
+    mc = bs.clave(municipio)
+    from psycopg2.extras import execute_values
+    filas = [(municipio, mc, f["properties"]["nombre"], json.dumps(f["geometry"]))
+             for f in gj["features"] if f.get("geometry")]
+    with get_db() as db:
+        cur = db.cursor
+        execute_values(cur, """
+            INSERT INTO comunas (municipio, municipio_clave, nombre, geojson) VALUES %s
+            ON CONFLICT (municipio_clave, nombre) DO UPDATE SET geojson = EXCLUDED.geojson
+        """, filas)
+        comunas = [(n, json.loads(g)) for _, _, n, g in filas]
+        por_nombre = {bs.clave(n.split(" - ", 1)[-1]): n for n, _ in comunas}
+        por_nombre.update(CORREGIMIENTOS if mc == "medellin" else {})
+        barrios = fetch_all(cur, """SELECT id, comuna, lat, lng FROM barrios
+                                    WHERE municipio_clave = %s AND (comuna IS NOT NULL OR lat IS NOT NULL)""", (mc,))
+        cambios = []
+        for b in barrios:
+            nueva = None
+            if b["lat"] is not None:
+                nueva = next((n for n, g in comunas if bs._en_poligono(b["lat"], b["lng"], g)), None)
+            if not nueva and b["comuna"]:
+                nueva = por_nombre.get(bs.clave(b["comuna"].split(" - ", 1)[-1]))
+            if nueva and nueva != b["comuna"]:
+                cambios.append((b["id"], nueva))
+        if cambios:
+            execute_values(cur, "UPDATE barrios AS b SET comuna = v.comuna FROM (VALUES %s) AS v(id, comuna) WHERE b.id = v.id",
+                           cambios, template="(%s::int, %s::varchar)")
+        db.conn.commit()
+    print(f"Comunas: {len(filas)} límites; {len(cambios)} de {len(barrios)} barrios cambiaron de comuna")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--geojson")
     ap.add_argument("--municipio", default="Medellín")
     ap.add_argument("--asignar", action="store_true")
+    ap.add_argument("--comunas")
     a = ap.parse_args()
-    if a.geojson:
+    if a.comunas:
+        cargar_comunas(a.comunas, a.municipio)
+    elif a.geojson:
         cargar_poligonos(a.geojson, a.municipio)
     elif not a.asignar:
         cargar_catalogo()

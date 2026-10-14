@@ -55,5 +55,17 @@ CREATE TABLE IF NOT EXISTS propiedad_barrio (
 );
 CREATE INDEX IF NOT EXISTS idx_propiedad_barrio_barrio ON propiedad_barrio(barrio_id);
 
+-- Límites de las comunas (OpenStreetMap, ODbL: "© OpenStreetMap contributors").
+-- Con ellos se corrige la comuna de cada barrio por su centro y se pinta el mapa por comuna.
+CREATE TABLE IF NOT EXISTS comunas (
+    id SERIAL PRIMARY KEY,
+    municipio VARCHAR(60) NOT NULL,
+    municipio_clave VARCHAR(60) NOT NULL,
+    nombre VARCHAR(80) NOT NULL,       -- "14 - El Poblado", igual que barrios.comuna
+    geojson JSONB NOT NULL,
+    fuente VARCHAR(12) NOT NULL DEFAULT 'osm',
+    UNIQUE (municipio_clave, nombre)
+);
+
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS barrio_ids INTEGER[];
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS barrio_at TIMESTAMPTZ;

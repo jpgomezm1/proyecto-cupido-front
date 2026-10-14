@@ -380,5 +380,15 @@ def geojson_barrios() -> Dict[str, Any]:
         for f in filas]}
 
 
+def geojson_comunas() -> Dict[str, Any]:
+    """Los límites de las comunas (OpenStreetMap), como FeatureCollection."""
+    with get_db() as db:
+        filas = fetch_all(db.cursor, "SELECT id, nombre, municipio, geojson FROM comunas ORDER BY id")
+    return {"type": "FeatureCollection", "attribution": "© OpenStreetMap contributors", "features": [
+        {"type": "Feature", "id": f["id"], "geometry": f["geojson"],
+         "properties": {"comuna": f["nombre"], "municipio": f["municipio"]}}
+        for f in filas]}
+
+
 def _json(x: Any) -> str:
     return json.dumps(x, ensure_ascii=False)

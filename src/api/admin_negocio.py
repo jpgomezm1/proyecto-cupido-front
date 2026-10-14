@@ -329,6 +329,14 @@ def observatorio():
         return _fallo(e, 'observatorio')
 
 
+@admin_negocio_bp.route('/comunas/geojson', methods=['GET'])
+def comunas_geojson():
+    try:
+        return _ok(barrios_service.geojson_comunas())
+    except Exception as e:
+        return _fallo(e, 'comunas_geojson')
+
+
 @admin_negocio_bp.route('/barrios/geojson', methods=['GET'])
 def barrios_geojson():
     from src.services import barrios_service
