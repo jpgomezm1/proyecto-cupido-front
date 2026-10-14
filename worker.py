@@ -108,6 +108,12 @@ if __name__ == '__main__':
         from src.services import alertas_service
 
         def _alertas():
+            # Barrio normalizado de lo nuevo (inmuebles y pedidos) antes de cruzar.
+            try:
+                from src.services import barrios_service
+                print(f"[BARRIOS] {barrios_service.asignar_pendientes()}")
+            except Exception as e:  # noqa: BLE001 — sin la migración 059 sigue todo igual
+                _reportar("BARRIOS", e)
             # Por separado: si generar falla, los resúmenes pendientes igual salen.
             try:
                 print(f"[ALERTAS] {alertas_service.generar()}")

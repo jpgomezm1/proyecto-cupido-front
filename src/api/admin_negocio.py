@@ -311,3 +311,58 @@ def vitrina_revisar(candidato_id):
         return jsonify({"success": False, "error": e.mensaje}), 400
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'vitrina_revisar')
+
+
+# ---------------------------------------------------------------------------
+# Observatorio del mercado y barrios normalizados
+# ---------------------------------------------------------------------------
+
+@admin_negocio_bp.route('/observatorio', methods=['GET'])
+def observatorio():
+    """Precio por m², tiempo en el mercado, oferta vs demanda y características (observatorio_service)."""
+    from src.services import observatorio_service
+    try:
+        tipo = request.args.get('tipo', 'apartamento')
+        return _ok(observatorio_service.calcular(request.args.get('municipio') or None,
+                                                 None if tipo == 'todos' else tipo))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'observatorio')
+
+
+@admin_negocio_bp.route('/barrios/geojson', methods=['GET'])
+def barrios_geojson():
+    from src.services import barrios_service
+    try:
+        return _ok(barrios_service.geojson_barrios())
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'barrios_geojson')
+
+
+@admin_negocio_bp.route('/barrios', methods=['GET'])
+def barrios_resumen():
+    """Cobertura del catálogo y los alias dudosos que hay que revisar."""
+    from src.services import barrios_service
+    try:
+        return _ok({**barrios_service.resumen(), "revisar": barrios_service.por_revisar()})
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'barrios')
+
+
+@admin_negocio_bp.route('/barrios/buscar', methods=['GET'])
+def barrios_buscar():
+    from src.services import barrios_service
+    try:
+        return _ok(barrios_service.buscar(request.args.get('q', '')))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'barrios_buscar')
+
+
+@admin_negocio_bp.route('/barrios/alias/<int:alias_id>', methods=['POST'])
+def barrios_alias(alias_id):
+    """{barrio_id: int | null}: confirma o corrige un alias (null = no es un lugar)."""
+    from src.services import barrios_service
+    try:
+        datos = request.get_json(silent=True) or {}
+        return _ok(barrios_service.revisar_alias(alias_id, datos.get('barrio_id')))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'barrios_alias')
