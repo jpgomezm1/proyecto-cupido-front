@@ -50,7 +50,7 @@ TEXTO = "#1A1A1A"
 SUAVE = "#6B6B6B"
 FUENTE = "'Poppins','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif"
 
-ICONO_PLAN = {"basico": "visita", "medio": "negocio", "pro": "cierre"}
+ICONO_PLAN = {"basico": "visita", "medio": "negocio", "pro": "cierre", "fundador": "cierre"}
 METODO = {"CARD": "Tarjeta", "PSE": "PSE", "NEQUI": "Nequi", "BANCOLOMBIA_TRANSFER": "Bancolombia",
           "BANCOLOMBIA_QR": "QR Bancolombia", "DAVIPLATA": "Daviplata"}
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",

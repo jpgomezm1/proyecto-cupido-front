@@ -58,6 +58,7 @@ from src.api.clientes import clientes_bp
 from src.api.herramientas import herramientas_bp
 from src.api.admin_negocio import admin_negocio_bp
 from src.api.admin_agentes import admin_agentes_bp
+from src.api.admin_ventas import admin_ventas_bp
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.rq import RqIntegration
@@ -185,6 +186,7 @@ for _bp, _publicos in (
     (share_analytics_bp, ('track_event',)),
     (admin_negocio_bp, ()),
     (admin_agentes_bp, ()),
+    (admin_ventas_bp, ()),
     (dependencies_bp, ()),
 ):
     proteger_admin(_bp, _publicos)
@@ -228,6 +230,7 @@ app.register_blueprint(clientes_bp)
 app.register_blueprint(herramientas_bp)
 app.register_blueprint(admin_negocio_bp)
 app.register_blueprint(admin_agentes_bp)
+app.register_blueprint(admin_ventas_bp)
 
 # Límites estrictos en lo que llama a la IA sin sesión (el chat del inmueble lo
 # usa el comprador en la página pública): por IP, para que no se pueda abusar.

@@ -10,6 +10,7 @@ negocio/estrategia/complementos-y-divisa.md.
   Visita        0         borroso    0             0         0               borroso
   Negocio       2         1 al mes   3/mes         1/mes     5/mes           detalle
   Cierre        5         semanal    10/mes        3/mes     20/mes          detalle
+  Fundador      = Cierre (20 cupos, migración 060, fundador_service)
 
   Complemento "trabaja" (Findy trabaja por ti): +10 encargos, Vitrina semanal,
   compradores con detalle y prioridad en las presentaciones de Findy Conecta.
@@ -36,6 +37,7 @@ _PLAN: Dict[Optional[str], Dict[str, int]] = {
     "medio":  {"encargos": 2, "vitrina": 1, "marca_piezas": 3, "informes": 1, "links": 5, "compradores": 1},
     "pro":    {"encargos": 5, "vitrina": 4, "marca_piezas": 10, "informes": 3, "links": 20, "compradores": 1},
 }
+_PLAN["fundador"] = dict(_PLAN["pro"])   # los 20 fundadores tienen todo lo de Cierre
 _TRABAJA = {"encargos": 10, "vitrina": 4, "compradores": 1, "prioridad": 1}
 _MARCA = {"marca_piezas": ILIMITADO, "informes": 10, "links": ILIMITADO}
 COMPLEMENTOS = {"trabaja": [_TRABAJA], "marca": [_MARCA], "ambos": [_TRABAJA, _MARCA]}

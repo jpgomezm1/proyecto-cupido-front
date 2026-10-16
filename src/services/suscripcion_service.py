@@ -41,6 +41,10 @@ DIAS_PERIODO = 30
 DIAS_GRACIA = 5
 DIAS_VIGENCIA_PEDIDO = 120  # = compradores_service.DIAS_PEDIDOS
 DIAS_PARA_REPORTAR = 15
+# Lanzamiento (nov-2026): quien se suscribe en sus primeros 7 días con la cuenta activa
+# recibe el doble de llaves en su primer periodo. Se apaga con FYNDER_LANZAMIENTO_DOBLE=0.
+DIAS_LANZAMIENTO = 7
+PLANES_CON_BONO = ("basico", "medio", "pro")
 
 # Lock transaccional por usuario para el cobro: (clase, user_id).
 _LOCK_COBRO = 7101
@@ -197,6 +201,34 @@ def _reembolsos_este_mes(cur, user_id: int) -> int:
     """, (user_id,)) or 0
 
 
+def lanzamiento_activo() -> bool:
+    return os.getenv("FYNDER_LANZAMIENTO_DOBLE", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def ventana_lanzamiento(cur, user_id: int):
+    """Hasta cuándo el agente se puede suscribir con el doble de llaves, o None si no aplica:
+    cuenta activa (celular verificado y, si es precargada, acceso entregado), nunca suscrito
+    y dentro de los 7 días desde que la cuenta quedó activa."""
+    if not lanzamiento_activo():
+        return None
+    f = fetch_one(cur, """
+        SELECT u.telefono_verificado, u.origen, u.acceso_entregado,
+               GREATEST(u.fecha_creacion, u.telefono_verificado_at, u.acceso_entregado_at) AS desde,
+               EXISTS (SELECT 1 FROM suscripciones s WHERE s.user_id = u.id) AS ya_suscrito
+        FROM chat_users u WHERE u.id = %s
+    """, (user_id,))
+    if not f or not f["telefono_verificado"] or f["ya_suscrito"] or not f["desde"]:
+        return None
+    if f["origen"] == "provision" and not f["acceso_entregado"]:
+        return None
+    desde = f["desde"]
+    if desde.tzinfo is None:
+        from datetime import timezone
+        desde = desde.replace(tzinfo=timezone.utc)
+    vence = desde + timedelta(days=DIAS_LANZAMIENTO)
+    return vence if vence > _ahora() else None
+
+
 def planes_activos(cur) -> List[Dict[str, Any]]:
     """Planes a la venta. `tipo`: 'suscripcion' (mensual), 'paquete' (llaves sueltas que no
     vencen), 'fotos' (fotos con IA que no vencen) o 'complemento' (mensual que se suma a un
@@ -220,6 +252,7 @@ def estado(user_id: int) -> Dict[str, Any]:
         periodo = s["periodo"]
         reembolsos = _reembolsos_este_mes(cur, user_id)
         planes = planes_activos(cur)
+        vence_lanzamiento = ventana_lanzamiento(cur, user_id)
 
     plan = None
     if periodo:
@@ -229,6 +262,8 @@ def estado(user_id: int) -> Dict[str, Any]:
             "vence": periodo["fin"].isoformat(),
             "gracia_hasta": periodo["gracia_hasta"].isoformat(),
             "en_gracia": bool(periodo["fin"] <= _ahora()),
+            "bono_lanzamiento": int(periodo.get("bono_lanzamiento") or 0),
+            "precio_cop": int(periodo.get("precio_cop") or 0),
         }
     return {
         "ok": True,
@@ -243,6 +278,8 @@ def estado(user_id: int) -> Dict[str, Any]:
         "planes": planes,
         "instrucciones_pago": instrucciones_pago(),
         "pago_en_linea": _pago_en_linea(),
+        # Doble de llaves el primer mes si se suscribe antes de `vence`.
+        "lanzamiento": {"vence": vence_lanzamiento.isoformat(), "dias": DIAS_LANZAMIENTO} if vence_lanzamiento else None,
     }
 
 
@@ -765,11 +802,14 @@ def activar_plan(user_id: int, plan_codigo: str, referencia_pago: Optional[str] 
 
 def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Optional[str] = None,
                     notas: Optional[str] = None, admin: Optional[str] = None,
-                    precio_cop: Optional[int] = None, ya_pagado: bool = False) -> Dict[str, Any]:
+                    precio_cop: Optional[int] = None, ya_pagado: bool = False,
+                    bono: Optional[bool] = None) -> Dict[str, Any]:
     """`activar_plan` dentro de una transacción del caller (no hace commit).
     `precio_cop` registra lo realmente pagado (si no, el precio del plan hoy).
     `ya_pagado`: el agente ya pagó (Wompi), así que se activa aunque el plan se
-    haya desactivado entre el checkout y la aprobación."""
+    haya desactivado entre el checkout y la aprobación.
+    `bono`: doble de llaves del lanzamiento. None = automático (primera suscripción
+    dentro de la ventana); True/False lo fuerza el admin."""
     plan = fetch_one(cur, "SELECT * FROM planes WHERE codigo = %s AND (activo OR %s)", (plan_codigo, ya_pagado))
     if not plan or plan_codigo == "prueba" or plan.get("tipo") in ("paquete", "fotos", "complemento"):
         raise SuscripcionError(f"Plan inválido: {plan_codigo}")
@@ -783,18 +823,21 @@ def activar_plan_en(cur, user_id: int, plan_codigo: str, referencia_pago: Option
     """, (user_id,))
     inicio = max(_ahora(), previo["fin"]) if previo else _ahora()
     fin = inicio + timedelta(days=DIAS_PERIODO)
+    extra = 0
+    if plan_codigo in PLANES_CON_BONO and (bono if bono is not None else bool(ventana_lanzamiento(cur, user_id))):
+        extra = int(plan["desbloqueos_mes"])
     cur.execute("""
         INSERT INTO suscripciones (user_id, plan_codigo, desbloqueos_incluidos, fotos_ia_incluidas, precio_cop,
-                                   inicio, fin, gracia_hasta, referencia_pago, notas, activada_por)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   inicio, fin, gracia_hasta, referencia_pago, notas, activada_por, bono_lanzamiento)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, inicio, fin, gracia_hasta
-    """, (user_id, plan_codigo, plan["desbloqueos_mes"], plan.get("fotos_ia") or 0,
+    """, (user_id, plan_codigo, plan["desbloqueos_mes"] + extra, plan.get("fotos_ia") or 0,
           plan["precio_cop"] if precio_cop is None else precio_cop, inicio, fin,
-          fin + timedelta(days=DIAS_GRACIA), referencia_pago, notas, admin))
+          fin + timedelta(days=DIAS_GRACIA), referencia_pago, notas, admin, extra))
     row = cur.fetchone()
     return {"ok": True, "suscripcion_id": row["id"], "plan": plan_codigo,
             "inicio": row["inicio"].isoformat(), "fin": row["fin"].isoformat(),
-            "gracia_hasta": row["gracia_hasta"].isoformat()}
+            "gracia_hasta": row["gracia_hasta"].isoformat(), "bono_lanzamiento": extra}
 
 
 def abonar_paquete_en(cur, user_id: int, plan_codigo: str, referencia_pago: str,
