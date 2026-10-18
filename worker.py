@@ -183,6 +183,26 @@ if __name__ == '__main__':
         sched_pagos.start()
         print("[WORKER] Conciliación de pagos programada (cada 15 min)")
 
+    # Instagram de Fynder: Buffer → instagram_posts → correos, a las 7 a. m. y 7 p. m. de Bogotá
+    # (12:00 y 00:00 UTC). Buffer limita las llamadas diarias a su API: no lo subas de frecuencia.
+    if os.getenv('INSTAGRAM_SYNC_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services import instagram_service
+
+        def _instagram():
+            if not instagram_service.configurado():
+                return
+            try:
+                print(f"[INSTAGRAM] {instagram_service.sincronizar()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                _reportar("INSTAGRAM", e)
+
+        sched_ig = BackgroundScheduler(timezone="UTC")
+        sched_ig.add_job(_instagram, 'cron', hour='0,12', minute=0, id='instagram_sync',
+                         max_instances=1, coalesce=True)
+        sched_ig.start()
+        print("[WORKER] Instagram programado (7 a. m. y 7 p. m. de Bogotá)")
+
     # Crear worker con la conexión (API moderna de RQ)
     worker = Worker([queue], connection=conn)
     print(f"[WORKER] Escuchando cola 'captures'...")
