@@ -817,6 +817,10 @@ def send_message(conversation_id):
                 (conversation_id, content)
             )
             user_msg_row = db.cursor.fetchone()
+            # Se guarda YA (no al final con la respuesta): la búsqueda tarda ~20 s y si el
+            # agente se va a WhatsApp y el celular recarga la página, la conversación tiene
+            # que mostrar su pregunta y "Findy sigue buscando" en vez de quedar en blanco.
+            db.conn.commit()
 
             if isinstance(user_msg_row, dict):
                 user_message = {
