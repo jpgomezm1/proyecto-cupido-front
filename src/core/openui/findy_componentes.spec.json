@@ -1,0 +1,609 @@
+{
+  "root": "Respuesta",
+  "components": {
+    "Respuesta": {
+      "signature": "Respuesta(bloques: (Texto | Cifras | Termometro | Barras | Espejo | Dona | RangoPrecio | Tabla | Inmuebles | Compradores | Hallazgos | Aviso | Siguientes)[])",
+      "description": "La raíz: los bloques de la respuesta, en orden de lectura."
+    },
+    "Texto": {
+      "signature": "Texto(texto: string)",
+      "description": "Un párrafo corto. El primero de la respuesta lleva la conclusión (qué significa para captar, vender o negociar)."
+    },
+    "Cifras": {
+      "signature": "Cifras(items: {valor: string, etiqueta: string, detalle?: string}[])",
+      "description": "Fila de 2 a 4 cifras clave grandes. Úsala casi siempre, arriba."
+    },
+    "Termometro": {
+      "signature": "Termometro(titulo: string, valor: number, maximo: number, etiqueta: string, referencia?: number, referenciaEtiqueta?: string)",
+      "description": "Tubo de termómetro de 0 a maximo lleno hasta el valor: qué tan caliente está una zona."
+    },
+    "Barras": {
+      "signature": "Barras(titulo: string, items: {etiqueta: string, valor: number, texto: string}[], nota?: string)",
+      "description": "Ranking de barras horizontales (zonas, barrios, categorías)."
+    },
+    "Espejo": {
+      "signature": "Espejo(titulo: string, izquierda: string, derecha: string, filas: {etiqueta: string, izq: number, der: number}[], nota?: string)",
+      "description": "Barras enfrentadas: oferta a la izquierda contra demanda a la derecha, por banda de precio o categoría."
+    },
+    "Dona": {
+      "signature": "Dona(titulo: string, partes: {etiqueta: string, valor: number}[], centro?: string, centroTexto?: string)",
+      "description": "Reparto en dona con la cifra principal al centro (tipos que piden, presupuestos)."
+    },
+    "RangoPrecio": {
+      "signature": "RangoPrecio(titulo: string, sugerido: number, minimo: number, maximo: number, precioActual?: number, nota?: string)",
+      "description": "Rango de precio con el sugerido marcado (y el precio actual, si hay). Para estimar precio de captación."
+    },
+    "Tabla": {
+      "signature": "Tabla(titulo: string, columnas: string[], filas: string[][], destacar?: number, nota?: string)",
+      "description": "Tabla comparativa simple (comparar inmuebles, costo mensual por concepto)."
+    },
+    "Inmuebles": {
+      "signature": "Inmuebles(titulo: string, ids: number[])",
+      "description": "Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids."
+    },
+    "Compradores": {
+      "signature": "Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[]}[])",
+      "description": "Lista de pedidos de compradores que encajan, sin datos personales."
+    },
+    "Hallazgos": {
+      "signature": "Hallazgos(titulo: string, items: {prioridad: \"alta\" | \"media\" | \"baja\", titulo: string, accion: string}[])",
+      "description": "Diagnóstico priorizado: hallazgo + acción."
+    },
+    "Aviso": {
+      "signature": "Aviso(texto: string, tono: \"info\" | \"oportunidad\" | \"alerta\")",
+      "description": "Una frase destacada (oportunidad, alerta o dato)."
+    },
+    "Siguientes": {
+      "signature": "Siguientes(preguntas: string[])",
+      "description": "Botones con las siguientes preguntas sugeridas. Va al final."
+    }
+  },
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "Respuesta": {
+        "$ref": "#/$defs/Respuesta"
+      },
+      "Texto": {
+        "$ref": "#/$defs/Texto"
+      },
+      "Cifras": {
+        "$ref": "#/$defs/Cifras"
+      },
+      "Termometro": {
+        "$ref": "#/$defs/Termometro"
+      },
+      "Barras": {
+        "$ref": "#/$defs/Barras"
+      },
+      "Espejo": {
+        "$ref": "#/$defs/Espejo"
+      },
+      "Dona": {
+        "$ref": "#/$defs/Dona"
+      },
+      "RangoPrecio": {
+        "$ref": "#/$defs/RangoPrecio"
+      },
+      "Tabla": {
+        "$ref": "#/$defs/Tabla"
+      },
+      "Inmuebles": {
+        "$ref": "#/$defs/Inmuebles"
+      },
+      "Compradores": {
+        "$ref": "#/$defs/Compradores"
+      },
+      "Hallazgos": {
+        "$ref": "#/$defs/Hallazgos"
+      },
+      "Aviso": {
+        "$ref": "#/$defs/Aviso"
+      },
+      "Siguientes": {
+        "$ref": "#/$defs/Siguientes"
+      }
+    },
+    "required": [
+      "Respuesta",
+      "Texto",
+      "Cifras",
+      "Termometro",
+      "Barras",
+      "Espejo",
+      "Dona",
+      "RangoPrecio",
+      "Tabla",
+      "Inmuebles",
+      "Compradores",
+      "Hallazgos",
+      "Aviso",
+      "Siguientes"
+    ],
+    "additionalProperties": false,
+    "$defs": {
+      "Respuesta": {
+        "type": "object",
+        "properties": {
+          "bloques": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Texto"
+                },
+                {
+                  "$ref": "#/$defs/Cifras"
+                },
+                {
+                  "$ref": "#/$defs/Termometro"
+                },
+                {
+                  "$ref": "#/$defs/Barras"
+                },
+                {
+                  "$ref": "#/$defs/Espejo"
+                },
+                {
+                  "$ref": "#/$defs/Dona"
+                },
+                {
+                  "$ref": "#/$defs/RangoPrecio"
+                },
+                {
+                  "$ref": "#/$defs/Tabla"
+                },
+                {
+                  "$ref": "#/$defs/Inmuebles"
+                },
+                {
+                  "$ref": "#/$defs/Compradores"
+                },
+                {
+                  "$ref": "#/$defs/Hallazgos"
+                },
+                {
+                  "$ref": "#/$defs/Aviso"
+                },
+                {
+                  "$ref": "#/$defs/Siguientes"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "bloques"
+        ],
+        "additionalProperties": false,
+        "id": "Respuesta",
+        "description": "La raíz: los bloques de la respuesta, en orden de lectura."
+      },
+      "Texto": {
+        "type": "object",
+        "properties": {
+          "texto": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "texto"
+        ],
+        "additionalProperties": false,
+        "id": "Texto",
+        "description": "Un párrafo corto. El primero de la respuesta lleva la conclusión (qué significa para captar, vender o negociar)."
+      },
+      "Cifras": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "valor": {
+                  "type": "string"
+                },
+                "etiqueta": {
+                  "type": "string"
+                },
+                "detalle": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "valor",
+                "etiqueta"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false,
+        "id": "Cifras",
+        "description": "Fila de 2 a 4 cifras clave grandes. Úsala casi siempre, arriba."
+      },
+      "Termometro": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "valor": {
+            "type": "number"
+          },
+          "maximo": {
+            "type": "number"
+          },
+          "etiqueta": {
+            "type": "string"
+          },
+          "referencia": {
+            "type": "number"
+          },
+          "referenciaEtiqueta": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "valor",
+          "maximo",
+          "etiqueta"
+        ],
+        "additionalProperties": false,
+        "id": "Termometro",
+        "description": "Tubo de termómetro de 0 a maximo lleno hasta el valor: qué tan caliente está una zona."
+      },
+      "Barras": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "etiqueta": {
+                  "type": "string"
+                },
+                "valor": {
+                  "type": "number"
+                },
+                "texto": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "etiqueta",
+                "valor",
+                "texto"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nota": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "items"
+        ],
+        "additionalProperties": false,
+        "id": "Barras",
+        "description": "Ranking de barras horizontales (zonas, barrios, categorías)."
+      },
+      "Espejo": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "izquierda": {
+            "type": "string"
+          },
+          "derecha": {
+            "type": "string"
+          },
+          "filas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "etiqueta": {
+                  "type": "string"
+                },
+                "izq": {
+                  "type": "number"
+                },
+                "der": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "etiqueta",
+                "izq",
+                "der"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nota": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "izquierda",
+          "derecha",
+          "filas"
+        ],
+        "additionalProperties": false,
+        "id": "Espejo",
+        "description": "Barras enfrentadas: oferta a la izquierda contra demanda a la derecha, por banda de precio o categoría."
+      },
+      "Dona": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "partes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "etiqueta": {
+                  "type": "string"
+                },
+                "valor": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "etiqueta",
+                "valor"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "centro": {
+            "type": "string"
+          },
+          "centroTexto": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "partes"
+        ],
+        "additionalProperties": false,
+        "id": "Dona",
+        "description": "Reparto en dona con la cifra principal al centro (tipos que piden, presupuestos)."
+      },
+      "RangoPrecio": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "sugerido": {
+            "type": "number"
+          },
+          "minimo": {
+            "type": "number"
+          },
+          "maximo": {
+            "type": "number"
+          },
+          "precioActual": {
+            "type": "number"
+          },
+          "nota": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "sugerido",
+          "minimo",
+          "maximo"
+        ],
+        "additionalProperties": false,
+        "id": "RangoPrecio",
+        "description": "Rango de precio con el sugerido marcado (y el precio actual, si hay). Para estimar precio de captación."
+      },
+      "Tabla": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "columnas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filas": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "destacar": {
+            "type": "number"
+          },
+          "nota": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo",
+          "columnas",
+          "filas"
+        ],
+        "additionalProperties": false,
+        "id": "Tabla",
+        "description": "Tabla comparativa simple (comparar inmuebles, costo mensual por concepto)."
+      },
+      "Inmuebles": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "titulo",
+          "ids"
+        ],
+        "additionalProperties": false,
+        "id": "Inmuebles",
+        "description": "Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids."
+      },
+      "Compradores": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "resumen": {
+                  "type": "string"
+                },
+                "presupuesto": {
+                  "type": "string"
+                },
+                "encaje": {
+                  "type": "number"
+                },
+                "razones": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "resumen"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "titulo",
+          "items"
+        ],
+        "additionalProperties": false,
+        "id": "Compradores",
+        "description": "Lista de pedidos de compradores que encajan, sin datos personales."
+      },
+      "Hallazgos": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "prioridad": {
+                  "type": "string",
+                  "enum": [
+                    "alta",
+                    "media",
+                    "baja"
+                  ]
+                },
+                "titulo": {
+                  "type": "string"
+                },
+                "accion": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "prioridad",
+                "titulo",
+                "accion"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "titulo",
+          "items"
+        ],
+        "additionalProperties": false,
+        "id": "Hallazgos",
+        "description": "Diagnóstico priorizado: hallazgo + acción."
+      },
+      "Aviso": {
+        "type": "object",
+        "properties": {
+          "texto": {
+            "type": "string"
+          },
+          "tono": {
+            "type": "string",
+            "enum": [
+              "info",
+              "oportunidad",
+              "alerta"
+            ]
+          }
+        },
+        "required": [
+          "texto",
+          "tono"
+        ],
+        "additionalProperties": false,
+        "id": "Aviso",
+        "description": "Una frase destacada (oportunidad, alerta o dato)."
+      },
+      "Siguientes": {
+        "type": "object",
+        "properties": {
+          "preguntas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "preguntas"
+        ],
+        "additionalProperties": false,
+        "id": "Siguientes",
+        "description": "Botones con las siguientes preguntas sugeridas. Va al final."
+      }
+    }
+  }
+}

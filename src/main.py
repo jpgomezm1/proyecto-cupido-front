@@ -30,6 +30,7 @@ from src.api.deals import deals_bp
 from src.api.property_chat import property_chat_bp
 from src.api.bulk_upload import bulk_bp
 from src.api.conversations import conversations_bp
+from src.api.analisis import analisis_bp
 from src.api.chat_auth import chat_auth_bp
 from src.api.listings import listings_bp
 from src.api.share import share_bp
@@ -203,6 +204,7 @@ app.register_blueprint(deals_bp)
 app.register_blueprint(property_chat_bp)
 app.register_blueprint(bulk_bp)
 app.register_blueprint(conversations_bp)
+app.register_blueprint(analisis_bp)
 app.register_blueprint(chat_auth_bp)
 app.register_blueprint(listings_bp)
 app.register_blueprint(share_bp)
