@@ -96,7 +96,11 @@ def sistema(dias: int = 30) -> Dict[str, Any]:
 _CACHE: Dict[Tuple[str, int], Tuple[float, Any]] = {}
 _TTL = 600
 
-PASOS_WEB = ["findy_busqueda", "inmueble_abierto", "contacto_vista_previa", "contacto_abierto"]
+# Embudo del agente nuevo. cuenta_creada y celular_verificado los registra el servidor
+# (eventos_uso), así que se leen de ahí también cuando el resto viene de PostHog.
+PASOS_WEB = ["cuenta_creada", "findy_busqueda", "inmueble_abierto", "contacto_vista_previa",
+             "celular_verificado", "contacto_abierto"]
+PASOS_SERVIDOR = ["cuenta_creada", "celular_verificado"]
 
 
 def _posthog_config() -> Optional[Tuple[str, str, str]]:
@@ -153,6 +157,18 @@ def interfaz(dias: int = 30) -> Dict[str, Any]:
             "por_dia": _iso(por_dia), "paginas": _iso(paginas), "eventos": _iso(eventos)}
 
 
+def _pasos_servidor(dias: int) -> Dict[str, int]:
+    try:
+        with get_db() as db:
+            return {f["evento"]: int(f["agentes"]) for f in fetch_all(db.cursor, """
+                SELECT evento, COUNT(DISTINCT user_id) AS agentes FROM eventos_uso
+                WHERE created_at > NOW() - (%s * INTERVAL '1 day') AND evento = ANY(%s)
+                GROUP BY evento
+            """, (int(dias), PASOS_SERVIDOR))}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def posthog(dias: int = 30) -> Dict[str, Any]:
     if not _posthog_config():
         # Sin llave de lectura de PostHog: los mismos eventos, guardados en Fynder.
@@ -181,6 +197,7 @@ def posthog(dias: int = 30) -> Dict[str, Any]:
             SELECT event, count(), count(DISTINCT distinct_id) FROM events
             WHERE timestamp > now() - INTERVAL {d} DAY AND {agentes} AND event NOT LIKE '$%'
             GROUP BY event ORDER BY count() DESC LIMIT 20""")]
+        pasos.update(_pasos_servidor(d))
         res = {"configurado": True, "fuente": "posthog", "dias": d,
                "embudo": [{"paso": p, "agentes": pasos.get(p, 0)} for p in PASOS_WEB],
                "por_dia": por_dia, "paginas": paginas, "eventos": eventos}

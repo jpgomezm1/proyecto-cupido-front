@@ -40,7 +40,7 @@ def registro():
     d = request.get_json(silent=True) or {}
     try:
         res = svc.registrar(d.get('nombre'), d.get('email'), d.get('clave'), d.get('telefono'),
-                            bool(d.get('acepta_terminos')))
+                            bool(d.get('acepta_terminos')), desde=d.get('desde'))
         return jsonify({"success": True, "data": res}), 201
     except svc.RegistroError as e:
         return _error(e)

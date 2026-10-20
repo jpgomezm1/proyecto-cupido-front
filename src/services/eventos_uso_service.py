@@ -15,7 +15,11 @@ from src.services.db import get_db
 EVENTOS = {
     "pagina_vista", "findy_busqueda", "inmueble_abierto", "contacto_vista_previa", "contacto_abierto",
     "contacto_no_abierto", "guardado", "cliente_creado", "inmueble_publicado", "pago_iniciado",
+    # Del servidor (oct-2026): los pasos del embudo que la interfaz no ve completos.
+    "cuenta_creada", "celular_verificado",
 }
+# De dónde llegó una cuenta nueva (?desde= en el registro).
+ORIGENES_REGISTRO = {"compartido", "landing", "pagina_agente", "informe", "instagram"}
 _MAX_LOTE = 30
 
 
@@ -49,3 +53,8 @@ def registrar(user_id: int, eventos: List[Dict[str, Any]]) -> int:
         print(f"[eventos_uso] no se pudieron guardar: {e}")
         return 0
     return len(filas)
+
+
+def registrar_uno(user_id: int, evento: str, props: Dict[str, Any] = None) -> None:
+    """Un evento del servidor (cuenta creada, celular verificado). Nunca lanza."""
+    registrar(user_id, [{"evento": evento, "props": props or {}}])

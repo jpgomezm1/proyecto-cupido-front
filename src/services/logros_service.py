@@ -50,7 +50,14 @@ DIAS_ATRAS = 7              # un día sin evaluar se paga hasta una semana despu
 # Tools que no cuentan como "consulta" (solo administran la cuenta).
 _TOOLS_CUENTA = ("mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns")
 
+# En orden: primero el valor del producto (buscar y abrir un contacto), después la IA.
 MISIONES = {
+    "primera_busqueda": {"titulo": "Haz tu primera búsqueda", "fyns": 20,
+                         "detalle": "Pídele a Findy lo que busca tu cliente, como a un colega.",
+                         "url": "/chat/findy"},
+    "primer_contacto": {"titulo": "Abre tu primer contacto", "fyns": 30,
+                        "detalle": "Con una llave hablas directo con quien tiene el inmueble.",
+                        "url": "/chat/findy"},
     "conectar_ia": {"titulo": "Conecta Fynder a tu IA", "fyns": 300,
                     "detalle": "Agrega Fynder en Claude o ChatGPT y entra con tu cuenta.",
                     "url": "/chat/conectar-ia"},
@@ -172,6 +179,12 @@ def _misiones_cumplidas(cur, u: Dict[str, Any]) -> Set[str]:
         hechas.add("consulta_ia")
     if (u.get("nombre") or "").strip() and u.get("email") and u.get("telefono_verificado"):
         hechas.add("perfil")
+    if scalar(cur, "SELECT 1 FROM conversaciones_busqueda WHERE user_id = %s LIMIT 1", (uid,)) or scalar(cur, """
+        SELECT 1 FROM mcp_tool_calls WHERE user_id = %s AND ok AND tool = 'search_properties' LIMIT 1
+    """, (uid,)):
+        hechas.add("primera_busqueda")
+    if scalar(cur, "SELECT 1 FROM desbloqueos WHERE user_id = %s LIMIT 1", (uid,)):
+        hechas.add("primer_contacto")
     return hechas
 
 

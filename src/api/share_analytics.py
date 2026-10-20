@@ -73,7 +73,8 @@ def track_event():
         if not share_id or not event_type:
             return jsonify({'success': False, 'error': 'share_id and event_type are required'}), 400
 
-        valid_events = ['share_viewed', 'property_clicked', 'whatsapp_clicked', 'phone_clicked']
+        # signup_clicked: «¿Eres agente? Crea tu cuenta» en links sin agente (oct-2026)
+        valid_events = ['share_viewed', 'property_clicked', 'whatsapp_clicked', 'phone_clicked', 'signup_clicked']
         if event_type not in valid_events:
             return jsonify({'success': False, 'error': f'Invalid event_type. Must be one of: {valid_events}'}), 400
 

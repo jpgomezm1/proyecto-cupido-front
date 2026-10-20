@@ -70,7 +70,8 @@ def _telefono_en_otra_cuenta(cur, telefono: str, user_id: Optional[int]) -> bool
 # Registro
 # ---------------------------------------------------------------------------
 
-def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_terminos: bool) -> Dict[str, Any]:
+def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_terminos: bool,
+              desde: Optional[str] = None) -> Dict[str, Any]:
     nombre = " ".join((nombre or "").split())
     email = (email or "").strip().lower()
     if len(nombre) < 3:
@@ -98,6 +99,9 @@ def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_termino
         user_id = cur.fetchone()["id"]
         db.conn.commit()
     print(f"🆕 Registro web: usuario {user_id}")
+    from src.services import eventos_uso_service as eventos
+    eventos.registrar_uno(user_id, "cuenta_creada",
+                          {"desde": desde if desde in eventos.ORIGENES_REGISTRO else "directo"})
     correo_service.bienvenida(nombre, email)
     return {"ok": True, "user_id": user_id, "email": email}
 
@@ -188,4 +192,6 @@ def verificar_codigo(user_id: int, codigo: str) -> Dict[str, Any]:
         db.conn.commit()
     estado = suscripcion_service.estado(user_id)
     print(f"✅ Celular verificado: usuario {user_id}")
+    from src.services import eventos_uso_service as eventos
+    eventos.registrar_uno(user_id, "celular_verificado")
     return {"ok": True, "telefono": fila["telefono"], "disponibles": estado.get("disponibles", 0)}
