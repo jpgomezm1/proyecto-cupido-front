@@ -13,10 +13,9 @@ Flask/IA) al importar este módulo.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from src.services import facetas
 from src.services.db import get_db, fetch_all, fetch_one
 from src.services.textutils import (
-    accent_insensitive_expr,
-    like_param,
     split_image_urls,
     format_cop,
     build_share_link,
@@ -86,23 +85,28 @@ def _row_to_property(row: Dict[str, Any]) -> Dict[str, Any]:
     if not row:
         return {}
     precio = row.get("precio")
-    area = row.get("area_construida")
+    # Lo que el portal no trajo lo completa la ficha o el catálogo de barrios
+    # (columnas _tipo, _barrio… de facetas.COLUMNAS, si la consulta las pidió).
+    area = row.get("area_construida") or row.get("_area")
+    precio_m2 = row.get("precio_m2")
+    if precio_m2 is None and precio and area:
+        precio_m2 = float(precio) / float(area)
     return {
         "id": row["id"],
         "slug": row.get("codigo_propiedad"),
         "titulo": row.get("titulo"),
         "precio": int(precio) if precio is not None else None,
         "precio_legible": format_cop(precio),
-        "tipo_propiedad": row.get("tipo_propiedad"),
+        "tipo_propiedad": row.get("tipo_propiedad") or facetas.legible_tipo(row.get("_tipo")),
         "tipo_negocio": row.get("tipo_negocio"),
-        "ciudad": row.get("ciudad"),
-        "zona": row.get("zona"),
+        "ciudad": row.get("ciudad") or row.get("_ciudad"),
+        "zona": row.get("zona") or row.get("_barrio"),
         "direccion": row.get("direccion_completa"),
         "latitud": float(row["latitud"]) if row.get("latitud") is not None else None,
         "longitud": float(row["longitud"]) if row.get("longitud") is not None else None,
         "area_construida": float(area) if area is not None else None,
-        "precio_m2": float(row["precio_m2"]) if row.get("precio_m2") is not None else None,
-        "habitaciones": row.get("habitaciones"),
+        "precio_m2": float(precio_m2) if precio_m2 is not None else None,
+        "habitaciones": row.get("habitaciones") if row.get("habitaciones") is not None else row.get("_hab"),
         "banos": row.get("banos"),
         "parqueaderos": row.get("parqueaderos"),
         "estrato": row.get("estrato"),
@@ -138,7 +142,8 @@ def get_property(cur, id_or_slug) -> Optional[Dict[str, Any]]:
         where, param = "p.id = %s", int(id_or_slug)
     else:
         where, param = "p.codigo_propiedad = %s", id_or_slug
-    row = fetch_one(cur, f"SELECT {_PROPERTY_COLUMNS} FROM propiedades p WHERE {where}", (param,))
+    row = fetch_one(cur, f"SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS} FROM propiedades p {facetas.JOIN} WHERE {where}",
+                    (param,))
     return _row_to_property(row) if row else None
 
 
@@ -165,29 +170,23 @@ def find_comparables(cur, property_id, limit: int = 20,
 
         if not incluir_inactivas:
             conditions.append("p.activa = TRUE")
-        if base.get("ciudad"):
-            conditions.append(f"{accent_insensitive_expr('p.ciudad')} LIKE %s")
-            params.append(like_param(base["ciudad"]))
-        if usar_zona and base.get("zona"):
-            conditions.append(f"{accent_insensitive_expr('p.zona')} LIKE %s")
-            params.append(like_param(base["zona"]))
-        if base.get("tipo_propiedad"):
-            conditions.append(f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s")
-            params.append(like_param(base["tipo_propiedad"]))
-        if base.get("habitaciones") is not None:
-            conditions.append("(p.habitaciones IS NULL OR p.habitaciones BETWEEN %s AND %s)")
-            params.extend([base["habitaciones"] - 1, base["habitaciones"] + 1])
+        # Tipo, ubicación, área y habitaciones salen de facetas (portal → ficha → catálogo).
+        conds, ps = facetas.condiciones(ciudad=base.get("ciudad"),
+                                        zona=base.get("zona") if usar_zona else None,
+                                        tipo=base.get("tipo_propiedad"), habitaciones=base.get("habitaciones"))
+        conditions += conds
+        params += ps
         if base.get("area_construida"):
             lo = base["area_construida"] * 0.70
             hi = base["area_construida"] * 1.30
-            conditions.append("(p.area_construida IS NULL OR p.area_construida BETWEEN %s AND %s)")
+            conditions.append("(x.area IS NULL OR x.area BETWEEN %s AND %s)")
             params.extend([lo, hi])
 
         where = " AND ".join(conditions)
         params.append(limit)
         rows = fetch_all(cur, f"""
-            SELECT {_PROPERTY_COLUMNS}
-            FROM propiedades p
+            SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS}
+            FROM propiedades p {facetas.JOIN}
             WHERE {where}
             ORDER BY p.precio
             LIMIT %s
@@ -273,31 +272,24 @@ def estimate_price(cur, ciudad: Optional[str] = None, zona: Optional[str] = None
     conditions = [
         "p.activa = TRUE",
         "p.precio IS NOT NULL AND p.precio > 0",
-        "p.area_construida > 0",
+        "x.area > 0",
         "p.tipo_negocio = %s",
     ]
     params: List[Any] = [tipo_negocio]
-    if ciudad:
-        conditions.append(f"{accent_insensitive_expr('p.ciudad')} LIKE %s")
-        params.append(like_param(ciudad))
-    if zona:
-        conditions.append(f"{accent_insensitive_expr('p.zona')} LIKE %s")
-        params.append(like_param(zona))
-    if tipo_propiedad:
-        conditions.append(f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s")
-        params.append(like_param(tipo_propiedad))
-    if habitaciones is not None:
-        conditions.append("(p.habitaciones IS NULL OR p.habitaciones BETWEEN %s AND %s)")
-        params.extend([habitaciones - 1, habitaciones + 1])
+    # Tipo, ubicación, área y habitaciones salen de facetas (portal → ficha → catálogo):
+    # con solo las columnas del portal la muestra era 3 a 8 veces más chica (oct-2026).
+    conds, ps = facetas.condiciones(ciudad=ciudad, zona=zona, tipo=tipo_propiedad, habitaciones=habitaciones)
+    conditions += conds
+    params += ps
 
     where = " AND ".join(conditions)
     agg = fetch_one(cur, f"""
         SELECT
             COUNT(*) AS muestra,
-            percentile_cont(0.25) WITHIN GROUP (ORDER BY p.precio / p.area_construida) AS m2_p25,
-            percentile_cont(0.50) WITHIN GROUP (ORDER BY p.precio / p.area_construida) AS m2_mediana,
-            percentile_cont(0.75) WITHIN GROUP (ORDER BY p.precio / p.area_construida) AS m2_p75
-        FROM propiedades p
+            percentile_cont(0.25) WITHIN GROUP (ORDER BY p.precio / x.area) AS m2_p25,
+            percentile_cont(0.50) WITHIN GROUP (ORDER BY p.precio / x.area) AS m2_mediana,
+            percentile_cont(0.75) WITHIN GROUP (ORDER BY p.precio / x.area) AS m2_p75
+        FROM propiedades p {facetas.JOIN}
         WHERE {where}
     """, params) or {}
 
@@ -335,8 +327,8 @@ def list_my_properties(cur, telefono_10: str, limit: int = 50) -> Dict[str, Any]
         return {"total": 0, "propiedades": [], "sin_scope": True}
 
     rows = fetch_all(cur, f"""
-        SELECT {_PROPERTY_COLUMNS}
-        FROM propiedades p
+        SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS}
+        FROM propiedades p {facetas.JOIN}
         WHERE p.agente_captador_telefono IS NOT NULL
           AND RIGHT(REGEXP_REPLACE(p.agente_captador_telefono, '[^0-9]', '', 'g'), 10) = %s
         ORDER BY p.activa DESC, p.fecha_creacion DESC
@@ -498,14 +490,11 @@ def capacidad_de_compra(cur, ingreso_mensual: float, cuota_inicial: float = 0,
     if any([ciudad, zona, tipo_propiedad]):
         conditions = ["p.activa = TRUE", "p.precio > 0", "p.precio <= %s", "p.tipo_negocio = 'Venta'"]
         params: List[Any] = [precio_max]
-        if ciudad:
-            conditions.append(f"{accent_insensitive_expr('p.ciudad')} LIKE %s"); params.append(like_param(ciudad))
-        if zona:
-            conditions.append(f"{accent_insensitive_expr('p.zona')} LIKE %s"); params.append(like_param(zona))
-        if tipo_propiedad:
-            conditions.append(f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s"); params.append(like_param(tipo_propiedad))
+        conds, ps = facetas.condiciones(ciudad=ciudad, zona=zona, tipo=tipo_propiedad)
+        conditions += conds
+        params += ps
         where = " AND ".join(conditions)
-        cnt = fetch_one(cur, f"SELECT COUNT(*) AS n FROM propiedades p WHERE {where}", params) or {}
+        cnt = fetch_one(cur, f"SELECT COUNT(*) AS n FROM propiedades p {facetas.JOIN} WHERE {where}", params) or {}
         resultado["opciones_dentro_del_techo"] = int(cnt.get("n") or 0)
 
     return resultado

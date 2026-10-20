@@ -9,8 +9,9 @@ import sys
 import io
 import time
 
-# Configurar UTF-8 para evitar errores de encoding en Windows
-if sys.platform == 'win32':
+# Configurar UTF-8 para evitar errores de encoding en Windows (no bajo pytest:
+# envolver su captura de salida la cierra y tumba los demás tests).
+if sys.platform == 'win32' and 'pytest' not in sys.modules:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
@@ -614,7 +615,7 @@ class LobbieScraper:
         data['ano_construccion'] = _buscar(r'A[ñn]o construido\s*(\d{4})', tabla, int)
         data['piso'] = None
 
-        admin = _buscar(r'Administraci[oó]n\s*([\d.]+)', tabla)
+        admin = _buscar(r'Administraci[oó]n\s*(?:COP\s*)?([\d.]+)', tabla)
         data['administracion'] = _int_puntos(admin) if admin else None
         predial = _buscar(r'Predial\s*([\d.]+)', tabla)
         data['predial'] = _int_puntos(predial) if predial else None
@@ -638,6 +639,10 @@ class LobbieScraper:
         data['ciudad'] = PropertyNormalizer.normalizar_ciudad(partes[1]) if len(partes) >= 2 else None
         data['departamento'] = PropertyNormalizer.normalizar_departamento(partes[2]) if len(partes) >= 3 else None
         data['direccion_completa'] = loc or None
+
+        # --- Página de compartir (oct-2026): sin tabla "Datos principales" ni encabezado
+        # "compartido"; la ubicación, el tipo y las cifras van en bloques share-*. ---
+        self._completar_desde_share(soup, data)
 
         # --- Descripción ---
         m_desc = re.search(r'Descripci[oó]n\s+(.+?)\s+Esta p[aá]gina fue creada', txt, re.I)
@@ -667,6 +672,66 @@ class LobbieScraper:
         data['total_amenidades'] = 0
 
         return data
+
+    def _completar_desde_share(self, soup: BeautifulSoup, data: Dict) -> None:
+        """Llena lo que falte desde la página de compartir de Lobbie (oct-2026).
+
+        Ejemplo: <p class="share-hero-overlay__location">Rodeo alto, Medellin</p>,
+        <h1>Apartamento en venta</h1> y
+        <p class="share-fact-row">65 m² · 2 alcobas · 2 baños · 1 parqueaderos</p>.
+        Solo completa campos vacíos: no pisa lo que salió del formato anterior.
+        """
+        def _vacio(campo: str) -> bool:
+            return data.get(campo) in (None, '')
+
+        ubic = soup.find(class_='share-hero-overlay__location')
+        if ubic:
+            loc = ubic.get_text(' ', strip=True)
+            partes = [p.strip() for p in loc.split(',') if p.strip()]
+            if partes and _vacio('zona'):
+                data['zona'] = PropertyNormalizer.normalizar_barrio(partes[0])
+            if len(partes) >= 2 and _vacio('ciudad'):
+                data['ciudad'] = PropertyNormalizer.normalizar_ciudad(partes[1])
+            if len(partes) >= 3 and _vacio('departamento'):
+                data['departamento'] = PropertyNormalizer.normalizar_departamento(partes[2])
+            if _vacio('direccion_completa'):
+                data['direccion_completa'] = loc or None
+
+        tarjeta = soup.find(class_='share-card')
+        h1 = (tarjeta.find('h1') if tarjeta else None) or soup.find('h1')
+        encabezado = h1.get_text(' ', strip=True) if h1 else ''
+        if _vacio('tipo_propiedad'):
+            m_tipo = re.search(
+                r'\b(Apartaestudio|Apartamento|Casa|Penthouse|Duplex|Local|Oficina|Bodega|Finca|Lote)\b',
+                encabezado, re.I)
+            if m_tipo:
+                data['tipo_propiedad'] = PropertyNormalizer.normalizar_tipo_propiedad(m_tipo.group(1))
+        if re.search(r'\ben\s+(?:arriendo|arrendamiento|renta)\b', encabezado, re.I):
+            data['tipo_negocio'] = 'Arriendo'
+
+        fila = soup.find(class_='share-fact-row')
+        if fila:
+            hechos = fila.get_text(' ', strip=True)
+
+            def _num(patron: str, cast):
+                m = re.search(patron, hechos, re.I)
+                try:
+                    return cast(m.group(1).replace(',', '.')) if m else None
+                except ValueError:
+                    return None
+
+            for campo, patron, cast in (
+                ('area_construida', r'(\d+(?:[.,]\d+)?)\s*m²', float),
+                ('habitaciones', r'(\d+)\s*(?:alcobas?|habitaci[oó]n(?:es)?)', int),
+                ('banos', r'(\d+)\s*ba[ñn]os?', int),
+                ('parqueaderos', r'(\d+)\s*parqueaderos?', int),
+            ):
+                if _vacio(campo):
+                    data[campo] = _num(patron, cast)
+
+        if _vacio('titulo') and data.get('tipo_propiedad') and data.get('zona'):
+            data['titulo'] = PropertyNormalizer.limpiar_titulo_propiedad(
+                f"{data['tipo_propiedad']} en {data['zona']}")
 
     def extract_property_data(self, url: str) -> Optional[Dict]:
         """

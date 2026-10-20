@@ -289,8 +289,67 @@ def process_new_property(property_id: int, property_data: Optional[Dict] = None)
         True si se inició el procesamiento
     """
     try:
+        if _en_job_rq():
+            # Dentro de un job de RQ el proceso hijo termina al devolver el job y mata
+            # el hilo de fondo antes de guardar (oct-2026: 0 embeddings desde julio).
+            # Aquí va síncrono y solo el embedding: el análisis de fotos (visión) no
+            # se paga en cada captura; lo que falte lo llena embeddings_pendientes().
+            return PropertyProcessor(analyze_images=False, async_processing=False) \
+                .process_property(property_id, property_data)
         processor = get_property_processor()
         return processor.process_property(property_id, property_data)
     except Exception as e:
         print(f"⚠️  Error iniciando procesamiento vectorial: {e}")
         return False
+
+
+def _en_job_rq() -> bool:
+    try:
+        from rq import get_current_job
+        return get_current_job() is not None
+    except Exception:  # noqa: BLE001 — sin rq (web, scripts) no es un job
+        return False
+
+
+def embeddings_pendientes(limite: int = 200) -> Dict:
+    """Genera el embedding de los inmuebles activos que no lo tienen (sin análisis de fotos).
+
+    Lo corre el worker cada 30 min. Usa la API por lotes: ~USD 0,02 por millón de tokens.
+    """
+    if not EMBEDDINGS_AVAILABLE:
+        return {'pendientes': None, 'generados': 0, 'error': 'embeddings no disponibles'}
+    embeddings = get_embeddings_manager()
+    processor = PropertyProcessor(analyze_images=False, async_processing=False)
+    generados = 0
+    with DatabaseManager() as db:
+        db.cursor.execute("""
+            SELECT p.id FROM propiedades p
+            WHERE p.activa AND NOT EXISTS (
+                SELECT 1 FROM property_embeddings e WHERE e.propiedad_id = p.id)
+            ORDER BY p.fecha_creacion DESC
+            LIMIT %s
+        """, (limite,))
+        ids = [r['id'] for r in db.cursor.fetchall()]
+        pares = []
+        for i in ids:
+            d = processor._get_property_data(db, i)
+            texto = embeddings.build_property_text(d) if d else ''
+            # El lote descarta textos vacíos: si entraran, los vectores quedarían corridos.
+            if texto and texto.strip():
+                pares.append((i, texto))
+        for k in range(0, len(pares), 50):
+            lote = pares[k:k + 50]
+            vectores = embeddings.generate_embeddings_batch([t for _, t in lote]) or []
+            if len(vectores) != len(lote):
+                continue
+            for (pid, texto), vec in zip(lote, vectores):
+                if not vec:
+                    continue
+                db.cursor.execute("""
+                    INSERT INTO property_embeddings (propiedad_id, embedding, texto_embedding)
+                    VALUES (%s, %s::vector, %s)
+                    ON CONFLICT (propiedad_id) DO NOTHING
+                """, (pid, '[' + ','.join(map(str, vec)) + ']', texto[:5000]))
+                generados += 1
+            db.conn.commit()
+    return {'revisados': len(ids), 'generados': generados}

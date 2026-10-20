@@ -101,6 +101,43 @@ if __name__ == '__main__':
         sched_fichas.start()
         print("[WORKER] Fichas del buscador programadas (cada 30 min)")
 
+    # Embeddings de los activos que no lo tienen (el puntaje semántico del buscador v3).
+    # Solo el texto, sin análisis de fotos: ~USD 0,02 por millón de tokens.
+    if os.getenv('EMBEDDINGS_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.core.property_processor import embeddings_pendientes
+
+        def _embeddings():
+            try:
+                print(f"[EMBEDDINGS] {embeddings_pendientes(limite=300)}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                _reportar("EMBEDDINGS", e)
+
+        sched_emb = BackgroundScheduler()
+        sched_emb.add_job(_embeddings, 'interval', minutes=30, id='embeddings',
+                          next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_emb.start()
+        print("[WORKER] Embeddings pendientes programados (cada 30 min)")
+
+    # Alarma si deja de entrar inventario de los grupos (ago–oct 2026 estuvo caída 9 semanas sin aviso).
+    if os.getenv('CAPTURA_ALERTA_ENABLED', 'true').lower() == 'true':
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from src.services import captura_salud
+
+        def _salud_captura():
+            try:
+                r = captura_salud.revisar()
+                if r.get("caida"):
+                    print(f"[CAPTURA] {r}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                _reportar("CAPTURA", e)
+
+        sched_cap = BackgroundScheduler()
+        sched_cap.add_job(_salud_captura, 'interval', minutes=60, id='salud_captura',
+                          next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_cap.start()
+        print("[WORKER] Alarma de captura programada (cada hora)")
+
     # Alertas de cruce: inmuebles nuevos y cambios de precio contra los clientes de
     # cada agente (sin IA: SQL y el puntaje del buscador), y su resumen por correo.
     if os.getenv('ALERTAS_ENABLED', 'true').lower() == 'true':

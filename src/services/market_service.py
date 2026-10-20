@@ -13,6 +13,7 @@ conexión.
 
 from typing import Any, Dict, List, Optional
 
+from src.services import facetas
 from src.services.db import get_db, fetch_all, fetch_one
 from src.services.textutils import (
     accent_insensitive_expr,
@@ -29,24 +30,16 @@ MIN_MUESTRA_CONFIABLE = 5
 def _location_filter(ciudad: Optional[str], zona: Optional[str],
                      tipo_propiedad: Optional[str], tipo_negocio: Optional[str],
                      alias: str = "p"):
-    """Construye condiciones WHERE + params para filtrar propiedades por zona."""
+    """Condiciones WHERE + params para filtrar propiedades por zona. La consulta debe
+    llevar `FROM propiedades p {facetas.JOIN}`: ubicación y tipo van contra el alias `x`."""
     conditions = [f"{alias}.activa = TRUE", f"{alias}.precio IS NOT NULL", f"{alias}.precio > 0"]
     params: List[Any] = []
 
     if tipo_negocio:
         conditions.append(f"{alias}.tipo_negocio = %s")
         params.append(tipo_negocio)
-    if ciudad:
-        conditions.append(f"{accent_insensitive_expr(f'{alias}.ciudad')} LIKE %s")
-        params.append(like_param(ciudad))
-    if zona:
-        conditions.append(f"{accent_insensitive_expr(f'{alias}.zona')} LIKE %s")
-        params.append(like_param(zona))
-    if tipo_propiedad:
-        conditions.append(f"{accent_insensitive_expr(f'{alias}.tipo_propiedad')} LIKE %s")
-        params.append(like_param(tipo_propiedad))
-
-    return conditions, params
+    conds, ps = facetas.condiciones(ciudad=ciudad, zona=zona, tipo=tipo_propiedad)
+    return conditions + conds, params + ps
 
 
 def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
@@ -70,13 +63,13 @@ def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
             percentile_cont(0.50) WITHIN GROUP (ORDER BY p.precio)        AS precio_mediana,
             percentile_cont(0.75) WITHIN GROUP (ORDER BY p.precio)        AS precio_p75,
             percentile_cont(0.50) WITHIN GROUP (
-                ORDER BY p.precio / NULLIF(p.area_construida, 0)
-            ) FILTER (WHERE p.area_construida > 0)                        AS precio_m2_mediana,
-            AVG(p.area_construida) FILTER (WHERE p.area_construida > 0)   AS area_promedio,
-            AVG(p.habitaciones)   FILTER (WHERE p.habitaciones IS NOT NULL) AS habitaciones_promedio,
+                ORDER BY p.precio / NULLIF(x.area, 0)
+            ) FILTER (WHERE x.area > 0)                                   AS precio_m2_mediana,
+            AVG(x.area) FILTER (WHERE x.area > 0)                         AS area_promedio,
+            AVG(x.hab)  FILTER (WHERE x.hab IS NOT NULL)                  AS habitaciones_promedio,
             AVG(p.total_imagenes)                                         AS fotos_promedio,
             AVG(EXTRACT(DAY FROM NOW() - p.fecha_creacion))               AS dias_inventario_promedio
-        FROM propiedades p
+        FROM propiedades p {facetas.JOIN}
         WHERE {where}
     """, params) or {}
 
@@ -84,11 +77,11 @@ def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
 
     # Distribución por número de habitaciones (mix del inventario).
     hab_rows = fetch_all(cur, f"""
-        SELECT p.habitaciones AS habitaciones, COUNT(*) AS total
-        FROM propiedades p
-        WHERE {where} AND p.habitaciones IS NOT NULL
-        GROUP BY p.habitaciones
-        ORDER BY p.habitaciones
+        SELECT x.hab AS habitaciones, COUNT(*) AS total
+        FROM propiedades p {facetas.JOIN}
+        WHERE {where} AND x.hab IS NOT NULL
+        GROUP BY x.hab
+        ORDER BY x.hab
     """, params)
 
     def _f(key):
@@ -240,19 +233,17 @@ def segmentos_precio(cur, ciudad: Optional[str], zona: Optional[str],
     ]
     term = zona or ciudad or ""
     like = like_param(term)
-    ciudadn = accent_insensitive_expr("p.ciudad")
-    zonan = accent_insensitive_expr("p.zona")
-    tipo_like = like_param(tipo_propiedad)
+    # Oferta con facetas (portal → ficha → catálogo); la zona manda sobre la ciudad.
+    ubic, ubic_params = facetas.condiciones(ciudad=None if zona else ciudad, zona=zona, tipo=tipo_propiedad)
 
     out = []
     for etq, lo, hi in bandas:
-        of_cond = [f"p.activa", "p.tipo_negocio='Venta'", "p.precio > %s",
-                   f"{accent_insensitive_expr('p.tipo_propiedad')} LIKE %s",
-                   f"({ciudadn} LIKE %s OR {zonan} LIKE %s)"]
-        of_params: List[Any] = [lo, tipo_like, like, like]
+        of_cond = [f"p.activa", "p.tipo_negocio='Venta'", "p.precio > %s"] + ubic
+        of_params: List[Any] = [lo] + ubic_params
         if hi is not None:
             of_cond.append("p.precio <= %s"); of_params.append(hi)
-        oferta = fetch_one(cur, f"SELECT COUNT(*) n FROM propiedades p WHERE {' AND '.join(of_cond)}", of_params)
+        oferta = fetch_one(cur, f"SELECT COUNT(*) n FROM propiedades p {facetas.JOIN} WHERE {' AND '.join(of_cond)}",
+                           of_params)
         oferta = int((oferta or {}).get("n") or 0)
 
         dem_cond = ["fecha_captura > NOW() - make_interval(days => %s)",
