@@ -107,3 +107,16 @@ def registrar_eventos():
     from src.services.eventos_uso_service import registrar
     datos = request.get_json(silent=True) or {}
     return jsonify({"success": True, "data": {"guardados": registrar(request.chat_user['id'], datos.get('eventos') or [])}})
+
+
+@herramientas_bp.route('/chat/etapa', methods=['GET'])
+@require_chat_auth
+def etapa():
+    """Cuánto ha usado Fynder el agente: la app decide con esto qué herramientas mostrarle."""
+    from src.services import etapa_service
+    user = request.chat_user
+    try:
+        return jsonify({"success": True, "data": etapa_service.resumen(user['id'], _tel10_verificado(user))})
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)[:200]}), 500
