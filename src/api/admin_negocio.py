@@ -374,3 +374,32 @@ def barrios_alias(alias_id):
         return _ok(barrios_service.revisar_alias(alias_id, datos.get('barrio_id')))
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'barrios_alias')
+
+
+# ── Crecimiento: embudo por canal, cohortes e ingresos (crecimiento_service) ──
+
+@admin_negocio_bp.route('/crecimiento/embudo', methods=['GET'])
+def crecimiento_embudo():
+    from src.services import crecimiento_service as cs
+    try:
+        return _ok(cs.embudo(_int('dias', 90, maximo=3650)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'crecimiento_embudo')
+
+
+@admin_negocio_bp.route('/crecimiento/cohortes', methods=['GET'])
+def crecimiento_cohortes():
+    from src.services import crecimiento_service as cs
+    try:
+        return _ok(cs.cohortes(_int('semanas', 10, maximo=52)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'crecimiento_cohortes')
+
+
+@admin_negocio_bp.route('/crecimiento/ingresos', methods=['GET'])
+def crecimiento_ingresos():
+    from src.services import crecimiento_service as cs
+    try:
+        return _ok(cs.ingresos(_int('meses', 6, maximo=24)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'crecimiento_ingresos')
