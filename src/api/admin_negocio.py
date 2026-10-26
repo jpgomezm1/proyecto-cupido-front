@@ -403,3 +403,32 @@ def crecimiento_ingresos():
         return _ok(cs.ingresos(_int('meses', 6, maximo=24)))
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'crecimiento_ingresos')
+
+
+# ── Economía, rentabilidad y lo que necesita atención (economia_service, atencion_service) ──
+
+@admin_negocio_bp.route('/economia', methods=['GET'])
+def economia():
+    from src.services import economia_service as ec
+    try:
+        return _ok(ec.llaves_y_fyns())
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'economia')
+
+
+@admin_negocio_bp.route('/rentabilidad', methods=['GET'])
+def rentabilidad():
+    from src.services import economia_service as ec
+    try:
+        return _ok(ec.rentabilidad(_int('dias', 30)))
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'rentabilidad')
+
+
+@admin_negocio_bp.route('/atencion', methods=['GET'])
+def atencion():
+    from src.services import atencion_service
+    try:
+        return _ok(atencion_service.hoy())
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'atencion')

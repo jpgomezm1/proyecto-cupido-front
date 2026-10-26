@@ -50,6 +50,13 @@ def ficha(user_id: int):
     return _op(lambda: svc.ficha(user_id), 'ficha')
 
 
+@admin_agentes_bp.route('/<int:user_id>/linea', methods=['GET'])
+def linea(user_id: int):
+    """La historia del agente en un solo hilo (linea_tiempo_service)."""
+    from src.services import linea_tiempo_service
+    return _op(lambda: linea_tiempo_service.de(user_id), 'linea')
+
+
 @admin_agentes_bp.route('/<int:user_id>/plan', methods=['POST'])
 def plan(user_id: int):
     d = _json()
