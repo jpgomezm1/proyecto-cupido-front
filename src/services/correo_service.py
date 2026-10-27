@@ -190,7 +190,7 @@ def _layout(*, preheader: str, icono: str, eyebrow: str, titulo: str, intro: str
       {boton}
     </td></tr>
     <tr><td align="center" style="padding:22px 16px 0;font-family:{FUENTE};font-size:12px;line-height:1.6;color:{SUAVE};">
-      ¿Dudas? Responde este correo o escríbenos desde <a href="{_frontend()}/chat/cuenta/ayuda" style="color:{TEXTO};">Ayuda</a>.<br>
+      ¿Dudas? Responde este correo o escríbenos desde <a href="{_frontend()}/app/cuenta/ayuda" style="color:{TEXTO};">Ayuda</a>.<br>
       Fynder · Medellín, Colombia · <a href="{_frontend()}/terminos" style="color:{SUAVE};">Términos y datos</a><br>
       <span style="color:#A3A3A3;">Recibes este correo porque tienes una cuenta en Fynder.</span>
     </td></tr>
@@ -247,10 +247,10 @@ def bienvenida(nombre: str, email: str, **kw) -> None:
     html_ = _layout(preheader="Tu cuenta está lista. Verifica tu celular y estrena 2 llaves.",
                     icono="findy-saludo", eyebrow="Bienvenido a Fynder", titulo=f"¡Hola, {n}! Ya eres parte de la red",
                     intro="El negocio que buscas ya existe. Encuéntralo antes que los demás.",
-                    cuerpo=cuerpo, cta=("Entrar a Fynder", f"{_frontend()}/chat/bienvenida"))
+                    cuerpo=cuerpo, cta=("Entrar a Fynder", f"{_frontend()}/app/bienvenida"))
     texto = (f"¡Hola, {n}! Tu cuenta de Fynder está lista.\n\n"
              "1. Verifica tu celular y recibe 2 llaves de prueba.\n2. Pregúntale a Findy lo que busca tu cliente.\n"
-             f"3. Abre el contacto con una llave.\n\nEntra: {_frontend()}/chat/bienvenida")
+             f"3. Abre el contacto con una llave.\n\nEntra: {_frontend()}/app/bienvenida")
     enviar(email, f"Bienvenido a Fynder, {n} 🔑", html_, texto, "bienvenida", **kw)
 
 
@@ -277,9 +277,9 @@ def pago_aprobado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     html_ = _layout(preheader=f"Tu plan {plan} está activo: {llaves} para abrir contactos.",
                     icono=ICONO_PLAN.get(pago.get("plan") or "", "llave"), eyebrow="Pago aprobado",
                     titulo=f"Tu plan {plan} está activo", intro=f"Tienes {_e(llaves)} listas para usar.",
-                    cuerpo=cuerpo, cta=("Usar mis llaves", f"{_frontend()}/chat/mercado"))
+                    cuerpo=cuerpo, cta=("Usar mis llaves", f"{_frontend()}/app/mercado"))
     texto = (f"{n}, tu plan {plan} está activo: {llaves} hasta el {_fecha(pago.get('vence'))}.\n"
-             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/app/mercado")
     enviar(email, f"✅ Tu plan {plan} está activo", html_, texto, "pago_aprobado", **kw)
 
 
@@ -291,7 +291,7 @@ def pieza_vista(nombre: str, email: str, titulo: str, vistas: int, **kw) -> None
                       "Es el mejor momento para escribirle: todavía lo tiene en la cabeza.")
     html_ = _layout(preheader=f"Tu cliente abrió {titulo}.", icono="findy-saludo", eyebrow="Quién vio tu link",
                     titulo="Tu cliente lo está mirando", intro="Escríbele hoy.", cuerpo=cuerpo,
-                    cta=("Ver mis links", f"{_frontend()}/chat/clientes/contactos#links"))
+                    cta=("Ver mis links", f"{_frontend()}/app/clientes/contactos#links"))
     texto = f"{n}, tu cliente acaba de abrir {titulo} {veces}. Escríbele hoy."
     enviar(email, f"👀 Tu cliente abrió {titulo}", html_, texto, "pieza_vista", **kw)
 
@@ -299,7 +299,7 @@ def pieza_vista(nombre: str, email: str, titulo: str, vistas: int, **kw) -> None
 def presentacion_pedida(nombre: str, email: str, **kw) -> None:
     """Findy Conecta: otro agente quiere que lo presentemos (tiene un comprador o un inmueble para ti)."""
     n = _primer_nombre(nombre)
-    url = f"{_frontend()}/chat/clientes/encargos#presentaciones"
+    url = f"{_frontend()}/app/clientes/encargos#presentaciones"
     cuerpo = _parrafo(f"{_e(n)}, un agente de Fynder encontró algo que encaja con lo tuyo y quiere que los presentemos. "
                       "Mira de qué se trata y decide: si aceptas, cada uno recibe el contacto del otro. A ti no te cuesta nada.") + \
         _parrafo('<span style="color:#6B6B6B;font-size:13px;">Tienes 7 días para responder. Si no te interesa, recházala y listo.</span>')
@@ -312,7 +312,7 @@ def presentacion_pedida(nombre: str, email: str, **kw) -> None:
 
 def presentacion_aceptada(nombre: str, email: str, **kw) -> None:
     n = _primer_nombre(nombre)
-    url = f"{_frontend()}/chat/clientes/encargos#presentaciones"
+    url = f"{_frontend()}/app/clientes/encargos#presentaciones"
     cuerpo = _parrafo(f"{_e(n)}, el otro agente aceptó la presentación. Ya tienes su contacto en Fynder (usaste 1 llave) "
                       "y él tiene el tuyo. ¡Escríbele hoy!")
     html_ = _layout(preheader="Ya tienes su contacto.", icono="findy-celebra", eyebrow="Findy Conecta",
@@ -335,7 +335,7 @@ def complemento_activo(nombre: str, email: str, pago: Dict[str, Any], **kw) -> N
         "</div>" + _parrafo('<span style="color:#6B6B6B;font-size:13px;">No se renueva solo: cada mes decides si sigues.</span>')
     html_ = _layout(preheader=f"{comp} está activo por 30 días.", icono="findy-celebra", eyebrow="Pago aprobado",
                     titulo=f"{comp} está activo", intro="Ya lo tienes en tu cuenta.",
-                    cuerpo=cuerpo, cta=("Ir a Fynder", f"{_frontend()}/chat"))
+                    cuerpo=cuerpo, cta=("Ir a Fynder", f"{_frontend()}/app"))
     texto = f"{n}, {comp} está activo por 30 días. Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}"
     enviar(email, f"✅ {comp} está activo", html_, texto, "pago_aprobado", **kw)
 
@@ -363,9 +363,9 @@ def fotos_compradas(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None
     )
     html_ = _layout(preheader=f"{fotos} más en tu cupo. No vencen.", icono="findy-celebra", eyebrow="Pago aprobado",
                     titulo="Tus fotos con IA están listas", intro=f"Tienes {_e(fotos)} más.",
-                    cuerpo=cuerpo, cta=("Mejorar mis fotos", f"{_frontend()}/chat/mis-propiedades"))
+                    cuerpo=cuerpo, cta=("Mejorar mis fotos", f"{_frontend()}/app/inmuebles"))
     texto = (f"{n}, tu compra está lista: {fotos} más (no vencen).\n"
-             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mis-propiedades")
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/app/inmuebles")
     enviar(email, "✅ Tus fotos con IA están listas", html_, texto, "pago_aprobado", **kw)
 
 
@@ -392,9 +392,9 @@ def llave_comprada(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     )
     html_ = _layout(preheader=f"{llaves} más en tu saldo. No vencen.", icono="llave", eyebrow="Pago aprobado",
                     titulo="Tu llave ya está lista", intro=f"Tienes {_e(llaves)} más para abrir contactos.",
-                    cuerpo=cuerpo, cta=("Usar mi llave", f"{_frontend()}/chat/mercado"))
+                    cuerpo=cuerpo, cta=("Usar mi llave", f"{_frontend()}/app/mercado"))
     texto = (f"{n}, tu compra está lista: {llaves} más en tu saldo (no vencen).\n"
-             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/chat/mercado")
+             f"Valor: {_pesos(pago.get('monto_cop'))} · Ref. {pago.get('referencia')}\n\n{_frontend()}/app/mercado")
     enviar(email, "✅ Tu llave ya está lista", html_, texto, "pago_aprobado", **kw)
 
 
@@ -406,7 +406,7 @@ def resumen_alertas(nombre: str, email: str, alertas: List[Dict[str, Any]], **kw
 
     def tarjeta(a: Dict[str, Any]) -> str:
         p = a.get("propiedad") or {}
-        url = f"{_frontend()}/chat/mercado?p={p.get('slug') or p.get('id')}"
+        url = f"{_frontend()}/app/mercado?p={p.get('slug') or p.get('id')}"
         foto = (f'<img src="{_e(p["imagen_principal"])}" width="88" height="66" alt="" '
                 f'style="display:block;border:0;border-radius:10px;object-fit:cover;" />') if p.get("imagen_principal") else ""
         color = "#088650" if a["tipo"] == "baja_precio" else TEXTO
@@ -437,9 +437,9 @@ def resumen_alertas(nombre: str, email: str, alertas: List[Dict[str, Any]], **kw
               + _parrafo('<span style="color:#6B6B6B;font-size:12px;">Puedes apagar estos correos en Mi cuenta → Perfil.</span>'))
     html_ = _layout(preheader=intro, icono="findy-busca", eyebrow="Alertas de Fynder",
                     titulo="Novedades para tus clientes" if nuevos else "Cambios de precio",
-                    intro=intro, cuerpo=cuerpo, cta=("Verlas en Fynder", f"{_frontend()}/chat/clientes"))
+                    intro=intro, cuerpo=cuerpo, cta=("Verlas en Fynder", f"{_frontend()}/app/clientes"))
     lineas = [f"- {a['titulo']} ({a['detalle']})" for a in alertas[:16]]
-    texto = f"{n}, esto es lo nuevo en Fynder:\n\n" + "\n".join(lineas) + f"\n\n{_frontend()}/chat/clientes"
+    texto = f"{n}, esto es lo nuevo en Fynder:\n\n" + "\n".join(lineas) + f"\n\n{_frontend()}/app/clientes"
     if nuevos:
         asunto = f"🏠 {len(nuevos)} {'opción nueva' if len(nuevos) == 1 else 'opciones nuevas'} para tus clientes"
     else:
@@ -459,9 +459,9 @@ def pago_rechazado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     html_ = _layout(preheader="No se te cobró nada. Puedes intentarlo de nuevo con otro medio.",
                     icono="findy-piensa", eyebrow="Pago no completado", titulo="No se pudo completar tu pago",
                     intro="No se te cobró nada.", acento=CORAL, cuerpo=cuerpo,
-                    cta=("Intentar de nuevo", f"{_frontend()}/chat/cuenta/plan#planes"))
+                    cta=("Intentar de nuevo", f"{_frontend()}/app/cuenta/plan#planes"))
     texto = (f"{n}, el pago de {plan} no se completó y no se te cobró nada.\n"
-             f"Intenta de nuevo: {_frontend()}/chat/cuenta/plan")
+             f"Intenta de nuevo: {_frontend()}/app/cuenta/plan")
     enviar(email, f"Tu pago de {plan} no se completó", html_, texto, "pago_rechazado", **kw)
 
 
@@ -473,8 +473,8 @@ def plan_por_vencer(nombre: str, email: str, plan: str, vence: Any, llaves_resta
     html_ = _layout(preheader=f"Tu plan {plan} vence el {_fecha(vence)}. Renuévalo y no pierdes días.",
                     icono="renovacion", eyebrow="Tu plan vence pronto", titulo=f"Tu plan {plan} vence en 3 días",
                     intro="Renuévalo en un minuto con PSE, Nequi o tarjeta.", acento=ORO, cuerpo=cuerpo,
-                    cta=("Renovar mi plan", f"{_frontend()}/chat/cuenta/plan#planes"))
-    texto = f"{n}, tu plan {plan} vence el {_fecha(vence)}. Renuévalo: {_frontend()}/chat/cuenta/plan"
+                    cta=("Renovar mi plan", f"{_frontend()}/app/cuenta/plan#planes"))
+    texto = f"{n}, tu plan {plan} vence el {_fecha(vence)}. Renuévalo: {_frontend()}/app/cuenta/plan"
     enviar(email, f"Tu plan {plan} vence el {_fecha(vence)}", html_, texto, "plan_por_vencer", **kw)
 
 
@@ -485,8 +485,8 @@ def plan_vencido(nombre: str, email: str, plan: str, gracia_hasta: Any, **kw) ->
     html_ = _layout(preheader=f"Renueva antes del {_fecha(gracia_hasta)} y no pierdes el mes.",
                     icono="findy-piensa", eyebrow="Tu plan venció", titulo="Tus llaves del mes se acabaron",
                     intro=f"Renueva antes del {_e(_fecha(gracia_hasta))}.", acento=CORAL, cuerpo=cuerpo,
-                    cta=("Renovar mi plan", f"{_frontend()}/chat/cuenta/plan#planes"))
-    texto = f"{n}, tu plan {plan} venció. Renueva antes del {_fecha(gracia_hasta)}: {_frontend()}/chat/cuenta/plan"
+                    cta=("Renovar mi plan", f"{_frontend()}/app/cuenta/plan#planes"))
+    texto = f"{n}, tu plan {plan} venció. Renueva antes del {_fecha(gracia_hasta)}: {_frontend()}/app/cuenta/plan"
     enviar(email, f"Tu plan {plan} venció: renueva antes del {_fecha(gracia_hasta)}", html_, texto, "plan_vencido", **kw)
 
 
@@ -542,7 +542,7 @@ def soporte_nuevo(ticket: int, usuario: Dict[str, Any], categoria: str, asunto: 
 
 def act_verifica(nombre: str, email: str, **kw) -> None:
     n = _primer_nombre(nombre)
-    url = f"{_frontend()}/chat/verificar"
+    url = f"{_frontend()}/app/verificar-celular"
     cuerpo = _parrafo(f"{_e(n)}, tu cuenta está lista pero falta un paso: verificar tu celular. "
                       "Es lo que te da tus <b>2 llaves de prueba</b> y lo que hace que tus inmuebles aparezcan como tuyos.") + \
         _pasos([
@@ -567,7 +567,7 @@ _EJEMPLOS = [
 
 def act_primera_busqueda(nombre: str, email: str, llaves: int, **kw) -> None:
     n = _primer_nombre(nombre)
-    base = f"{_frontend()}/chat/findy"
+    base = f"{_frontend()}/app/findy"
     ejemplos = "".join(
         f'<tr><td style="padding:6px 0;"><a href="{_e(base + "?q=" + quote(t))}" target="_blank" '
         f'style="display:block;padding:12px 16px;border:1px solid #E6E3DA;border-radius:12px;font-family:{FUENTE};'
@@ -590,7 +590,7 @@ def act_primera_busqueda(nombre: str, email: str, llaves: int, **kw) -> None:
 
 def act_llaves_esperando(nombre: str, email: str, llaves: int, **kw) -> None:
     n = _primer_nombre(nombre)
-    url = f"{_frontend()}/chat/mercado"
+    url = f"{_frontend()}/app/mercado"
     cuerpo = _parrafo(f"{_e(n)}, ya buscaste en Fynder, pero aún no abres ningún contacto. Tienes "
                       f"<b>{_e(_llaves(llaves))}</b> esperando.") + \
         _pasos([
@@ -607,7 +607,7 @@ def act_llaves_esperando(nombre: str, email: str, llaves: int, **kw) -> None:
 
 def act_sin_llaves(nombre: str, email: str, **kw) -> None:
     n = _primer_nombre(nombre)
-    url = f"{_frontend()}/chat/cuenta/plan#planes"
+    url = f"{_frontend()}/app/cuenta/plan#planes"
     planes = [(ICONO_PLAN.get(p["codigo"], "llave"), p["nombre"], f"{p['desbloqueos_mes']} llaves al mes · {_pesos(p['precio_cop'])}")
               for p in _planes_mensuales()]
     cuerpo = _parrafo(f"{_e(n)}, usaste todas tus llaves. Buscar y analizar sigue siendo gratis; para abrir más "

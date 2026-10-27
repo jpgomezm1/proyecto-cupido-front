@@ -69,7 +69,7 @@ def provisionar_captador(telefono: str, email: Optional[str] = None,
     if not tel10:
         return {"error": f"Teléfono inválido: {telefono}"}
     tel_full = telefono if str(telefono).startswith("+") else f"+57{tel10}"
-    login_url = f"{FRONTEND_URL}/chat/login"
+    login_url = f"{FRONTEND_URL}/entrar"
 
     with get_db() as db:
         inv = fetch_one(db.cursor, """

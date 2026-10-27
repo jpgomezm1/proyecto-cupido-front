@@ -10,7 +10,7 @@ y emite el token sobre `chat_user_sessions` (tipo='mcp').
 Apagado por defecto (`MCP_SIGNUP_ENABLED=true` lo enciende; `MCP_SIGNUP_CODE`
 exige un código de invitación): crea cuentas sin clave ni correo verificado y con
 un token que no vence, así que cualquiera podía reservar correos ajenos o crear
-cuentas en masa. Las cuentas nuevas se crean en la web (/chat/registro, con clave
+cuentas en masa. Las cuentas nuevas se crean en la web (/registro, con clave
 y celular verificado) y se conectan a la IA con "Iniciar sesión".
 
 Seguridad: un correo que ya existe NUNCA recibe un token por aquí (se conecta con
@@ -56,7 +56,7 @@ def self_register(nombre: str, email: str, telefono: Optional[str] = None,
     """
     if not _signup_enabled():
         front = os.getenv("FYNDER_FRONTEND_URL", "https://fyndercol.netlify.app").rstrip("/")
-        raise SignupError(f"Crea tu cuenta en {front}/chat/registro y luego conecta Fynder desde tu IA "
+        raise SignupError(f"Crea tu cuenta en {front}/registro y luego conecta Fynder desde tu IA "
                           "con \"Iniciar sesión\" (tu correo y tu clave).")
 
     required_code = os.getenv("MCP_SIGNUP_CODE")

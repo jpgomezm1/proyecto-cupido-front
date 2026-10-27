@@ -62,7 +62,7 @@ def test_plantillas_renderizan(monkeypatch):
     c.act_llaves_esperando("Ana", "ana@gmail.com", 1)
     c.act_sin_llaves("Ana", "ana@gmail.com")
     assert [e[0] for e in enviados] == ["act_verifica", "act_primera_busqueda", "act_llaves_esperando", "act_sin_llaves"]
-    assert "/chat/findy?q=Apartamento%20en%20Laureles" in enviados[1][1]
+    assert "/app/findy?q=Apartamento%20en%20Laureles" in enviados[1][1]
     assert "1 llave sin usar" in enviados[2][1]
     assert "$50.000" in enviados[3][1]
     assert all("Ana" in e[2] for e in enviados)

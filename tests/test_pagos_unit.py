@@ -131,5 +131,5 @@ def test_redireccion_en_produccion(llaves, monkeypatch):
     monkeypatch.setattr(svc, "fetch_one", lambda *a, **k: next(respuestas))
     r = svc.crear_pago(3, "pro", "https://getfynder.com")
     q = {k: v[0] for k, v in parse_qs(urlparse(r["checkout_url"]).query).items()}
-    assert q["redirect-url"] == f"https://getfynder.com/chat/pago?ref={r['referencia']}"
+    assert q["redirect-url"] == f"https://getfynder.com/app/pago?ref={r['referencia']}"
     assert r["sin_redireccion"] is False and "customer-data:email" not in q

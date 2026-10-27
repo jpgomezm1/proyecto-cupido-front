@@ -54,22 +54,22 @@ _TOOLS_CUENTA = ("mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns")
 MISIONES = {
     "primera_busqueda": {"titulo": "Haz tu primera búsqueda", "fyns": 20,
                          "detalle": "Pídele a Findy lo que busca tu cliente, como a un colega.",
-                         "url": "/chat/findy"},
+                         "url": "/app/findy"},
     "primer_contacto": {"titulo": "Abre tu primer contacto", "fyns": 30,
                         "detalle": "Con una llave hablas directo con quien tiene el inmueble.",
-                        "url": "/chat/findy"},
+                        "url": "/app/findy"},
     "conectar_ia": {"titulo": "Conecta Fynder a tu IA", "fyns": 300,
                     "detalle": "Agrega Fynder en Claude o ChatGPT y entra con tu cuenta.",
-                    "url": "/chat/conectar-ia"},
+                    "url": "/app/conectar-ia"},
     "consulta_ia": {"titulo": "Haz tu primera consulta desde tu IA", "fyns": 100,
                     "detalle": "Pregúntale a Claude o ChatGPT, p. ej. «¿cuánto vale el m² en Laureles?».",
-                    "url": "/chat/conectar-ia"},
+                    "url": "/app/conectar-ia"},
     "perfil": {"titulo": "Completa tu perfil", "fyns": 50,
                "detalle": "Tu nombre y tu celular verificado: así firmas lo que compartes.",
-               "url": "/chat/cuenta"},
+               "url": "/app/cuenta"},
     "mapa": {"titulo": "Explora el mapa de mercado", "fyns": 20,
              "detalle": "Mira qué zonas tienen más compradores que oferta.",
-             "url": "/chat/mercado/mapa"},
+             "url": "/app/mercado/mapa"},
 }
 
 

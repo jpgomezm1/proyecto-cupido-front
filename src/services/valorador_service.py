@@ -293,7 +293,7 @@ def _avisar(v: Dict[str, Any], ag: Optional[Dict[str, Any]], retiro: str) -> Non
         try:
             enviar_whatsapp(ag["telefono"], f"🏠 Un propietario valoró su inmueble en tu página: {_resumen(v)} y quiere "
                                             f"{INTENCIONES[v['intencion']]} ({PLAZOS[v['plazo']].lower()}).\n\n"
-                                            f"Su contacto está en Fynder: {_frontend()}/chat/mercado/propietarios")
+                                            f"Su contacto está en Fynder: {_frontend()}/app/mercado/propietarios")
         except WhatsAppSendError as e:
             print(f"⚠️ No se pudo avisar al agente {ag['id']} de la valoración {v['id']}: {e}")
 

@@ -6,7 +6,7 @@ Flujo:
      única y el link al checkout de Wompi (firma de integridad hecha aquí, el
      secreto nunca sale del backend).
   2. El agente paga (tarjeta, PSE, Nequi, Bancolombia) y Wompi lo devuelve a
-     /chat/pago?ref=…&id=<transacción>.
+     /app/pago?ref=…&id=<transacción>.
   3. La confirmación llega por dos vías, ambas idempotentes:
      - `procesar_evento`: webhook `transaction.updated` con checksum verificado.
      - `verificar`: al volver, el front pregunta y consultamos la transacción
@@ -149,10 +149,10 @@ def crear_pago(user_id: int, plan_codigo: str, frontend: Optional[str] = None) -
     }
     # El firewall del checkout de Wompi rechaza (403) una redirect-url a
     # localhost: en desarrollo el checkout se abre en otra pestaña sin regreso
-    # y la web espera el resultado en /chat/pago.
+    # y la web espera el resultado en /app/pago.
     local = base.startswith(("http://localhost", "http://127.0.0.1"))
     if not local:
-        params["redirect-url"] = f"{base}/chat/pago?ref={referencia}"
+        params["redirect-url"] = f"{base}/app/pago?ref={referencia}"
     if usuario.get("email"):
         params["customer-data:email"] = usuario["email"]
     if usuario.get("nombre"):
@@ -371,7 +371,7 @@ def _avisar(mensaje: str) -> None:
 def reconciliar(horas: int = 48) -> Dict[str, Any]:
     """Pregunta a Wompi por los pagos recientes sin aprobar (pendientes, rechazados o
     con error) y los aplica. Cubre el webhook que nunca llegó y el agente que cerró
-    la pestaña antes de volver a /chat/pago: sin esto, un pago cobrado podía quedar
+    la pestaña antes de volver a /app/pago: sin esto, un pago cobrado podía quedar
     pendiente para siempre."""
     if not habilitado():
         return {"omitido": "wompi_deshabilitado"}
