@@ -8,7 +8,7 @@ import pytest
 from src.services import indice_service as ix
 
 
-def _z(zona, m2, pedidos, activos, var=None, aptos=40):
+def _z(zona, m2, pedidos, activos, var=None, aptos=40):  # 40 ≥ MIN_APTOS
     return {"zona": zona, "m2_mediana": m2, "pedidos": pedidos, "activos": activos, "var_m2_pct": var, "aptos": aptos}
 
 

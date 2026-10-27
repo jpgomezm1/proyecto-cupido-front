@@ -22,6 +22,9 @@ from src.services.db import fetch_all, fetch_one, get_db, scalar
 
 BOGOTA = timezone(timedelta(hours=-5))
 MIN_ACTIVOS = 15
+# El m² de una zona solo sale con 30 apartamentos: con menos, unos pocos proyectos nuevos la mueven
+# (oct-2026: Guayabal con 18, casi todos obra nueva, salía más caro que El Poblado).
+MIN_APTOS = 30
 TOTAL = "Total"
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
          "octubre", "noviembre", "diciembre"]
@@ -178,7 +181,7 @@ def cerrar_mes_si_falta() -> Optional[Dict[str, Any]]:
 
 def _destacados(zonas: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Lo que va en el titular: lo más caro, lo más demandado, lo que más subió y bajó."""
-    con_m2 = [z for z in zonas if z["m2_mediana"] and z["aptos"] >= MIN_ACTIVOS]
+    con_m2 = [z for z in zonas if z["m2_mediana"] and z["aptos"] >= MIN_APTOS]
     con_var = [z for z in con_m2 if z["var_m2_pct"] is not None]
     demanda = sorted((z for z in zonas if z["activos"] and z["pedidos"]), key=lambda z: z["pedidos"] / z["activos"], reverse=True)
 
@@ -222,7 +225,7 @@ def edicion(mes: Any, publico: bool = True) -> Dict[str, Any]:
         "calculado_at": ed["calculado_at"].isoformat(),
         "publicado_at": ed["publicado_at"].isoformat() if ed["publicado_at"] else None,
         "total": total, "zonas": zonas, "destacados": _destacados([z for z in zonas if z["suficiente"]]),
-        "min_activos": MIN_ACTIVOS,
+        "min_activos": MIN_ACTIVOS, "min_aptos": MIN_APTOS,
     }
 
 
@@ -336,8 +339,8 @@ def nota_de_prensa(mes: Any) -> str:
     lineas += [
         "",
         f"Cómo se calcula: precios de publicación (no de cierre) de los inmuebles en venta que Fynder sigue y verifica a "
-        f"diario en portales y grupos de agentes; mediana del precio por m² de los apartamentos; solo zonas con "
-        f"{MIN_ACTIVOS} o más inmuebles en venta. Los pedidos son búsquedas de clientes que los agentes comparten en Fynder.",
+        f"diario en portales y grupos de agentes; mediana del precio por m² de los apartamentos (en zonas con "
+        f"{MIN_APTOS} o más); solo zonas con {MIN_ACTIVOS} o más inmuebles en venta. Los pedidos son búsquedas de clientes que los agentes comparten en Fynder.",
         "",
         "Sobre Fynder: plataforma de inteligencia inmobiliaria para agentes en Colombia. Inventario, demanda y "
         "búsqueda con IA desde WhatsApp, Claude y ChatGPT. getfynder.com/indice",
