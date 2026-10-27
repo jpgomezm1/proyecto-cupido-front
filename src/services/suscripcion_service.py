@@ -48,6 +48,7 @@ PLANES_CON_BONO = ("basico", "medio", "pro")
 
 # Lock transaccional por usuario para el cobro: (clase, user_id).
 _LOCK_COBRO = 7101
+_LOCK_VALORACION = 7102
 
 _SQL_PHONE10 = "RIGHT(REGEXP_REPLACE(COALESCE({col},''),'[^0-9]','','g'),10)"
 
@@ -340,7 +341,11 @@ def _resolver(cur, tipo: str, ref) -> Dict[str, Any]:
                          "agencia": None},
         }
 
-    return {"error": "tipo_invalido", "mensaje": "tipo debe ser 'propiedad' o 'pedido'."}
+    if tipo == "valoracion":
+        from src.services import valorador_service
+        return valorador_service.resolver_contacto(cur, ref)
+
+    return {"error": "tipo_invalido", "mensaje": "tipo debe ser 'propiedad', 'pedido' o 'valoracion'."}
 
 
 def _pedido_desbloqueable(cur, tel10: str) -> bool:
@@ -414,6 +419,18 @@ def _evaluar(cur, usuario: Dict[str, Any], tipo: str, ref) -> Dict[str, Any]:
                       "Este inmueble no tiene un contacto válido cargado. No se cobra: "
                       "Fynder puede coordinar por ti con `solicitar_visita`.",
                       sugerencia="solicitar_visita")
+
+    if tipo == "valoracion":
+        # Un propietario: de la página del agente es solo suyo y gratis; si no, máximo 3 agentes.
+        from src.services import valorador_service
+        regla = valorador_service.regla_desbloqueo(cur, usuario["id"], r)
+        if regla:
+            return _error(regla["error"], regla["mensaje"])
+        if r.get("agente_id") == usuario["id"]:
+            return {"r": r, "existente": existente, "costo": 0, "motivo_gratis": "propia", "tel10": tel10}
+        if valorador_service.agotado(cur, usuario["id"], r["ref_id"]):
+            return _error("valoracion_agotada",
+                          f"A este propietario ya le escribieron {valorador_service.MAX_AGENTES} agentes, el máximo. No se cobra.")
 
     if _es_propio(usuario, tel10):
         return {"r": r, "existente": existente, "costo": 0, "motivo_gratis": "propia", "tel10": tel10}
@@ -547,6 +564,14 @@ def desbloquear(user_id: int, tipo: str, ref, canal: str = "mcp") -> Dict[str, A
     with get_db() as db:
         cur = db.cursor
         cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_COBRO, user_id))
+        if tipo == "valoracion" and ev["costo"]:
+            # Máximo 3 agentes por propietario: se vuelve a contar con el propietario bloqueado.
+            from src.services import valorador_service
+            cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_VALORACION, r["ref_id"]))
+            if valorador_service.agotado(cur, user_id, r["ref_id"]):
+                db.conn.rollback()
+                return _error("valoracion_agotada",
+                              f"A este propietario ya le escribieron {valorador_service.MAX_AGENTES} agentes, el máximo. No se cobra.")
         if ev["costo"]:
             s = _saldos(cur, user_id)
             if s["plan_disponibles"] > 0:
@@ -629,6 +654,11 @@ def ids_desbloqueados(user_id: int, tipo: str, ref_ids: List[int]) -> Set[int]:
     return {r["ref_id"] for r in rows}
 
 
+def _tipo_legible(tipo: Optional[str]) -> str:
+    from src.services.valorador_service import TIPOS
+    return TIPOS.get(tipo or "", (tipo or "Inmueble").capitalize())
+
+
 def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     limit = max(1, min(int(limit or 50), 200))
     with get_db() as db:
@@ -639,12 +669,15 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                    p.imagen_principal, p.precio, p.tipo_propiedad, p.area_construida,
                    p.habitaciones, p.banos, p.activa, p.url,
                    pe.texto_pedido, pe.presupuesto_estimado,
+                   v.tipo_propiedad AS v_tipo, v.area AS v_area, v.barrio AS v_barrio, v.municipio AS v_municipio,
+                   v.habitaciones AS v_hab, v.intencion AS v_intencion, v.plazo AS v_plazo, v.resultado AS v_resultado,
                    r.id AS reporte_id, r.reembolsado,
                    s.estado AS seg_estado, s.nota AS seg_nota, s.recordatorio AS seg_recordatorio,
                    s.updated_at AS seg_updated_at
             FROM desbloqueos d
             LEFT JOIN propiedades p ON d.tipo = 'propiedad' AND p.id = d.ref_id
             LEFT JOIN pedidos pe ON d.tipo = 'pedido' AND pe.id = d.ref_id
+            LEFT JOIN valoraciones v ON d.tipo = 'valoracion' AND v.id = d.ref_id
             LEFT JOIN reportes_contacto r ON r.desbloqueo_id = d.id
             LEFT JOIN contacto_seguimiento s ON s.desbloqueo_id = d.id
             WHERE d.user_id = %s
@@ -658,10 +691,12 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
             "desbloqueo_id": d["id"],
             "tipo": d["tipo"],
             "ref_id": d["ref_id"],
-            "codigo": d.get("codigo_propiedad") or (f"pedido-{d['ref_id']}" if d["tipo"] == "pedido" else None),
-            "titulo": d.get("titulo"),
-            "zona": d.get("zona"),
-            "ciudad": d.get("ciudad"),
+            "codigo": d.get("codigo_propiedad") or ({"pedido": f"pedido-{d['ref_id']}",
+                                                     "valoracion": f"propietario-{d['ref_id']}"}.get(d["tipo"])),
+            "titulo": d.get("titulo") or (f"Propietario · {_tipo_legible(d.get('v_tipo'))} de {float(d['v_area']):.0f} m²"
+                                          if d["tipo"] == "valoracion" and d.get("v_area") else None),
+            "zona": d.get("zona") or d.get("v_barrio"),
+            "ciudad": d.get("ciudad") or d.get("v_municipio"),
             "estado": d["estado"],
             "canal": d.get("canal"),
             "cobrado": d["fuente_credito"] != "gratis",
@@ -689,6 +724,14 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                 "texto": d.get("texto_pedido"),
                 "presupuesto": int(d["presupuesto_estimado"]) if d.get("presupuesto_estimado") else None,
             } if d["tipo"] == "pedido" else None,
+            "propietario": {
+                "tipo": _tipo_legible(d.get("v_tipo")),
+                "area": float(d["v_area"]) if d.get("v_area") else None,
+                "habitaciones": d.get("v_hab"),
+                "intencion": d.get("v_intencion"),
+                "plazo": d.get("v_plazo"),
+                "venta": (d.get("v_resultado") or {}).get("venta"),
+            } if d["tipo"] == "valoracion" else None,
             "seguimiento": seguimiento_service.salida(d),
         })
     return {"ok": True, "total": total or 0, "items": items}

@@ -59,6 +59,7 @@ from src.api.clientes import clientes_bp
 from src.api.herramientas import herramientas_bp
 from src.api.admin_negocio import admin_negocio_bp
 from src.api.admin_agentes import admin_agentes_bp
+from src.api.valorador import valorador_bp
 from src.api.admin_ventas import admin_ventas_bp
 from src.api.admin_instagram import admin_instagram_bp
 import sentry_sdk
@@ -234,6 +235,7 @@ app.register_blueprint(clientes_bp)
 app.register_blueprint(herramientas_bp)
 app.register_blueprint(admin_negocio_bp)
 app.register_blueprint(admin_agentes_bp)
+app.register_blueprint(valorador_bp)
 app.register_blueprint(admin_ventas_bp)
 app.register_blueprint(admin_instagram_bp)
 
@@ -252,6 +254,11 @@ for _ep, _lim in (
     # Fuerza bruta de claves.
     ("auth.login", "5 per minute;30 per hour"),
     ("chat_auth.login", "8 per minute;40 per hour"),
+    # Valorador público: cada valoración consulta la base y cada contacto manda un WhatsApp.
+    ("valorador.valorar", "30 per hour;100 per day"),
+    ("valorador.contacto", "6 per hour;15 per day"),
+    ("valorador.verificar", "20 per hour"),
+    ("valorador.barrios", "300 per hour"),
 ):
     if _ep in app.view_functions:
         app.view_functions[_ep] = limiter.limit(_lim)(app.view_functions[_ep])

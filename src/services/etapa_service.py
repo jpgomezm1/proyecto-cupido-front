@@ -30,4 +30,12 @@ def resumen(user_id: int, tel10: str = "") -> Dict[str, Any]:
               EXISTS (SELECT 1 FROM suscripciones s WHERE s.user_id = %(u)s AND s.plan_codigo <> 'prueba'
                         AND s.estado = 'activa')                                    AS plan_pago
         """, {"u": user_id, "t": tel10 or ""}) or {}
+        # Propietarios que quieren vender (valorador, migración 063): aparte, para que la
+        # etapa no falle si la tabla todavía no existe.
+        try:
+            from src.services.valorador_service import hay_para
+            f = {**f, "propietarios": 1 if hay_para(db.cursor, user_id) else 0}
+        except Exception:  # noqa: BLE001
+            db.conn.rollback()
+            f = {**f, "propietarios": 0}
     return {k: (bool(v) if k in ("ia", "plan_pago") else int(v or 0)) for k, v in f.items()}
