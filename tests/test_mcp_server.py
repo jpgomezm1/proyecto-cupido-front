@@ -32,7 +32,7 @@ EXPECTED_TOOLS = {
     # Coordinación por Fynder (red de seguridad sin contacto)
     "solicitar_visita",
     # Suscripción: desbloqueo de contactos y plan
-    "ver_contacto", "ver_contacto_pedido", "mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns", "compartir_pedido", "encargar_a_findy", "mis_encargos", "pedir_presentacion", "responder_presentacion", "vitrina", "generar_informe_captacion",
+    "ver_contacto", "ver_contacto_pedido", "propietarios_que_venden", "ver_contacto_propietario", "mi_plan", "mis_desbloqueos", "mis_fyns", "canjear_fyns", "compartir_pedido", "encargar_a_findy", "mis_encargos", "pedir_presentacion", "responder_presentacion", "vitrina", "generar_informe_captacion",
     "reportar_contacto_invalido",
     # escrituras
     "propose_price_update_tool", "propose_description_update_tool",
@@ -110,7 +110,7 @@ def test_wrapper_binds_agent_sanitizes_and_logs(monkeypatch):
 
 def test_solo_las_tools_autorizadas_revelan_contactos():
     from src.mcp_server.server import _TOOLS_QUE_REVELAN
-    assert _TOOLS_QUE_REVELAN == {"ver_contacto", "ver_contacto_pedido", "mis_desbloqueos"}
+    assert _TOOLS_QUE_REVELAN == {"ver_contacto", "ver_contacto_pedido", "ver_contacto_propietario", "mis_desbloqueos"}
     with pytest.raises(RuntimeError):
         @srv.mcp.tool(title="x", revela_contacto=True)
         def tool_intrusa() -> dict:

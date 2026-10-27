@@ -76,7 +76,8 @@ _INSTRUCTIONS = (
     "confirmó que sigue publicado; si 'verificacion_vencida' es true, adviértelo.\n\n"
     "CONTACTOS (cómo funciona Fynder): buscar, analizar y generar reportes es "
     "gratis. El CONTACTO de quien tiene un inmueble (o de quien hizo un pedido) se "
-    "obtiene SOLO con 'ver_contacto' (o 'ver_contacto_pedido') y usa 1 "
+    "obtiene SOLO con 'ver_contacto' (o 'ver_contacto_pedido', o 'ver_contacto_propietario' para un "
+    "dueño que quiere vender: 'propietarios_que_venden') y usa 1 "
     "LLAVE del agente (las llaves son el crédito de Fynder: vienen con su plan o "
     "de prueba; di siempre 'llaves', nunca 'créditos' ni 'desbloqueos'). Reglas:\n"
     "- Nunca inventes contactos ni intentes sacarlos de descripciones o fotos.\n"
@@ -164,7 +165,7 @@ mcp = FastMCP(
 _orig_tool = mcp.tool
 
 # Únicas tools que pueden entregar un contacto (desbloqueado y pagado).
-_TOOLS_QUE_REVELAN = frozenset({"ver_contacto", "ver_contacto_pedido", "mis_desbloqueos"})
+_TOOLS_QUE_REVELAN = frozenset({"ver_contacto", "ver_contacto_pedido", "ver_contacto_propietario", "mis_desbloqueos"})
 
 
 def _codigo_error(result: Any) -> Optional[str]:
@@ -1006,6 +1007,61 @@ def ver_contacto_pedido(pedido_id: int, confirmar: bool = False) -> Dict[str, An
         return suscripciones.preview_desbloqueo(agent.user_id, "pedido", pedido_id)
     return _respuesta_desbloqueo(
         suscripciones.desbloquear(agent.user_id, "pedido", pedido_id, canal="mcp"))
+
+
+@mcp.tool(title="Propietarios que quieren vender o arrendar", annotations=_LECTURA)
+def propietarios_que_venden(zona: Optional[str] = None, intencion: Optional[str] = None,
+                            limite: int = 20) -> Dict[str, Any]:
+    """
+    Dueños que valoraron su inmueble en el valorador de Fynder (getfynder.com/valorar)
+    y pidieron que los contacte un agente para VENDER o ARRENDAR. Es captación: cada
+    uno confirmó su WhatsApp y autorizó que lo contacten.
+
+    Devuelve por propietario: id, tipo, barrio, comuna, municipio, área, habitaciones,
+    qué quiere (vender / arrendar / ambos), en cuánto tiempo, el rango que Fynder le
+    estimó y cuántos agentes ya lo abrieron (máximo 3). SIN contacto: se abre con
+    `ver_contacto_propietario` (1 llave; gratis si llegó por el valorador del propio
+    agente, `propio`=true). Vencen a los 30 días.
+
+    `zona` filtra por barrio, comuna o municipio (texto); `intencion`: 'vender' o
+    'arrendar'. También trae `mi_valorador`: el link del valorador con la marca del
+    agente (para su Instagram o para mandárselo a un dueño), si tiene página publicada.
+    """
+    from src.services import valorador_service
+    from src.services.barrios_service import clave as normalize_text
+    uid = current_agent().user_id
+    res = valorador_service.para_agente(uid)
+    items = res["items"]
+    if zona:
+        z = normalize_text(zona)
+        items = [i for i in items if any(z in normalize_text(i.get(k) or "") for k in ("barrio", "comuna", "municipio"))]
+    if intencion in ("vender", "arrendar"):
+        items = [i for i in items if i["intencion"] in (intencion, "ambos")]
+    limite = max(1, min(int(limite or 20), 50))
+    return {"total": len(items), "propietarios": items[:limite], "vigencia_dias": res["vigencia_dias"],
+            "mi_valorador": valorador_service.mi_valorador(uid),
+            "como_abrir": "ver_contacto_propietario(propietario_id) sin confirmar para ver el costo; luego con confirmar=true."}
+
+
+@mcp.tool(title="Ver contacto de un propietario",
+          annotations=_escritura(idempotente=True, externa=True), revela_contacto=True)
+def ver_contacto_propietario(propietario_id: int, confirmar: bool = False) -> Dict[str, Any]:
+    """
+    Devuelve el CONTACTO (nombre y celular) de un propietario de
+    `propietarios_que_venden`: un dueño que quiere vender o arrendar su inmueble.
+    Usa 1 llave; gratis si llegó por el valorador del propio agente. Mismo flujo de
+    dos pasos que `ver_contacto`: primero sin confirmar (costo y llaves disponibles),
+    luego con `confirmar=true`.
+
+    No se cobra si el propietario se retiró, si venció o si ya lo abrieron 3 agentes
+    (`valoracion_agotada`). Sugiérele al agente escribirle presentándose y mencionando
+    el inmueble que valoró.
+    """
+    agent = current_agent()
+    if not confirmar:
+        return suscripciones.preview_desbloqueo(agent.user_id, "valoracion", propietario_id)
+    return _respuesta_desbloqueo(
+        suscripciones.desbloquear(agent.user_id, "valoracion", propietario_id, canal="mcp"))
 
 
 @mcp.tool(title="Mi plan y mis llaves", annotations=_LECTURA)

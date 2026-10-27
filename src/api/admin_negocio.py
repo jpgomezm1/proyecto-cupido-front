@@ -432,3 +432,42 @@ def atencion():
         return _ok(atencion_service.hoy())
     except Exception as e:  # noqa: BLE001
         return _fallo(e, 'atencion')
+
+
+# ── Índice Fynder mensual (indice_service) ──────────────────────────────────
+
+def _indice(fn, contexto: str):
+    from src.services import indice_service
+    try:
+        return _ok(fn(indice_service))
+    except indice_service.IndiceError as e:
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), 400
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, contexto)
+
+
+@admin_negocio_bp.route('/indice', methods=['GET'])
+def indice_ediciones():
+    return _indice(lambda s: s.ediciones_admin(), 'indice_ediciones')
+
+
+@admin_negocio_bp.route('/indice/<mes>', methods=['GET'])
+def indice_edicion(mes):
+    return _indice(lambda s: {**s.edicion(mes, publico=False), "nota_de_prensa": s.nota_de_prensa(mes)}, 'indice_edicion')
+
+
+@admin_negocio_bp.route('/indice/<mes>/calcular', methods=['POST'])
+def indice_calcular(mes):
+    return _indice(lambda s: s.calcular(mes), 'indice_calcular')
+
+
+@admin_negocio_bp.route('/indice/<mes>/publicar', methods=['POST'])
+def indice_publicar(mes):
+    from src.api.access import admin_actual
+    d = request.get_json(silent=True) or {}
+    return _indice(lambda s: s.publicar(mes, d.get('titular'), (admin_actual() or {}).get('email')), 'indice_publicar')
+
+
+@admin_negocio_bp.route('/indice/<mes>/despublicar', methods=['POST'])
+def indice_despublicar(mes):
+    return _indice(lambda s: s.despublicar(mes), 'indice_despublicar')

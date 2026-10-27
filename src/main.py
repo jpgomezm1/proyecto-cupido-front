@@ -60,6 +60,7 @@ from src.api.herramientas import herramientas_bp
 from src.api.admin_negocio import admin_negocio_bp
 from src.api.admin_agentes import admin_agentes_bp
 from src.api.valorador import valorador_bp
+from src.api.indice import indice_bp
 from src.api.admin_ventas import admin_ventas_bp
 from src.api.admin_instagram import admin_instagram_bp
 import sentry_sdk
@@ -236,6 +237,7 @@ app.register_blueprint(herramientas_bp)
 app.register_blueprint(admin_negocio_bp)
 app.register_blueprint(admin_agentes_bp)
 app.register_blueprint(valorador_bp)
+app.register_blueprint(indice_bp)
 app.register_blueprint(admin_ventas_bp)
 app.register_blueprint(admin_instagram_bp)
 

@@ -191,6 +191,14 @@ if __name__ == '__main__':
                     print(f"[VITRINA] {vitrina_service.publicar_semana()}")
             except Exception as e:  # noqa: BLE001
                 _reportar("VITRINA", e)
+            # Índice Fynder: el 1 o 2 de cada mes se calcula el mes que cerró (borrador para el admin).
+            try:
+                from src.services import indice_service
+                r = indice_service.cerrar_mes_si_falta()
+                if r:
+                    print(f"[INDICE] {r}")
+            except Exception as e:  # noqa: BLE001 — sin la migración 064 sigue todo igual
+                _reportar("INDICE", e)
             if os.getenv('CORREOS_ACTIVACION_ENABLED', 'true').lower() == 'true':
                 try:
                     print(f"[CORREOS] Activación: {recordatorios_activacion()}")
