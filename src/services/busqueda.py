@@ -693,6 +693,15 @@ def buscar(texto: str, previo: Optional[Dict[str, Any]] = None, limite: int = 10
     ub = _ubicaciones(ped)
     puntuados = [r for r in (_puntuar(p, ped, ub) for p in cands) if r]
     puntuados.sort(key=lambda r: r["score"], reverse=True)
+    # El mismo aviso publicado dos veces (mismo título y precio) sale una sola vez.
+    vistos, unicos = set(), []
+    for r in puntuados:
+        huella = ((r["_p"].get("titulo") or "").strip().lower(), r["_p"].get("precio"))
+        if huella[0] and huella in vistos:
+            continue
+        vistos.add(huella)
+        unicos.append(r)
+    puntuados = unicos
     if reordenar == "ia":
         puntuados = reordenar_ia(texto, puntuados)
     elif reordenar == "jev":
@@ -724,7 +733,7 @@ _COLUMNAS = """id, id::text AS slug, codigo_propiedad, fuente, url, titulo, prec
     tipo_propiedad, estado, ciudad, zona, direccion_completa, area_construida, habitaciones,
     banos, parqueaderos, estrato, piso, ano_construccion, administracion, predial,
     amenidades_internas, amenidades_externas, total_amenidades, asesor, telefono, inmobiliaria,
-    imagen_principal, total_imagenes, descripcion, fecha_creacion, fecha_ultima_validacion"""
+    imagen_principal, total_imagenes, descripcion, fecha_creacion, fecha_actualizacion, fecha_ultima_validacion"""
 
 
 def chips(ped: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -845,7 +854,9 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
         f.update(precios.get(x["id"], {}))
         # Frescura: sin esto la tarjeta dice «Sin verificar» aunque se haya verificado ayer.
         from src.services.property_service import frescura
-        f["verificada_hace_dias"] = frescura(f.get("fecha_ultima_validacion"))["verificada_hace_dias"]
+        # Lo publicado en Fynder no tiene portal que verificar: cuenta su última actualización.
+        fecha = f.get("fecha_ultima_validacion") or (f.get("fecha_actualizacion") if f.get("fuente") == "Fynder" else None)
+        f["verificada_hace_dias"] = frescura(fecha)["verificada_hace_dias"]
         resultados.append({**f, "match_score": x.get("score_final", x["score"]),
                            "match_reasons": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or []})
     scores = [x["match_score"] for x in resultados]

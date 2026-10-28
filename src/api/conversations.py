@@ -1484,11 +1484,41 @@ def _execute_search_and_respond(db, conversation_id, user_id, user_message,
                                 search_response, search_criteria, accumulated_criteria, elapsed_ms)
 
 
+def _recortar_a_las_mejores(db, conversation_id, previo, search_response):
+    """
+    «Solo las 5 mejores» sin cambiar el pedido: las 5 primeras de lo que ya le mostramos,
+    no una búsqueda nueva (el reordenamiento con IA puede cambiar el orden y traer otras).
+    """
+    nuevo = (search_response.get('criteria') or {}).get('pedido_v3') or {}
+    n = nuevo.get('cantidad')
+    if not (n and previo):
+        return
+    ignorar = {'cantidad', 'es_busqueda'}
+    mismo = lambda p: {k: v for k, v in p.items() if k not in ignorar and not k.startswith('_')}
+    if mismo(nuevo) != mismo(previo):
+        return
+    db.cursor.execute(
+        """SELECT search_response FROM mensajes_conversacion
+           WHERE conversacion_id = %s AND role = 'assistant' AND search_response IS NOT NULL
+           ORDER BY id DESC LIMIT 1""", (conversation_id,))
+    fila = db.cursor.fetchone()
+    anterior = (fila['search_response'] if isinstance(fila, dict) else fila[0]) if fila else None
+    if isinstance(anterior, str):
+        anterior = json.loads(anterior)
+    previos = (anterior or {}).get('results') or []
+    if len(previos) <= n:
+        return
+    search_response['results'] = previos[:n]
+    search_response['total_found'] = n
+    search_response['mensaje_resultados'] = f"Estas son las {n} mejores de las {len(previos)} que te mostré."
+
+
 def _execute_search_v3(db, conversation_id, user_id, user_message, criteria,
                        conv_nombre, total_mensajes, original_content):
     start_time = datetime.now()
     previo = (criteria or {}).get('pedido_v3') or _perfil_del_cliente(db, conversation_id)
     search_response = busqueda_v3.buscar_compat(original_content, previo=previo)
+    _recortar_a_las_mejores(db, conversation_id, previo, search_response)
     elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
     accumulated_criteria = search_response.get('criteria') or {}
     print(f"🔍 [SEARCH-V3] {search_response.get('total_found', 0)} resultados, "
@@ -1532,7 +1562,7 @@ def _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
                     'habitaciones': 'habitaciones'
                 }
                 priority_msg = f" (priorizando {priority_labels.get(criteria['selected_priority'], '')})"
-            assistant_content = f"Encontré {total_found} propiedades que coinciden con tu búsqueda{priority_msg}."
+            assistant_content = search_response.get('mensaje_resultados') or                 f"Encontré {total_found} propiedades que coinciden con tu búsqueda{priority_msg}."
     elif search_response.get('mensaje_usuario'):
         assistant_content = search_response['mensaje_usuario']
     else:
