@@ -298,7 +298,7 @@ def generar(max_inmuebles: int = 400) -> Dict[str, int]:
             desde_ped = _cursor(cur, "pedidos")
             pedidos = fetch_all(cur, """
                 SELECT id, criterios, criterios_at, agente_telefono, user_id FROM pedidos
-                WHERE criterios IS NOT NULL AND estado <> 'retirado' AND criterios_at > %s
+                WHERE criterios IS NOT NULL AND estado NOT IN ('retirado', 'reemplazado') AND criterios_at > %s
                   AND fecha_captura > NOW() - INTERVAL '120 days'
                 ORDER BY criterios_at LIMIT 300
             """, (desde_ped,)) if desde_ped else []

@@ -402,5 +402,67 @@ def estructurar_pendientes(dias: int = 120, limit: int = 300, concurrencia: int 
                 db.cursor.execute(
                     "UPDATE pedidos SET criterios = %s, criterios_at = NOW() WHERE id = %s",
                     (json.dumps(crit, ensure_ascii=False), pid))
+                if crit.get("es_actualizacion"):
+                    marcar_reemplazado(db.cursor, pid, crit)
             db.conn.commit()
     return {"procesados": len(ok), "errores": len(filas) - len(ok)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Actualizaciones: «actualizo el pedido de mi clienta…» reemplaza al anterior
+# ─────────────────────────────────────────────────────────────────────────────
+
+DIAS_ACTUALIZACION = 45
+
+
+def _clave(t: Any) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(t or ""))
+    return "".join(c for c in t if not unicodedata.combining(c)).lower().strip()
+
+
+def _parecido(nuevo: Dict[str, Any], viejo: Dict[str, Any]) -> float:
+    """0 si no es el mismo pedido (otro negocio, otros tipos, otras zonas); si lo es, qué tanto se parece."""
+    if (nuevo.get("negocio") or "venta") != (viejo.get("negocio") or "venta"):
+        return 0.0
+    tn, tv = {_clave(t) for t in nuevo.get("tipos") or []}, {_clave(t) for t in viejo.get("tipos") or []}
+    if tn and tv and not tn & tv:
+        return 0.0
+    zn = {_clave(z) for z in (nuevo.get("zonas") or []) + (nuevo.get("ciudades") or [])}
+    zv = {_clave(z) for z in (viejo.get("zonas") or []) + (viejo.get("ciudades") or [])}
+    if zn and zv and not zn & zv:
+        return 0.0
+    puntos = 1.0 + (len(zn & zv) / max(len(zn | zv), 1))
+    pn, pv = nuevo.get("presupuesto_max"), viejo.get("presupuesto_max")
+    if pn and pv:
+        puntos += 1.0 - min(abs(float(pn) - float(pv)) / max(float(pn), float(pv)), 1.0)
+    return puntos
+
+
+def pedido_reemplazado(cur, pid: int, crit: Dict[str, Any]) -> Optional[int]:
+    """Solo lectura: el pedido anterior del mismo agente que esta actualización reemplaza (el más parecido
+    de los últimos 45 días), o None."""
+    from src.services.db import fetch_one as _uno_fila
+    nuevo = _uno_fila(cur, "SELECT agente_telefono, fecha_captura FROM pedidos WHERE id = %s", (pid,))
+    if not nuevo or not nuevo.get("agente_telefono"):
+        return None
+    cur.execute("""
+        SELECT id, criterios FROM pedidos
+        WHERE agente_telefono = %s AND id <> %s AND estado NOT IN ('retirado', 'reemplazado')
+          AND criterios IS NOT NULL
+          AND fecha_captura BETWEEN %s - make_interval(days => %s) AND %s
+    """, (nuevo["agente_telefono"], pid, nuevo["fecha_captura"], DIAS_ACTUALIZACION, nuevo["fecha_captura"]))
+    filas = cur.fetchall()
+    mejor = max(((f["id"] if isinstance(f, dict) else f[0],
+                  _parecido(crit, (f["criterios"] if isinstance(f, dict) else f[1]) or {})) for f in filas),
+                key=lambda x: x[1], default=(None, 0.0))
+    return mejor[0] if mejor[0] and mejor[1] >= 1.5 else None
+
+
+def marcar_reemplazado(cur, pid: int, crit: Dict[str, Any]) -> Optional[int]:
+    """El pedido que esta actualización reemplaza queda en estado 'reemplazado': deja de contar como otro
+    comprador. Devuelve su id."""
+    viejo = pedido_reemplazado(cur, pid, crit)
+    if viejo:
+        cur.execute("UPDATE pedidos SET estado = 'reemplazado' WHERE id = %s", (viejo,))
+    return viejo

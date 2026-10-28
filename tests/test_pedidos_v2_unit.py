@@ -48,3 +48,12 @@ def test_acepta_textos_donde_van_objetos():
     assert v["unidades"][0]["nombre"] == "Urbanity" and v["deseables"][0]["caracteristica"] == "balcon"
     assert len(v["opciones"]) == 1 and v["opciones"][0]["ubicaciones"][0]["nombre"] == "Envigado"
     assert pia._compat_v1(v)["zonas"] == ["Laureles", "Envigado"]
+
+
+def test_parecido_de_una_actualizacion():
+    viejo = {"negocio": "venta", "tipos": ["apartamento"], "zonas": ["Zúñiga", "Otra Parte"], "presupuesto_max": 1_100_000_000}
+    nuevo = {**viejo, "presupuesto_max": 1_300_000_000}
+    assert pia._parecido(nuevo, viejo) >= 1.5                                    # mismo pedido, otro presupuesto
+    assert pia._parecido({**nuevo, "negocio": "arriendo"}, viejo) == 0          # otro negocio
+    assert pia._parecido({**nuevo, "zonas": ["Laureles"]}, viejo) == 0           # otras zonas
+    assert pia._parecido({**nuevo, "tipos": ["casa"]}, viejo) == 0              # otro tipo
