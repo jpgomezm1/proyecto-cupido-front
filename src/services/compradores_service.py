@@ -150,9 +150,10 @@ def _scrape(url: str) -> Tuple[Optional[Dict[str, Any]], str]:
     return WasiScraper().extract_property_data(url), "wasi"
 
 
-def resolver_inmueble(cur, entrada: str) -> Dict[str, Any]:
+def resolver_inmueble(cur, entrada: str, previa: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Devuelve {"ficha": {...}} o {"error_type": ..., "mensaje_error": ...}.
+    `previa`: la ficha del mensaje anterior de la conversación, para ajustes («¿y si lo bajo a 590?»).
     error_type: propiedad_no_encontrada | link_no_soportado | datos_insuficientes | ai_unavailable
     """
     entrada = (entrada or "").strip()
@@ -195,13 +196,19 @@ def resolver_inmueble(cur, entrada: str) -> Dict[str, Any]:
     # Descripción en texto -> ficha con IA
     try:
         from src.services.pedidos_ia import ficha_desde_texto
-        f = ficha_desde_texto(entrada)
+        f = ficha_desde_texto(entrada, previa)
     except Exception as e:  # noqa: BLE001
         print(f"[COMPRADORES] ficha_desde_texto falló: {type(e).__name__}: {str(e)[:160]}")
         return {"error_type": "ai_unavailable", "mensaje_error": None}
     if not (f.get("precio") or f.get("zona") or f.get("ciudad")):
         return {"error_type": "datos_insuficientes",
                 "mensaje_error": "Me falta al menos la zona o el precio del inmueble para buscarle compradores."}
+    if previa and f.get("zona") == previa.get("zona") and f.get("tipo") == previa.get("tipo"):
+        # El mismo inmueble ajustado: conserva de dónde vino (link, foto) y suma el texto nuevo.
+        return {"ficha": {**previa, **{k: f.get(k) for k in (
+            "tipo", "negocio", "ciudad", "zona", "precio", "habitaciones", "banos", "parqueaderos", "area_m2")},
+            "amenidades": [a.lower() for a in (f.get("amenidades") or previa.get("amenidades") or [])],
+            "texto": f"{previa.get('texto') or ''} {entrada}".strip()}}
     return {"ficha": {
         "origen": "texto", "id": None, "share_slug": None, "titulo": None,
         "tipo": f.get("tipo"), "negocio": f.get("negocio"), "ciudad": f.get("ciudad"), "zona": f.get("zona"),

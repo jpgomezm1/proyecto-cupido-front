@@ -843,7 +843,8 @@ def send_message(conversation_id):
             modo = str(data.get('modo') or '').strip().lower()
             if modo == 'compradores' or (modo != 'propiedades' and compradores.es_entrada_de_inmueble(content)):
                 return _responder_compradores(
-                    db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes
+                    db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes,
+                    prev_criteria if (prev_criteria or {}).get('modo') == 'compradores' else None
                 )
 
             # Buscador v3 (interruptor FYNDER_BUSQUEDA_V3): entiende el pedido y su
@@ -1290,14 +1291,15 @@ def _nombre_compradores(ficha):
 
 
 def _responder_compradores(db, conversation_id, user_id, user_message, content,
-                           conv_nombre, total_mensajes):
+                           conv_nombre, total_mensajes, previo=None):
     """
     Modo "Tengo un inmueble": resuelve el inmueble (link de Wasi/Lobbie, link o
     código de Fynder, o descripción) y devuelve los pedidos que mejor encajan.
     El contacto de quien pidió no sale aquí: se desbloquea aparte (tipo pedido).
     """
     start_time = datetime.now()
-    resuelto = compradores.resolver_inmueble(db.cursor, content)
+    previa = (previo or {}).get('ficha')
+    resuelto = compradores.resolver_inmueble(db.cursor, content, previa)
     ficha = resuelto.get('ficha')
 
     if ficha:
@@ -1306,7 +1308,16 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
         lista = res['compradores']
         lugar = ficha.get('zona') or ficha.get('ciudad')
         tipo = (ficha.get('tipo') or 'inmueble').lower()
-        if lista:
+        antes = (previo or {}).get('total')
+        if previa and antes is not None and ficha.get('precio') and ficha.get('precio') != previa.get('precio'):
+            dif = total - antes
+            cambio = (f"{dif} más que" if dif > 0 else f"{-dif} menos que" if dif < 0 else "los mismos")
+            assistant_content = (
+                f"Con {compradores.format_cop(ficha['precio'])}: {total} "
+                f"{'pedido encaja' if total == 1 else 'pedidos encajan'} ({cambio} "
+                f"con {compradores.format_cop(previa['precio'])})."
+            )
+        elif lista:
             assistant_content = (
                 f"Encontré {total} {'pedido que encaja' if total == 1 else 'pedidos que encajan'} "
                 f"con tu {tipo}{' en ' + lugar if lugar else ''}. "
@@ -1345,7 +1356,9 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
         }
 
     elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-    criterios_conv = {'modo': 'compradores', 'original_query': content}
+    # La ficha queda en la conversación para los ajustes del siguiente mensaje.
+    criterios_conv = {'modo': 'compradores', 'original_query': content,
+                      'ficha': ficha or previa, 'total': total if ficha else (previo or {}).get('total')}
 
     db.cursor.execute(
         """INSERT INTO mensajes_conversacion

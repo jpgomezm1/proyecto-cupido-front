@@ -109,9 +109,36 @@ def estructurar_pedido(texto: str) -> Dict[str, Any]:
     return crit
 
 
-def ficha_desde_texto(texto: str) -> Dict[str, Any]:
-    return _extraer(texto, _SCHEMA_FICHA, "guardar_inmueble",
-                    "Guarda la ficha del inmueble que describe el agente.")
+_VACIOS = {"", "unknown", "<unknown>", "desconocido", "n/a", "na", "null", "none", "-", "?"}
+
+
+def _limpiar_ficha(f: Dict[str, Any]) -> Dict[str, Any]:
+    """El modelo a veces responde «<UNKNOWN>» o NaN en vez de null: eso es null."""
+    import math
+    out: Dict[str, Any] = {}
+    for k, v in f.items():
+        if isinstance(v, str) and v.strip().lower() in _VACIOS:
+            v = None
+        elif isinstance(v, float) and math.isnan(v):
+            v = None
+        elif isinstance(v, list):
+            v = [x for x in v if not (isinstance(x, str) and x.strip().lower() in _VACIOS)]
+        out[k] = v
+    return out
+
+
+def ficha_desde_texto(texto: str, previa: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ficha del inmueble que describe el agente. Con `previa`, el mensaje la ajusta
+    («¿y si lo bajo a 590?»): se devuelve completa, cambiando solo lo que el mensaje cambia."""
+    if previa:
+        anterior = {k: previa.get(k) for k in _SCHEMA_FICHA["properties"]}
+        texto = (f"FICHA ANTERIOR DEL INMUEBLE:\n{json.dumps(anterior, ensure_ascii=False)}\n\n"
+                 f"MENSAJE NUEVO DEL AGENTE:\n{texto}\n\n"
+                 "Si el mensaje ajusta el mismo inmueble (precio, área, etc.), devuelve la ficha COMPLETA: "
+                 "conserva lo anterior y cambia solo lo que el mensaje cambia. Si describe otro inmueble, "
+                 "ignora la anterior.")
+    return _limpiar_ficha(_extraer(texto, _SCHEMA_FICHA, "guardar_inmueble",
+                                   "Guarda la ficha del inmueble que describe el agente."))
 
 
 def estructurar_pendientes(dias: int = 120, limit: int = 300, concurrencia: int = 8) -> Dict[str, int]:
