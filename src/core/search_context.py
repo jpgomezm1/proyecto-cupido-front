@@ -941,30 +941,51 @@ def generate_conversation_name(criteria: Dict) -> Optional[str]:
             else:
                 parts.append(tipo.capitalize()[:6])
 
-    # Ubicación (primera)
-    ubicaciones = criteria.get('ubicaciones', [])
-    if ubicaciones and isinstance(ubicaciones, list) and len(ubicaciones) > 0:
-        parts.append(ubicaciones[0])
+    # Ubicación: hasta dos («Laureles o Belén»), el resto como «+N»
+    ubicaciones = [u for u in (criteria.get('ubicaciones') or []) if isinstance(u, str) and u.strip()]
+    lugar = ' o '.join(ubicaciones[:2]) + (f" +{len(ubicaciones) - 2}" if len(ubicaciones) > 2 else '')
+    if lugar:
+        if parts:
+            parts[-1] = f"{parts[-1]} en {lugar}"
+        else:
+            parts.append(lugar)
 
-    # Habitaciones
+    # Habitaciones («3 hab», nunca «3.0 hab»)
     hab_min = criteria.get('habitaciones_min')
     if hab_min:
-        parts.append(f"{hab_min} hab")
+        try:
+            parts.append(f"{int(float(hab_min))}+ hab")
+        except (TypeError, ValueError):
+            pass
 
-    # Precio (en millones)
+    # Precio, siempre en millones (nunca «B»)
     precio_max = criteria.get('precio_max')
     if precio_max:
-        millones = int(precio_max / 1_000_000)
-        if millones >= 1000:
-            parts.append(f"${millones/1000:.1f}B")
-        else:
-            parts.append(f"${millones}M")
+        parts.append(f"hasta {millones_corto(precio_max)}")
 
     # Si no hay suficiente info, retornar None
-    if len(parts) < 2:
+    if len(parts) < 2 and not lugar:
         return None
 
-    return ' '.join(parts)
+    return ' · '.join(parts)[:80]
+
+
+def millones_corto(v: Any) -> str:
+    """$650 M, $1.800 M: el dinero de los títulos, siempre en millones."""
+    return f"${round(float(v) / 1e6):,} M".replace(",", ".")
+
+
+def nombre_compradores(ficha: Dict) -> str:
+    """«Compradores · Apto en Laureles · 95 m² · $640 M»: el área y el precio distinguen un inmueble de otro."""
+    tipo = (ficha.get('tipo') or 'Inmueble').strip().capitalize()
+    tipo = {'Apartamento': 'Apto'}.get(tipo, tipo)
+    lugar = ficha.get('zona') or ficha.get('ciudad')
+    partes = [f"{tipo}{' en ' + lugar if lugar else ''}"]
+    if ficha.get('area_m2'):
+        partes.append(f"{round(float(ficha['area_m2']))} m²")
+    if ficha.get('precio'):
+        partes.append(millones_corto(ficha['precio']))
+    return ("Compradores · " + " · ".join(partes))[:80]
 
 
 def summarize_criteria(criteria: Dict) -> str:

@@ -1297,9 +1297,8 @@ def _handle_priority_retry(db, conversation_id, user_message, pending_options):
 
 
 def _nombre_compradores(ficha):
-    tipo = (ficha.get('tipo') or 'Inmueble').strip().capitalize()
-    lugar = ficha.get('zona') or ficha.get('ciudad')
-    return f"Compradores · {tipo}{' en ' + lugar if lugar else ''}"[:80]
+    from src.core.search_context import nombre_compradores
+    return nombre_compradores(ficha)
 
 
 def _frase_mejor(c):
