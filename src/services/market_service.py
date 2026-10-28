@@ -11,7 +11,10 @@ componerse dentro de una sola conexión; los wrappers públicos abren su propia
 conexión.
 """
 
-from typing import Any, Dict, List, Optional
+import copy
+import threading
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 from src.services import facetas
 from src.services.db import get_db, fetch_all, fetch_one
@@ -42,6 +45,33 @@ def _location_filter(ciudad: Optional[str], zona: Optional[str],
     return conditions + conds, params + ps
 
 
+# La misma foto durante unos minutos: el pre-análisis, el análisis y «¿dónde capto?» de una misma
+# conversación no deben decir 337 y luego 336 porque el inventario cambió entre consultas.
+CACHE_SEGUNDOS = 600
+_CACHE: Dict[tuple, tuple] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _foto(fn: Callable) -> Callable:
+    def envuelta(cur, *args, **kwargs):
+        clave = (fn.__name__, tuple(str(a).strip().lower() if isinstance(a, str) else a for a in args),
+                 tuple(sorted((k, str(v).strip().lower() if isinstance(v, str) else v) for k, v in kwargs.items())))
+        with _CACHE_LOCK:
+            hit = _CACHE.get(clave)
+            if hit and time.time() - hit[0] < CACHE_SEGUNDOS:
+                return copy.deepcopy(hit[1])
+        valor = fn(cur, *args, **kwargs)
+        with _CACHE_LOCK:
+            if len(_CACHE) > 500:
+                _CACHE.clear()
+            _CACHE[clave] = (time.time(), copy.deepcopy(valor))
+        return valor
+    envuelta.__name__ = fn.__name__
+    envuelta.__doc__ = fn.__doc__
+    return envuelta
+
+
+@_foto
 def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
                tipo_propiedad: Optional[str] = None,
                tipo_negocio: str = "Venta") -> Dict[str, Any]:
@@ -116,6 +146,7 @@ def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
     }
 
 
+@_foto
 def demand_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
                  tipo_propiedad: Optional[str] = None, dias: int = 90) -> Dict[str, Any]:
     """
