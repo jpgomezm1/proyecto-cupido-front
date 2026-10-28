@@ -75,3 +75,22 @@ def test_exigencia_no_mencionada_queda_por_confirmar():
 def test_links_son_entrada_de_inmueble():
     assert es_entrada_de_inmueble("mira este https://inmobiliaria.wasi.co/apartamento-venta-laureles/123")
     assert not es_entrada_de_inmueble("apto en laureles 3 hab")
+
+
+def test_porque_dice_frescura_margen_y_zona():
+    from src.services import compradores_service as cs
+    ficha = {"precio": 640_000_000, "zona": "Laureles"}
+    assert cs._porque({"zonas": ["Laureles"]}, ficha, 2, 700_000_000) == \
+        "Lo pidió hace 2 días · su presupuesto te cubre con $60 M de margen · solo busca en Laureles"
+    assert "pide $20 M menos: negociable" in cs._porque({"zonas": ["Laureles", "Belén"]}, ficha, 0, 620_000_000)
+    assert "busca en 2 zonas, entre ellas la tuya" in cs._porque({"zonas": ["Laureles", "Belén"]}, ficha, 0, 620_000_000)
+    assert cs._porque({}, ficha, 1, 642_000_000) == "Lo pidió ayer · su presupuesto es justo tu precio"
+
+
+def test_valor_premia_lo_reciente_sobre_lo_viejo():
+    from datetime import datetime, timedelta
+    from src.services import compradores_service as cs
+    ficha = {"precio": 600_000_000, "zona": "Laureles"}
+    ayer = {"fecha_captura": datetime.now() - timedelta(days=1)}
+    viejo = {"fecha_captura": datetime.now() - timedelta(days=90)}
+    assert cs._valor(90, ayer, {}, ficha) > cs._valor(100, viejo, {}, ficha)

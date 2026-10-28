@@ -410,6 +410,64 @@ _SQL_DESBLOQUEABLE = f"""
 
 
 DIAS_RECIENTE = 30
+TOP = 3          # «Empieza por estos 3»
+
+
+def _hace(d: int) -> str:
+    if d >= 999:
+        return ""
+    if d == 0:
+        return "hoy"
+    if d == 1:
+        return "ayer"
+    if d < 30:
+        return f"hace {d} días"
+    m = d // 30
+    return "hace 1 mes" if m == 1 else f"hace {m} meses"
+
+
+def _millones(v: float) -> str:
+    return f"${round(v / 1e6):,} M".replace(",", ".")
+
+
+def _porque(crit: Dict[str, Any], ficha: Dict[str, Any], dias: int, pmax) -> str:
+    """«Lo pidió hace 2 días · su presupuesto te cubre con $60 M de margen · solo busca en Laureles»."""
+    partes = []
+    if dias < 999:
+        partes.append("Lo pidió hoy" if dias == 0 else "Lo pidió ayer" if dias == 1 else f"Lo pidió {_hace(dias)}")
+    precio = ficha.get("precio")
+    if precio and pmax:
+        margen = float(pmax) - float(precio)
+        if margen >= 0:
+            partes.append("su presupuesto es justo tu precio" if margen < 5e6 else
+                          f"su presupuesto te cubre con {_millones(margen)} de margen")
+        elif -margen <= float(precio) * 0.05:
+            partes.append(f"pide {_millones(-margen)} menos: negociable")
+        else:
+            partes.append(f"su presupuesto está {_millones(-margen)} por debajo")
+    zonas = crit.get("zonas") or []
+    if len(zonas) == 1:
+        partes.append(f"solo busca en {zonas[0]}")
+    elif len(zonas) > 1 and ficha.get("zona"):
+        partes.append(f"busca en {len(zonas)} zonas, entre ellas la tuya")
+    return " · ".join(partes)
+
+
+def _valor(puntaje: int, f: Dict[str, Any], crit: Dict[str, Any], ficha: Dict[str, Any]) -> float:
+    """Para ordenar: encaje × frescura, con dos ajustes chicos de lo que hace a un comprador «real»."""
+    v = puntaje * _frescura(f.get("fecha_captura"))
+    zonas = crit.get("zonas") or []
+    if len(zonas) == 1 and ficha.get("zona") and _misma_zona(zonas[0], ficha.get("zona")):
+        v *= 1.05     # busca justo ahí
+    pmax, precio = crit.get("presupuesto_max") or f.get("presupuesto_estimado"), ficha.get("precio")
+    if pmax and precio and float(precio) <= float(pmax) <= float(precio) * 1.25:
+        v *= 1.05     # le alcanza sin estar buscando otra cosa
+    return v
+
+
+def _vale_la_pena(c) -> bool:
+    puntaje, f = c[0], c[1]
+    return puntaje >= 75 and _dias(f.get("fecha_captura")) <= 60
 
 
 def _dias(fecha) -> int:
@@ -452,7 +510,7 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         candidatos.append((puntaje, f, razones, crit))
     # Orden: encaje × frescura. Un pedido de hace 3 meses al 100 % vale menos que uno de esta semana
     # al 90 %: ese comprador probablemente ya compró.
-    candidatos.sort(key=lambda x: (-x[0] * _frescura(x[1].get("fecha_captura")),
+    candidatos.sort(key=lambda x: (-_valor(x[0], x[1], x[3], ficha),
                                    -(x[1]["fecha_captura"].timestamp() if x[1].get("fecha_captura") else 0)))
     # El mismo pedido reenviado a varios grupos: se queda el más reciente.
     unicos, huellas = [], set()
@@ -465,7 +523,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         unicos.append(cand)
     candidatos = unicos
     resumen = {"recientes": sum(1 for c in candidatos if _dias(c[1].get("fecha_captura")) <= DIAS_RECIENTE),
-               "perfecto": sum(1 for c in candidatos if c[0] >= 90), "todos": len(candidatos)}
+               "perfecto": sum(1 for c in candidatos if c[0] >= 90), "todos": len(candidatos),
+               "vale_la_pena": sum(1 for c in candidatos[TOP:] if _vale_la_pena(c))}
     top = candidatos[:limit]
 
     vistos = set()
@@ -474,8 +533,10 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         vistos = suscripciones.ids_desbloqueados(user_id, "pedido", [t[1]["id"] for t in top])
 
     compradores = []
-    for puntaje, f, razones, crit in top:
+    for i, (puntaje, f, razones, crit) in enumerate(top):
         pmax = crit.get("presupuesto_max") or f.get("presupuesto_estimado")
+        dias_f = _dias(f.get("fecha_captura"))
+        abierto = f["id"] in vistos
         compradores.append({
             "pedido_id": f["id"],
             # Normalizado desde los criterios; el mensaje original solo con el contacto abierto.
@@ -484,7 +545,12 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             if f["id"] in vistos else None,
             "score": puntaje,
             "nivel": "perfecto" if puntaje >= 90 else "encaja" if puntaje >= 75 else "casi",
-            "dias": _dias(f.get("fecha_captura")),
+            "dias": dias_f,
+            "hace": _hace(dias_f),
+            # Por qué abrir ESTE contacto y no otro, en una línea.
+            "porque": _porque(crit, ficha, dias_f, pmax),
+            "accion": "abierto" if abierto else "llave" if f.get("desbloqueable") else "conectar",
+            "grupo": "top" if i < TOP else "vale_la_pena" if _vale_la_pena((puntaje, f, razones, crit)) else "resto",
             "razones": razones,
             "presupuesto_estimado": int(pmax) if pmax else None,
             "presupuesto_legible": format_cop(pmax) if pmax else None,
