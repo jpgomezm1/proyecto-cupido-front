@@ -59,9 +59,21 @@ def _ficha(a: Agente, id_or_slug: str):
     return prop
 
 
+_NOTA_M2 = ("El precio típico es de inmuebles de {area:.0f} m² en promedio: para comparar un inmueble usa el "
+            "m² (su precio ÷ su área contra precio_m2_mediana), nunca su precio total contra este.")
+
+
+def _con_nota_m2(r):
+    """Que el modelo no compare un apto de 95 m² contra el precio típico de aptos de 132 m²."""
+    det = r.get("detalle_oferta", r) if isinstance(r, dict) else {}
+    if isinstance(det, dict) and det.get("area_promedio"):
+        r["comparar_por_m2"] = _NOTA_M2.format(area=det["area_promedio"])
+    return r
+
+
 def _zona(a, ciudad=None, zona=None, tipo_propiedad=None, tipo_negocio="Venta"):
     from src.services import market_service as ms
-    return ms.get_zone_stats(ciudad, zona, tipo_propiedad, tipo_negocio)
+    return _con_nota_m2(ms.get_zone_stats(ciudad, zona, tipo_propiedad, tipo_negocio))
 
 
 def _demanda(a, ciudad=None, zona=None, tipo_propiedad=None, dias=90):
@@ -71,7 +83,7 @@ def _demanda(a, ciudad=None, zona=None, tipo_propiedad=None, dias=90):
 
 def _balance(a, ciudad=None, zona=None, tipo_propiedad=None, tipo_negocio="Venta", dias=90):
     from src.services import market_service as ms
-    return ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias)
+    return _con_nota_m2(ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias))
 
 
 def _por_precio(a, ciudad=None, zona=None, tipo_propiedad="apartamento", dias=120):
