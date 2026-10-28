@@ -157,12 +157,12 @@ def programa_preanalisis(pregunta: str, zona: Optional[str], balance: Optional[D
         estado = {"caliente": "está caliente: hay más compradores que oferta",
                   "equilibrado": "está equilibrada",
                   "frio": "está fría: sobra oferta"}.get(balance.get("clasificacion"), "")
-        bloques.append(_llamada("Texto", f"**{zona} {estado}.** Esto es lo que Fynder ve hoy; si quieres el "
-                                         f"análisis completo (precio, comparables, dónde está el hueco), pídemelo abajo."))
-        cifras = [{"valor": f"{oferta}", "etiqueta": "en venta hoy"},
+        bloques.append(_llamada("Texto", f"**{zona} {estado}** en apartamentos. Esto es lo que Fynder ve hoy; si quieres "
+                                         f"el análisis completo (precio, comparables, dónde está el hueco), pídemelo abajo."))
+        cifras = [{"valor": f"{oferta}", "etiqueta": "apartamentos en venta hoy"},
                   {"valor": f"{balance.get('demanda_total', 0)}", "etiqueta": "compradores", "detalle": "últimos 90 días"}]
         if det.get("precio_m2_mediana"):
-            cifras.append({"valor": f"${det['precio_m2_mediana'] / 1e6:.1f} M".replace(".", ","), "etiqueta": "el m²"})
+            cifras.append({"valor": f"${det['precio_m2_mediana'] / 1e6:.1f} M".replace(".", ","), "etiqueta": "el m² de apartamento"})
         if det.get("dias_inventario_promedio"):
             cifras.append({"valor": f"{round(det['dias_inventario_promedio'])} días", "etiqueta": "en venta, en promedio"})
         bloques.append(_llamada("Cifras", cifras))

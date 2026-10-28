@@ -34,8 +34,8 @@ def test_preanalisis_con_zona_trae_cifras():
     balance = {"oferta_inventario": 336, "demanda_total": 73, "clasificacion": "frio",
                "detalle_oferta": {"precio_m2_mediana": 7_307_692, "dias_inventario_promedio": 148.5}}
     p = ui.programa_preanalisis("¿Cómo está Laureles?", "Laureles", balance)
-    assert "**Laureles está fría: sobra oferta.**" in p
-    assert '{valor: "336", etiqueta: "en venta hoy"}' in p and '"$7,3 M"' in p and '"148 días"' in p
+    assert "**Laureles está fría: sobra oferta** en apartamentos." in p
+    assert '{valor: "336", etiqueta: "apartamentos en venta hoy"}' in p and '"$7,3 M"' in p and '"148 días"' in p
 
 
 def test_compradores_destacados_y_plegados():

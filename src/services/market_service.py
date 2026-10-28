@@ -12,6 +12,8 @@ conexión.
 """
 
 import copy
+import json
+import os
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -46,25 +48,56 @@ def _location_filter(ciudad: Optional[str], zona: Optional[str],
 
 
 # La misma foto durante unos minutos: el pre-análisis, el análisis y «¿dónde capto?» de una misma
-# conversación no deben decir 337 y luego 336 porque el inventario cambió entre consultas.
+# conversación no deben decir 337 y luego 336 porque el inventario cambió entre consultas. Va en
+# Redis para que la compartan los procesos de gunicorn; sin Redis, en la memoria del proceso.
 CACHE_SEGUNDOS = 600
-_CACHE: Dict[tuple, tuple] = {}
+_CACHE: Dict[str, tuple] = {}
 _CACHE_LOCK = threading.Lock()
+_REDIS: Any = None
+
+
+def _redis():
+    global _REDIS
+    if _REDIS is None:
+        url = os.getenv("REDIS_URL")
+        try:
+            import redis
+            _REDIS = (redis.from_url(url, ssl_cert_reqs=None, socket_timeout=1) if url.startswith("rediss://")
+                      else redis.from_url(url, socket_timeout=1)) if url else False
+        except Exception:  # noqa: BLE001 — sin Redis, caché en memoria
+            _REDIS = False
+    return _REDIS
 
 
 def _foto(fn: Callable) -> Callable:
     def envuelta(cur, *args, **kwargs):
-        clave = (fn.__name__, tuple(str(a).strip().lower() if isinstance(a, str) else a for a in args),
-                 tuple(sorted((k, str(v).strip().lower() if isinstance(v, str) else v) for k, v in kwargs.items())))
-        with _CACHE_LOCK:
-            hit = _CACHE.get(clave)
-            if hit and time.time() - hit[0] < CACHE_SEGUNDOS:
-                return copy.deepcopy(hit[1])
+        norm = lambda v: v.strip().lower() if isinstance(v, str) else v  # noqa: E731
+        clave = "fynder:mercado:" + json.dumps([fn.__name__, [norm(a) for a in args],
+                                                sorted((k, norm(v)) for k, v in kwargs.items())], default=str)
+        r = _redis()
+        if r:
+            try:
+                hit = r.get(clave)
+                if hit:
+                    return json.loads(hit)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            with _CACHE_LOCK:
+                hit = _CACHE.get(clave)
+                if hit and time.time() - hit[0] < CACHE_SEGUNDOS:
+                    return copy.deepcopy(hit[1])
         valor = fn(cur, *args, **kwargs)
-        with _CACHE_LOCK:
-            if len(_CACHE) > 500:
-                _CACHE.clear()
-            _CACHE[clave] = (time.time(), copy.deepcopy(valor))
+        if r:
+            try:
+                r.set(clave, json.dumps(valor, default=float), ex=CACHE_SEGUNDOS)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            with _CACHE_LOCK:
+                if len(_CACHE) > 500:
+                    _CACHE.clear()
+                _CACHE[clave] = (time.time(), copy.deepcopy(valor))
         return valor
     envuelta.__name__ = fn.__name__
     envuelta.__doc__ = fn.__doc__
