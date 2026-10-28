@@ -262,6 +262,19 @@ def segmentos_precio(cur, ciudad: Optional[str], zona: Optional[str],
     return out
 
 
+def _clave_municipio(t: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", t or "")
+    return "".join(c for c in t if not unicodedata.combining(c)).lower().strip()
+
+
+_MUNICIPIOS_CLAVE = {_clave_municipio(m) for m in (
+    "Medellín", "Envigado", "Sabaneta", "Itagüí", "La Estrella", "Bello", "Copacabana", "Girardota", "Caldas",
+    "Rionegro", "El Retiro", "La Ceja", "Guarne", "Marinilla", "El Carmen de Viboral", "La Unión",
+    "El Santuario", "San Vicente", "Guatapé", "El Peñol", "Santa Fe de Antioquia", "San Jerónimo",
+    "Sopetrán", "Barbosa", "Amagá")}
+
+
 def donde_captar(cur, ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
                  dias: int = 90, top: int = 8) -> Dict[str, Any]:
     """
@@ -302,7 +315,6 @@ def donde_captar(cur, ciudad: Optional[str] = None, tipo_propiedad: str = "apart
     # Palabras que delatan una `zona` mal cargada (ej. "apartamento en el poblado").
     _BASURA = ("apartamento", "apartaestudio", "casa", "apto", "venta", "arriendo", "local", "oficina")
 
-    tipo_like = like_param(tipo_propiedad)
     oportunidades = []
     for lg in lugares:
         key = (lg["key"] or "").strip()
@@ -311,13 +323,15 @@ def donde_captar(cur, ciudad: Optional[str] = None, tipo_propiedad: str = "apart
         if any(b in key for b in _BASURA):
             continue
         term = f"%{key}%"
-        # Oferta: propiedades cuyo barrio O municipio coincide con el lugar.
-        of = fetch_one(cur, f"""
-            SELECT COUNT(*) AS n FROM propiedades p
-            WHERE p.activa AND p.tipo_negocio='Venta'
-              AND {accent_insensitive_expr('p.tipo_propiedad')} LIKE %s
-              AND ({ciudadn} LIKE %s OR {zonan} LIKE %s)
-        """, (tipo_like, term, term)) or {}
+        # Oferta: la MISMA cuenta que oferta_zona (catálogo de barrios y municipios, facetas), para que
+        # «¿cómo está Laureles?» y «¿dónde capto?» no se contradigan. Antes era texto libre de p.zona y
+        # dejaba fuera la mitad del inventario: la zona salía «caliente» cuando estaba fría.
+        etiqueta = (lg.get("label") or key).strip()
+        es_municipio = key in _MUNICIPIOS_CLAVE
+        conds, ps = _location_filter(etiqueta if es_municipio else None, None if es_municipio else etiqueta,
+                                     tipo_propiedad, "Venta")
+        of = fetch_one(cur, f"SELECT COUNT(*) AS n FROM propiedades p {facetas.JOIN} WHERE {' AND '.join(conds)}",
+                       ps) or {}
         oferta = int(of.get("n") or 0)
         dem = fetch_one(cur, f"""
             SELECT COUNT(*) AS n FROM pedidos

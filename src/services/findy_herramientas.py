@@ -110,9 +110,37 @@ def _comparar(a, property_ids: List[str]):
 def _estimar(a, ciudad=None, zona=None, tipo_propiedad=None, area_construida=None, habitaciones=None,
              tipo_negocio="Venta"):
     from src.services import property_service as ps
-    return ps.estimate_price_public(ciudad=ciudad, zona=zona, tipo_propiedad=tipo_propiedad,
-                                    area_construida=area_construida, habitaciones=habitaciones,
-                                    tipo_negocio=tipo_negocio)
+    r = ps.estimate_price_public(ciudad=ciudad, zona=zona, tipo_propiedad=tipo_propiedad,
+                                 area_construida=area_construida, habitaciones=habitaciones,
+                                 tipo_negocio=tipo_negocio)
+    # Comparables que respaldan ESTE número: misma zona, área parecida y m² cercano al típico. Sin esto el
+    # modelo buscaba aparte y mostraba inmuebles más caros que el rango sugerido (y de otras zonas).
+    if isinstance(r, dict) and area_construida and r.get("precio_m2_mediana"):
+        try:
+            r["comparables"] = _comparables_de_estimado(ciudad, zona, tipo_propiedad, tipo_negocio,
+                                                        float(area_construida), float(r["precio_m2_mediana"]))
+        except Exception:  # noqa: BLE001 — sin comparables, el estimado sirve igual
+            r["comparables"] = []
+    return r
+
+
+def _comparables_de_estimado(ciudad, zona, tipo, negocio, area: float, m2: float, n: int = 4):
+    from src.services import facetas
+    from src.services.db import fetch_all, get_db
+    from src.services.market_service import _location_filter
+    conds, ps_ = _location_filter(ciudad, zona, tipo, negocio)
+    conds += ["x.area BETWEEN %s AND %s"]
+    ps_ += [area * 0.85, area * 1.15]
+    with get_db() as db:
+        filas = fetch_all(db.cursor, f"""
+            SELECT p.id, p.precio, x.area AS area, x.barrio AS barrio
+            FROM propiedades p {facetas.JOIN}
+            WHERE {' AND '.join(conds)}
+            ORDER BY ABS(p.precio / NULLIF(x.area, 0) - %s), p.fecha_ultima_validacion DESC NULLS LAST
+            LIMIT %s
+        """, ps_ + [m2, n])
+    return [{"id": f["id"], "precio_legible": f"${int(f['precio']) / 1e6:,.0f} millones".replace(",", "."),
+             "area_m2": float(f["area"]) if f["area"] else None, "barrio": f["barrio"]} for f in filas]
 
 
 def _diagnostico(a, property_id: str):
@@ -223,7 +251,9 @@ HERRAMIENTAS: List[Dict[str, Any]] = [
        "Por zona, oferta activa contra compradores: dónde hay más demanda que inventario (dónde conviene captar).",
        {"ciudad": _ZONA["ciudad"], "tipo_propiedad": _ZONA["tipo_propiedad"], "dias": _I}),
     _h("estimar_precio", _estimar,
-       "Precio de captación sugerido para un inmueble (precio/m² mediano de comparables × área) y su rango.",
+       "Precio de captación sugerido para un inmueble (precio/m² mediano de comparables × área) y su rango. "
+       "Con el área, trae `comparables`: los ids de inmuebles de la zona que respaldan ese número (úsalos en "
+       "Inmuebles; no busques otros).",
        {**_ZONA, "area_construida": _N, "habitaciones": _I, "tipo_negocio": {**_S, "enum": ["Venta", "Arriendo"]}}),
     _h("comparables", _comparables, "Los comparables de mercado de un inmueble de Fynder.",
        {**_PID, "limit": _I}, ["property_id"]),
