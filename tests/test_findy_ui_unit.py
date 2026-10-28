@@ -45,6 +45,10 @@ def test_preanalisis_con_espejo_de_precios():
     p = ui.programa_preanalisis("¿Cómo está Laureles?", "Laureles", balance, rangos)
     assert 'Espejo("En Laureles, el rango con más compradores por apartamento: Menos de $500 M"' in p
     assert "Más de $3.000" not in p and '{etiqueta: "$500 M a $800 M", izq: 122, der: 27}' in p
+    hueco = ui.programa_preanalisis("¿Cómo está Envigado?", "Envigado", balance,
+                                    [{"rango": "$500M a $800M", "oferta": 321, "demanda": 74},
+                                     {"rango": "$1.800M a $3.000M", "oferta": 34, "demanda": 47}])
+    assert "En Envigado hay más compradores que apartamentos en venta en el rango $1.800 M a $3.000 M" in hueco
 
 
 def test_compradores_destacados_y_plegados():

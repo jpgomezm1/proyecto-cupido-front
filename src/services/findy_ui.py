@@ -182,7 +182,11 @@ def _espejo_precios(zona: str, rangos: List[Dict[str, Any]]) -> Optional[str]:
     con_oferta = [r for r in filas if (r.get("oferta") or 0) >= 5] or filas
     mejor = max(con_oferta, key=lambda r: (r.get("demanda") or 0) / max(r.get("oferta") or 0, 1))
     etiqueta = lambda t: re.sub(r"(\d)M\b", r"\1 M", t)  # noqa: E731 — «$500M» → «$500 M»
-    return _llamada("Espejo", f"En {zona}, el rango con más compradores por apartamento: {etiqueta(mejor['rango'])}",
+    rango = etiqueta(mejor["rango"])
+    titulo = (f"En {zona} hay más compradores que apartamentos en venta en el rango {rango}"
+              if (mejor.get("demanda") or 0) > (mejor.get("oferta") or 0)
+              else f"En {zona}, el rango con más compradores por apartamento: {rango}")
+    return _llamada("Espejo", titulo,
                     "En venta", "Compradores",
                     [{"etiqueta": etiqueta(r["rango"]), "izq": r.get("oferta") or 0, "der": r.get("demanda") or 0} for r in filas],
                     "En venta hoy contra pedidos de los últimos 90 días, por presupuesto")
