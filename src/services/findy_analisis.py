@@ -90,7 +90,7 @@ noticia; Espejo si hay un rango de precio con hueco; Barras con el mix de habita
   · "¿A cuánto capto/vendo?" → RangoPrecio + Inmuebles comparables. Sin Termometro.
   · "¿Dónde capto?" → Barras ranking de zonas + Aviso con la mejor.
   · "¿Por qué no se vende?" → Hallazgos priorizados.
-  · "¿Quién busca…?" → Compradores (o Dona con lo que piden).
+  · "¿Quién busca…?" → Compradores con pedido, porque, hace, nivel y accion de la herramienta (o Dona con lo que piden).
 - No repitas en la conversación una gráfica que ya mostraste con los mismos datos: si el agente pregunta algo \
 que sigue, muestra lo NUEVO (la diferencia, la comparación, el siguiente paso).
 - Espejo (oferta vs demanda por precio) SOLO con los datos de `oferta_demanda_por_precio`; nunca con cuartiles \

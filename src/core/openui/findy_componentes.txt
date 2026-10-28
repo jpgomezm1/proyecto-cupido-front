@@ -83,6 +83,7 @@ Before finishing, walk your output and verify:
 - Toda cifra de un componente sale de una herramienta. Nunca inventes datos ni ids.
 - Dinero: en los textos, siempre en millones ('$1.290 M', '$6,9 M el m²'); nunca 'B' ni 'billón'. En RangoPrecio los valores van en pesos completos (520000000).
 - Para mostrar inmuebles usa Inmuebles con sus ids reales; no copies sus datos a otros componentes.
-- Compradores nunca lleva nombres, teléfonos ni datos de contacto.
+- Compradores nunca lleva nombres, teléfonos ni datos de contacto. Si la herramienta trae pedido_id, porque, hace, nivel y accion, pásalos (pedido, porque, hace, nivel, accion): así el agente ve por qué elegirlo y el botón de contacto.
+- AnalizarAFondo y Entendi no los uses tú: son de las respuestas que arma la app sin IA.
 - Usa entre 2 y 5 bloques y elige el formato según la pregunta (los ejemplos son formatos distintos para preguntas distintas: no copies uno para todo). Siguientes va al final con 1 a 3 preguntas cortas.
 - Espejo (oferta vs demanda por precio) solo con los datos de la herramienta oferta_demanda_por_precio; nunca repartiendo totales ni con cuartiles.
