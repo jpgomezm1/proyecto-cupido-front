@@ -74,6 +74,16 @@ def _balance(a, ciudad=None, zona=None, tipo_propiedad=None, tipo_negocio="Venta
     return ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias)
 
 
+def _por_precio(a, ciudad=None, zona=None, tipo_propiedad="apartamento", dias=120):
+    from src.services import market_service as ms
+    from src.services.db import get_db
+    with get_db() as db:
+        rangos = ms.segmentos_precio(db.cursor, ciudad, zona, tipo_propiedad or "apartamento", dias)
+    return {"filtro": {"ciudad": ciudad, "zona": zona, "tipo_propiedad": tipo_propiedad, "ventana_dias": dias},
+            "rangos": rangos,
+            "nota": "oferta = inmuebles activos con precio en el rango; demanda = pedidos con presupuesto en el rango"}
+
+
 def _donde_captar(a, ciudad=None, tipo_propiedad="apartamento", dias=90):
     from src.services import market_service as ms
     return ms.donde_captar_public(ciudad, tipo_propiedad, dias)
@@ -204,6 +214,11 @@ HERRAMIENTAS: List[Dict[str, Any]] = [
     _h("balance_zona", _balance,
        "Oferta contra demanda de una zona: compradores por inmueble y si está caliente, equilibrada o fría.",
        {**_ZONA, "tipo_negocio": {**_S, "enum": ["Venta", "Arriendo"]}, "dias": _I}),
+    _h("oferta_demanda_por_precio", _por_precio,
+       "OFERTA contra DEMANDA de una zona por RANGO DE PRECIO (datos reales, no estimados): en qué rango hay "
+       "más compradores que inventario (hueco) y en cuál sobra oferta. Es la ÚNICA fuente válida para un "
+       "gráfico de oferta vs demanda por precio.",
+       {"ciudad": _ZONA["ciudad"], "zona": _ZONA["zona"], "tipo_propiedad": _ZONA["tipo_propiedad"], "dias": _I}),
     _h("donde_captar", _donde_captar,
        "Por zona, oferta activa contra compradores: dónde hay más demanda que inventario (dónde conviene captar).",
        {"ciudad": _ZONA["ciudad"], "tipo_propiedad": _ZONA["tipo_propiedad"], "dias": _I}),

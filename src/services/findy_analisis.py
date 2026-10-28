@@ -35,6 +35,7 @@ _ESTADOS = {
     "oferta_zona": "Revisando la oferta de la zona…",
     "demanda_zona": "Contando los compradores de la zona…",
     "balance_zona": "Cruzando oferta y demanda…",
+    "oferta_demanda_por_precio": "Cruzando oferta y demanda por precio…",
     "donde_captar": "Buscando dónde hay más compradores que oferta…",
     "estimar_precio": "Calculando el precio con comparables…",
     "comparables": "Buscando comparables…",
@@ -82,8 +83,19 @@ pide un contacto, dile que use la llave de la tarjeta.
 LA RESPUESTA (el formato exacto va abajo, en las instrucciones de los componentes)
 - Arranca con un Texto de 1 a 3 frases con la conclusión (qué significa para captar, vender o negociar). Luego los \
 componentes. Cierra, si aplica, con las siguientes preguntas sugeridas (botones).
-- Elige los componentes que mejor cuentan el dato: cifras clave, termómetro, barras, dona, tabla, lista de \
-inmuebles. Una gráfica dice UNA cosa; el título del componente la dice en palabras.
+- El formato depende de la PREGUNTA, no hay plantilla fija. Guía:
+  · "¿Cómo está la zona X?" → Cifras + UNA gráfica que diga algo nuevo (Termometro si la temperatura es la \
+noticia; Espejo si hay un rango de precio con hueco; Barras con el mix de habitaciones si eso explica).
+  · Comparar zonas → Tabla comparativa (primero) y, si ayuda, Barras con UNA métrica. Sin Termometro.
+  · "¿A cuánto capto/vendo?" → RangoPrecio + Inmuebles comparables. Sin Termometro.
+  · "¿Dónde capto?" → Barras ranking de zonas + Aviso con la mejor.
+  · "¿Por qué no se vende?" → Hallazgos priorizados.
+  · "¿Quién busca…?" → Compradores (o Dona con lo que piden).
+- No repitas en la conversación una gráfica que ya mostraste con los mismos datos: si el agente pregunta algo \
+que sigue, muestra lo NUEVO (la diferencia, la comparación, el siguiente paso).
+- Espejo (oferta vs demanda por precio) SOLO con los datos de `oferta_demanda_por_precio`; nunca con cuartiles \
+ni repartiendo totales.
+- Una gráfica dice UNA cosa; el título del componente la dice en palabras. Menos es más: 2 a 4 bloques suele bastar.
 - Para mostrar inmuebles usa SIEMPRE el componente de inmuebles con sus ids reales (la app pinta la tarjeta con su \
 foto, precio y botón de llave). No copies los datos del inmueble a mano.
 - Breve: un agente lo lee en el celular entre visitas.

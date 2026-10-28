@@ -45,13 +45,28 @@ Always write the root = Respuesta(...) statement first so the UI shell appears i
 
 ## Examples
 
-root = Respuesta([intro, cifras, termo, barras, inmuebles, sig])
-intro = Texto("**Belén está caliente**: hay 3,6 compradores por cada apartamento en venta y el m² está por debajo de la mediana de Medellín. Es buen momento para captar ahí.")
-cifras = Cifras([{valor: "3,6", etiqueta: "compradores por apartamento"}, {valor: "$6,4 M", etiqueta: "el m²", detalle: "Medellín: $7,9 M"}, {valor: "16", etiqueta: "apartamentos en venta"}])
+root = Respuesta([intro, cifras, termo, sig])
+intro = Texto("**Belén está caliente**: hay 3,6 compradores por cada apartamento en venta. Es buen momento para captar ahí.")
+cifras = Cifras([{valor: "3,6", etiqueta: "compradores por apartamento"}, {valor: "$6,4 M", etiqueta: "el m²"}, {valor: "16", etiqueta: "apartamentos en venta"}])
 termo = Termometro("Belén está caliente", 3.6, 5, "compradores por apartamento", 1, "Equilibrio")
-barras = Barras("Los más disputados de la zona", [{etiqueta: "Belén", valor: 3.6, texto: "3,6 x 1"}, {etiqueta: "Laureles", valor: 2.5, texto: "2,5 x 1"}], "Compradores por apartamento en venta")
-inmuebles = Inmuebles("Lo que hay en venta en Belén", [7859, 8120, 9034])
-sig = Siguientes(["¿A cuánto capto un apartamento de 80 m² en Belén?", "¿Quién busca en Belén?"])
+sig = Siguientes(["¿A cuánto capto un apartamento de 80 m² en Belén?", "¿En qué precio hay más compradores en Belén?"])
+
+root = Respuesta([intro, tabla, aviso, sig])
+intro = Texto("**Sabaneta rota más rápido**, pero Envigado tiene más compradores con presupuesto alto.")
+tabla = Tabla("Envigado vs. Sabaneta — apartamentos en venta", ["", "Envigado", "Sabaneta"], [["En venta", "210", "95"], ["Compradores (90 días)", "88", "61"], ["El m²", "$6,8 M", "$6,1 M"], ["Días en venta", "120", "96"]], 2)
+aviso = Aviso("En Sabaneta hay 0,64 compradores por apartamento contra 0,42 en Envigado.", "oportunidad")
+sig = Siguientes(["¿En qué rango de precio hay hueco en Sabaneta?"])
+
+root = Respuesta([intro, rango, comparables, sig])
+intro = Texto("Captalo alrededor de **$650 M**: es lo que vale el m² en la zona por 90 m².")
+rango = RangoPrecio("Precio sugerido para 90 m² en Laureles", 650000000, 590000000, 720000000, null, "Con 24 comparables de la zona")
+comparables = Inmuebles("Comparables en venta", [7859, 8120, 9034])
+sig = Siguientes(["¿Cuántos compradores hay para ese precio?"])
+
+root = Respuesta([intro, espejo, sig])
+intro = Texto("**El hueco está entre $500 M y $800 M**: ahí hay más compradores que apartamentos en venta.")
+espejo = Espejo("Oferta vs. demanda por precio — Laureles", "En venta", "Compradores", [{etiqueta: "Menos de $500 M", izq: 40, der: 22}, {etiqueta: "$500 M a $800 M", izq: 95, der: 120}, {etiqueta: "$800 M a $1.200 M", izq: 150, der: 60}])
+sig = Siguientes(["¿Qué hay en venta entre $500 M y $800 M en Laureles?"])
 
 ## Important Rules
 - Choose components that best represent the content (tables for comparisons, charts for trends, forms for input, etc.)
@@ -66,4 +81,5 @@ Before finishing, walk your output and verify:
 - Dinero: en los textos, siempre en millones ('$1.290 M', '$6,9 M el m²'); nunca 'B' ni 'billón'. En RangoPrecio los valores van en pesos completos (520000000).
 - Para mostrar inmuebles usa Inmuebles con sus ids reales; no copies sus datos a otros componentes.
 - Compradores nunca lleva nombres, teléfonos ni datos de contacto.
-- Usa entre 3 y 6 bloques. Siguientes va al final con 1 a 3 preguntas cortas.
+- Usa entre 2 y 5 bloques y elige el formato según la pregunta (los ejemplos son formatos distintos para preguntas distintas: no copies uno para todo). Siguientes va al final con 1 a 3 preguntas cortas.
+- Espejo (oferta vs demanda por precio) solo con los datos de la herramienta oferta_demanda_por_precio; nunca repartiendo totales ni con cuartiles.
