@@ -1332,7 +1332,7 @@ def _responder_preanalisis(db, conversation_id, user_id, user_message, content, 
     buscando, la búsqueda anterior sigue ahí.
     """
     start_time = datetime.now()
-    zona, balance = None, None
+    zona, balance, rangos = None, None, None
     try:
         encontrada = busqueda_v3.zona_en_texto(content)
         if encontrada:
@@ -1340,9 +1340,11 @@ def _responder_preanalisis(db, conversation_id, user_id, user_message, content, 
             zona, es_municipio = encontrada
             balance = market_service.get_supply_demand_balance(
                 zona if es_municipio else None, None if es_municipio else zona, "apartamento")
+            rangos = market_service.segmentos_precio(db.cursor, zona if es_municipio else None,
+                                                     None if es_municipio else zona, "apartamento", 90)
     except Exception as e:  # noqa: BLE001 — sin datos, queda el botón de análisis
         print(f"⚠️ [PREANALISIS] {type(e).__name__}: {e}")
-    ui = findy_ui.programa_preanalisis(content, zona, balance)
+    ui = findy_ui.programa_preanalisis(content, zona, balance, rangos)
     assistant_content = (f"{zona}: {balance['oferta_inventario']} en venta y {balance['demanda_total']} compradores. "
                          "Para el análisis completo, toca «Analizarlo a fondo»."
                          if zona and balance and balance.get('oferta_inventario') else

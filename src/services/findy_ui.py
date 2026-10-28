@@ -12,6 +12,7 @@ esquemas.ts; strings entre comillas dobles con escapes; objetos `{clave: valor}`
 """
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -172,7 +173,23 @@ def programa_compradores(mensaje: str, propiedad: Optional[Dict[str, Any]], comp
 # Pregunta de mercado: lo que se sabe gratis + «Analizarlo a fondo»
 # ─────────────────────────────────────────────────────────────────────────────
 
-def programa_preanalisis(pregunta: str, zona: Optional[str], balance: Optional[Dict[str, Any]]) -> str:
+def _espejo_precios(zona: str, rangos: List[Dict[str, Any]]) -> Optional[str]:
+    """Oferta contra demanda por rango de precio (datos reales, sin IA) con el rango donde más compradores
+    hay por inmueble en venta. Solo los rangos con algo de oferta o de demanda."""
+    filas = [r for r in rangos or [] if (r.get("oferta") or 0) + (r.get("demanda") or 0) > 0]
+    if len(filas) < 2:
+        return None
+    con_oferta = [r for r in filas if (r.get("oferta") or 0) >= 5] or filas
+    mejor = max(con_oferta, key=lambda r: (r.get("demanda") or 0) / max(r.get("oferta") or 0, 1))
+    etiqueta = lambda t: re.sub(r"(\d)M\b", r"\1 M", t)  # noqa: E731 — «$500M» → «$500 M»
+    return _llamada("Espejo", f"En {zona}, el rango con más compradores por apartamento: {etiqueta(mejor['rango'])}",
+                    "En venta", "Compradores",
+                    [{"etiqueta": etiqueta(r["rango"]), "izq": r.get("oferta") or 0, "der": r.get("demanda") or 0} for r in filas],
+                    "En venta hoy contra pedidos de los últimos 90 días, por presupuesto")
+
+
+def programa_preanalisis(pregunta: str, zona: Optional[str], balance: Optional[Dict[str, Any]],
+                         rangos: Optional[List[Dict[str, Any]]] = None) -> str:
     bloques = []
     oferta = (balance or {}).get("oferta_inventario") or 0
     if zona and oferta:
@@ -189,6 +206,9 @@ def programa_preanalisis(pregunta: str, zona: Optional[str], balance: Optional[D
         if det.get("dias_inventario_promedio"):
             cifras.append({"valor": f"{round(det['dias_inventario_promedio'])} días", "etiqueta": "en venta, en promedio"})
         bloques.append(_llamada("Cifras", cifras))
+        espejo = _espejo_precios(zona, rangos or [])
+        if espejo:
+            bloques.append(espejo)
     else:
         bloques.append(_llamada("Texto", "Esta pregunta necesita un análisis de mercado: Findy cruza oferta, "
                                          "demanda y precios y te responde con gráficas."))

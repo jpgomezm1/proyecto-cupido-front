@@ -38,6 +38,15 @@ def test_preanalisis_con_zona_trae_cifras():
     assert '{valor: "336", etiqueta: "apartamentos en venta hoy"}' in p and '"$7,3 M"' in p and '"148 días"' in p
 
 
+def test_preanalisis_con_espejo_de_precios():
+    balance = {"oferta_inventario": 337, "demanda_total": 73, "clasificacion": "frio", "detalle_oferta": {}}
+    rangos = [{"rango": "Menos de $500M", "oferta": 29, "demanda": 15}, {"rango": "$500M a $800M", "oferta": 122, "demanda": 27},
+              {"rango": "$800M a $1.200M", "oferta": 141, "demanda": 19}, {"rango": "Más de $3.000M", "oferta": 0, "demanda": 0}]
+    p = ui.programa_preanalisis("¿Cómo está Laureles?", "Laureles", balance, rangos)
+    assert 'Espejo("En Laureles, el rango con más compradores por apartamento: Menos de $500 M"' in p
+    assert "Más de $3.000" not in p and '{etiqueta: "$500 M a $800 M", izq: 122, der: 27}' in p
+
+
 def test_compradores_destacados_y_plegados():
     def c(i, grupo, accion="conectar"):
         return {"pedido_id": i, "busca": "Apartamento en Laureles", "presupuesto_legible": "$700 millones",
