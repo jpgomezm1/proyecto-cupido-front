@@ -71,26 +71,32 @@ def _con_nota_m2(r):
     return r
 
 
+def _lugar(ciudad, zona):
+    """La zona manda sobre la ciudad (como el pre-análisis y segmentos_precio): «Laureles» con «Medellín»
+    dejaba fuera un aviso con otra ciudad cargada y el análisis decía 336 cuando Findy acababa de decir 337."""
+    return (None, zona) if zona else (ciudad, None)
+
+
 def _zona(a, ciudad=None, zona=None, tipo_propiedad=None, tipo_negocio="Venta"):
     from src.services import market_service as ms
-    return _con_nota_m2(ms.get_zone_stats(ciudad, zona, tipo_propiedad, tipo_negocio))
+    return _con_nota_m2(ms.get_zone_stats(*_lugar(ciudad, zona), tipo_propiedad, tipo_negocio))
 
 
 def _demanda(a, ciudad=None, zona=None, tipo_propiedad=None, dias=90):
     from src.services import market_service as ms
-    return ms.get_demand_stats(ciudad, zona, tipo_propiedad, dias)
+    return ms.get_demand_stats(*_lugar(ciudad, zona), tipo_propiedad, dias)
 
 
 def _balance(a, ciudad=None, zona=None, tipo_propiedad=None, tipo_negocio="Venta", dias=90):
     from src.services import market_service as ms
-    return _con_nota_m2(ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias))
+    return _con_nota_m2(ms.get_supply_demand_balance(*_lugar(ciudad, zona), tipo_propiedad, tipo_negocio, dias))
 
 
 def _por_precio(a, ciudad=None, zona=None, tipo_propiedad="apartamento", dias=120):
     from src.services import market_service as ms
     from src.services.db import get_db
     with get_db() as db:
-        rangos = ms.segmentos_precio(db.cursor, ciudad, zona, tipo_propiedad or "apartamento", dias)
+        rangos = ms.segmentos_precio(db.cursor, *_lugar(ciudad, zona), tipo_propiedad or "apartamento", dias)
     return {"filtro": {"ciudad": ciudad, "zona": zona, "tipo_propiedad": tipo_propiedad, "ventana_dias": dias},
             "rangos": rangos,
             "nota": "oferta = inmuebles activos con precio en el rango; demanda = pedidos con presupuesto en el rango"}
