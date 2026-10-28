@@ -532,12 +532,15 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
 
     # Tamaño y mínimos (0–1, promedio de lo pedido; dato faltante = 0,6)
     partes = []
+    # Lo que pidió más allá de lo que se ve en la tarjeta: sí / no / por confirmar (la publicación no lo dice).
+    requisitos = []
 
     def minimo(valor, req, etq, unidad=""):
         if not req:
             return
         if valor is None:
             partes.append(0.6)
+            requisitos.append({"texto": f"{req:g}+{unidad} {etq}".strip() if etq else f"{req:g}+{unidad}", "estado": "duda"})
         elif float(valor) >= req:
             partes.append(1.0)
             cumple.append(f"{valor:g}{unidad} {etq}" if isinstance(valor, (int, float)) else f"{valor} {etq}")
@@ -545,6 +548,7 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
             falta = (req - float(valor)) / max(req, 1)
             partes.append(max(0.0, 0.6 - falta * 2))
             no_cumple.append(f"{float(valor):g}{unidad} {etq} (pide {req:g})")
+            requisitos.append({"texto": f"{float(valor):g}{unidad} {etq} (pide {req:g})".replace("  ", " "), "estado": "no"})
 
     minimo(p.get("habitaciones"), ped.get("habitaciones_min"), "hab")
     minimo(p.get("banos"), ped.get("banos_min"), "baños")
@@ -554,8 +558,6 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
         partes.append(0.5)
     if ped.get("area_max") and p.get("area") and float(p["area"]) > ped["area_max"] * 1.15:
         partes.append(0.5)
-    # Lo que pidió más allá de las cifras de la tarjeta: sí / no / por confirmar (la publicación no lo dice).
-    requisitos = []
     if ped.get("piso_min") or ped.get("piso_max"):
         p0, p1 = ped.get("piso_min"), ped.get("piso_max")
         etq = f"piso {int(p0)}+" if p0 and not p1 else f"hasta piso {int(p1)}" if p1 and not p0 else f"piso {int(p0)}–{int(p1)}"
@@ -862,6 +864,7 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
             continue
         # Lo que la publicación no trae lo completa la ficha (barrio, habitaciones…).
         f = {**f, "zona": f.get("zona") or x.get("barrio"), "ciudad": f.get("ciudad") or x.get("ciudad"),
+             "tipo_propiedad": f.get("tipo_propiedad") or (x.get("tipo") or "").capitalize() or None,
              "habitaciones": f.get("habitaciones") or x.get("habitaciones"),
              "banos": f.get("banos") or x.get("banos"),
              "area_construida": f.get("area_construida") or x.get("area")}
