@@ -478,9 +478,10 @@ def get_property_by_slug(slug: str):
                 p.titulo as title,
                 p.tipo_propiedad as type,
                 p.precio as price_cop,
-                p.ciudad as city,
-                p.zona as barrio,
-                p.zona as zone,
+                COALESCE(NULLIF(p.ciudad, ''), f.ciudad) as city,
+                -- El portal a veces no trae el barrio: la ficha lo completa (si no, la tarjeta decía solo «Medellín»).
+                COALESCE(NULLIF(p.zona, ''), f.barrio) as barrio,
+                COALESCE(NULLIF(p.zona, ''), f.barrio) as zone,
                 p.area_construida as area_m2,
                 p.habitaciones as bedrooms,
                 p.banos as bathrooms,
@@ -509,6 +510,7 @@ def get_property_by_slug(slug: str):
                 p.fecha_ultima_validacion as verified_at
             FROM propiedades p
             LEFT JOIN agentes a ON a.telefono = p.agente_captador_telefono
+            LEFT JOIN propiedades_ficha f ON f.propiedad_id = p.id
             WHERE (p.codigo_propiedad = %s OR p.id::text = %s) AND p.activa = true
         """
 
