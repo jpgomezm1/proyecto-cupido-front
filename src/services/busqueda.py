@@ -112,6 +112,8 @@ _HERRAMIENTA = {
                         "description": "Estado aceptable si lo pide ('para remodelar', 'para estrenar')."},
             "otras_preferencias": {"type": "array", "items": {"type": "string"},
                                    "description": "Preferencias que no caben en lo anterior, en pocas palabras."},
+            "cantidad": {"type": "integer",
+                         "description": "Cuántas opciones quiere ver, solo si lo dice ('las 5 mejores' = 5, 'dame 3' = 3)."},
         },
         "required": ["es_busqueda", "negocio", "tipos", "moneda", "ubicaciones", "ubicaciones_excluidas",
                      "cerca_de", "edificios_referencia", "obligatorias", "deseables", "estados",
@@ -142,7 +144,11 @@ del vocabulario; "ojalá", "le gusta", "preferible" → deseables.
 - Si hay un pedido anterior y el mensaje lo ajusta ("más barato", "mejor en Envigado", "con balcón"), \
 devuelve el pedido COMPLETO actualizado: conserva lo anterior y cambia solo lo que el mensaje cambia. \
 "Más barato" sin cifra: baja el presupuesto_max un 15 %. Si el mensaje es un pedido nuevo y distinto, \
-ignora el anterior."""
+ignora el anterior.
+- Si hay un pedido anterior y el mensaje habla de los resultados sin cambiar lo que busca ("son muchas", \
+"solo las 5 mejores", "dame menos", "¿por qué esas?"), ES búsqueda (es_busqueda = true): devuelve el \
+pedido anterior COMPLETO y, si dice cuántas, ponlo en cantidad. es_busqueda = false es solo para \
+saludos o preguntas que no tienen nada que ver con buscar inmuebles."""
 
 
 def _llamar(modelo: str, mensajes: List[dict]) -> Dict[str, Any]:
@@ -189,8 +195,10 @@ def _validar(p: Dict[str, Any]) -> Dict[str, Any]:
     for k, lo, hi in (("habitaciones_min", 0, 20), ("habitaciones_max", 0, 20), ("banos_min", 0, 20),
                       ("parqueaderos_min", 0, 20), ("area_min", 5, 100000), ("area_max", 5, 100000),
                       ("piso_min", -2, 80), ("piso_max", -2, 80), ("estrato_min", 1, 6),
-                      ("antiguedad_max_anios", 0, 100)):
+                      ("antiguedad_max_anios", 0, 100), ("cantidad", 1, 30)):
         num(k, lo, hi)
+    if p.get("cantidad"):
+        p["cantidad"] = int(p["cantidad"])
     p["tipos"] = [t for t in p.get("tipos") or [] if t in TIPOS]
     p["obligatorias"] = [c for c in p.get("obligatorias") or [] if c in CARACTERISTICAS]
     p["deseables"] = [d for d in p.get("deseables") or []
@@ -676,6 +684,8 @@ def buscar(texto: str, previo: Optional[Dict[str, Any]] = None, limite: int = 10
         pool.submit(gazetteer)
         ped = _validar(dict(pedido)) if pedido else interpretar(texto, previo)
         vector = f_vec.result()
+    if not pedido and ped.get("cantidad"):  # "solo las 5 mejores"
+        limite = ped["cantidad"]
     if not ped.get("es_busqueda", True):
         return {"pedido": ped, "resultados": [], "tipo": "no_es_busqueda", "ms": 0}
     cands = _candidatos(ped, vector)
@@ -800,6 +810,8 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
         return {"success": False, "error_type": "ai_unavailable", "results": [], "total_found": 0,
                 "criteria": {"pedido_v3": previo} if previo else {}}
     ped = r["pedido"]
+    if r["tipo"] == "no_es_busqueda" and previo:
+        ped = previo  # un mensaje que no es búsqueda no borra lo que el agente ya pidió
     criteria = {**criterios_legibles(ped), "pedido_v3": ped}
     if r["tipo"] == "no_es_busqueda":
         return {"success": True, "results": [], "total_found": 0, "criteria": criteria,

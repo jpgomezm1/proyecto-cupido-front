@@ -29,7 +29,7 @@ def test_el_embudo_lleva_los_pasos_del_servidor_en_orden():
 
 def test_las_misiones_empiezan_por_el_valor_del_producto():
     assert list(lg.MISIONES)[:2] == ["primera_busqueda", "primer_contacto"]
-    assert all(m["url"].startswith("/chat") for m in lg.MISIONES.values())
+    assert all(m["url"].startswith("/app") for m in lg.MISIONES.values())
 
 
 def test_etapa_devuelve_conteos_y_banderas():
