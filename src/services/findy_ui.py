@@ -1,0 +1,173 @@
+"""
+Las respuestas de Findy como programas OpenUI, armados aquí con los datos (sin IA).
+
+Búsqueda, compradores y el pre-análisis se pintan con los mismos componentes que el modo
+Análisis (mvp-tu360/src/lib/openui/): una sola estética. El programa va en
+`search_response.ui`; las filas completas (inmuebles, pedidos) se quedan en `search_response`
+y los componentes las leen del contexto del mensaje por id, así que aquí no se copian datos
+del inmueble ni contactos.
+
+OpenUI Lang: `nombre = Componente(arg1, arg2…)`, argumentos POSICIONALES en el orden de
+esquemas.ts; strings entre comillas dobles con escapes; objetos `{clave: valor}`.
+"""
+
+import json
+from typing import Any, Dict, List, Optional
+
+
+def _v(x: Any) -> str:
+    """Un valor de Python en OpenUI Lang."""
+    if x is None:
+        return "null"
+    if isinstance(x, bool):
+        return "true" if x else "false"
+    if isinstance(x, (int, float)):
+        return str(int(x)) if float(x).is_integer() else str(round(float(x), 2))
+    if isinstance(x, str):
+        return json.dumps(x, ensure_ascii=False)
+    if isinstance(x, (list, tuple)):
+        return "[" + ", ".join(_v(i) for i in x) + "]"
+    if isinstance(x, dict):
+        return "{" + ", ".join(f"{k}: {_v(v)}" for k, v in x.items() if v is not None) + "}"
+    return json.dumps(str(x), ensure_ascii=False)
+
+
+def _llamada(componente: str, *args: Any) -> str:
+    # Los opcionales del final que vienen en None se omiten (OpenUI permite cortar la cola).
+    args_l = list(args)
+    while args_l and args_l[-1] is None:
+        args_l.pop()
+    return f"{componente}({', '.join(_v(a) for a in args_l)})"
+
+
+def _programa(bloques: List[str]) -> str:
+    """root primero (para el streaming) y luego cada bloque con su nombre."""
+    nombres = [f"b{i}" for i in range(len(bloques))]
+    lineas = [f"root = Respuesta([{', '.join(nombres)}])"]
+    lineas += [f"{n} = {b}" for n, b in zip(nombres, bloques)]
+    return "\n".join(lineas)
+
+
+def _millones(v: Optional[float]) -> Optional[str]:
+    if not v:
+        return None
+    m = float(v) / 1e6
+    return f"${m:,.0f} M".replace(",", ".") if m >= 10 else f"${m:.1f} M".replace(".", ",")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Búsqueda de inmuebles
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _siguientes_busqueda(criteria: Dict[str, Any], total: int) -> List[str]:
+    ped = criteria.get("pedido_v3") or {}
+    out = []
+    if total > 5:
+        out.append("Déjame solo las 5 mejores")
+    if ped.get("presupuesto_max"):
+        out.append(f"Súbele el presupuesto a {_millones(ped['presupuesto_max'] * 1.1)}")
+    if ped.get("ubicaciones"):
+        out.append("Busca también en zonas cercanas")
+    return out[:3]
+
+
+def programa_busqueda(mensaje: str, criteria: Dict[str, Any], results: List[Dict[str, Any]],
+                      search_response: Dict[str, Any]) -> str:
+    bloques = [_llamada("Texto", mensaje)]
+    chips = criteria.get("chips") or []
+    if chips:
+        bloques.append(_llamada("Entendi", chips))
+    if search_response.get("relaxation_applied"):
+        bloques.append(_llamada("Aviso", "No encontré exactamente lo que pediste: estas son las opciones más cercanas.", "info"))
+    ids = [r["id"] for r in results if r.get("id")][:10]
+    if ids:
+        titulo = f"{len(ids)} {'inmueble' if len(ids) == 1 else 'inmuebles'} para tu cliente"
+        bloques.append(_llamada("Inmuebles", titulo, ids))
+    elif search_response.get("search_type") != "no_es_busqueda":
+        bloques.append(_llamada("Siguientes", ["Busca también en zonas cercanas", "Súbele el presupuesto un 10 %"]))
+        return _programa(bloques)
+    sig = _siguientes_busqueda(criteria, len(ids))
+    if sig:
+        bloques.append(_llamada("Siguientes", sig))
+    return _programa(bloques)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tengo un inmueble: quién lo busca
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ESPECIFICACIONES = (("area_m2", "{:.0f} m²"), ("habitaciones", "{} hab"), ("banos", "{} baños"), ("parqueaderos", "{} parq"))
+
+
+def _tu_inmueble(p: Dict[str, Any]) -> str:
+    titulo = p.get("titulo") or " en ".join(x for x in [(p.get("tipo") or "Inmueble").capitalize(), p.get("zona")] if x)
+    specs = [f.format(p[k]) for k, f in _ESPECIFICACIONES if p.get(k)]
+    origen = {"wasi": "De Wasi", "lobbie": "De Lobbie", "fynder": "En Fynder", "texto": "Descrito por ti"}.get(p.get("origen"))
+    return _llamada("TuInmueble", titulo, p.get("precio_legible"), specs or None, origen)
+
+
+def _item_comprador(c: Dict[str, Any]) -> Dict[str, Any]:
+    return {"resumen": c["busca"], "presupuesto": c.get("presupuesto_legible"), "encaje": c.get("score"),
+            "pedido": c["pedido_id"], "nivel": c.get("nivel"), "hace": c.get("hace") or None,
+            "porque": c.get("porque") or None, "accion": c.get("accion")}
+
+
+def programa_compradores(mensaje: str, propiedad: Optional[Dict[str, Any]], compradores: List[Dict[str, Any]],
+                         conteos: Optional[Dict[str, int]], total: int) -> str:
+    bloques = [_llamada("Texto", mensaje)]
+    if propiedad:
+        bloques.append(_tu_inmueble(propiedad))
+    if not compradores:
+        bloques.append(_llamada("Siguientes", ["¿A cuánto lo capto?", "¿Cómo está la zona?"]))
+        return _programa(bloques)
+    conteos = conteos or {}
+    bloques.append(_llamada("Cifras", [
+        {"valor": f"{total}", "etiqueta": "pedidos encajan", "detalle": "en los últimos 4 meses"},
+        {"valor": f"{conteos.get('recientes', 0)}", "etiqueta": "del último mes"},
+        {"valor": f"{conteos.get('perfecto', 0)}", "etiqueta": "encajan perfecto"},
+    ]))
+    top = [c for c in compradores if c.get("grupo") == "top"]
+    vale = [c for c in compradores if c.get("grupo") == "vale_la_pena"][:12]
+    bloques.append(_llamada("Compradores", f"Empieza por {'este' if len(top) == 1 else f'estos {len(top)}'}",
+                            [_item_comprador(c) for c in top]))
+    if vale:
+        bloques.append(_llamada("Compradores", "Otro que vale la pena" if len(vale) == 1 else f"Otros {len(vale)} que valen la pena",
+                                [_item_comprador(c) for c in vale], True))
+    if all(c.get("accion") == "conectar" for c in top + vale):
+        bloques.append(_llamada("Aviso", "Quienes hicieron estos pedidos todavía no están en Fynder: toca "
+                                         "«Te conectamos» y el equipo de Fynder te pone en contacto.", "info"))
+    precio = (propiedad or {}).get("precio")
+    sig = []
+    if precio:
+        sig.append(f"¿Y si lo bajo a {_millones(precio * 0.93)}?")
+    sig += ["¿A cuánto lo capto?", "¿Cómo está la zona?"]
+    bloques.append(_llamada("Siguientes", sig[:3]))
+    return _programa(bloques)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pregunta de mercado: lo que se sabe gratis + «Analizarlo a fondo»
+# ─────────────────────────────────────────────────────────────────────────────
+
+def programa_preanalisis(pregunta: str, zona: Optional[str], balance: Optional[Dict[str, Any]]) -> str:
+    bloques = []
+    oferta = (balance or {}).get("oferta_inventario") or 0
+    if zona and oferta:
+        det = balance.get("detalle_oferta") or {}
+        estado = {"caliente": "está caliente: hay más compradores que oferta",
+                  "equilibrado": "está equilibrada",
+                  "frio": "está fría: sobra oferta"}.get(balance.get("clasificacion"), "")
+        bloques.append(_llamada("Texto", f"**{zona} {estado}.** Esto es lo que Fynder ve hoy; si quieres el "
+                                         f"análisis completo (precio, comparables, dónde está el hueco), pídemelo abajo."))
+        cifras = [{"valor": f"{oferta}", "etiqueta": "en venta hoy"},
+                  {"valor": f"{balance.get('demanda_total', 0)}", "etiqueta": "compradores", "detalle": "últimos 90 días"}]
+        if det.get("precio_m2_mediana"):
+            cifras.append({"valor": f"${det['precio_m2_mediana'] / 1e6:.1f} M".replace(".", ","), "etiqueta": "el m²"})
+        if det.get("dias_inventario_promedio"):
+            cifras.append({"valor": f"{round(det['dias_inventario_promedio'])} días", "etiqueta": "en venta, en promedio"})
+        bloques.append(_llamada("Cifras", cifras))
+    else:
+        bloques.append(_llamada("Texto", "Esta pregunta necesita un análisis de mercado: Findy cruza oferta, "
+                                         "demanda y precios y te responde con gráficas."))
+    bloques.append(_llamada("AnalizarAFondo", pregunta))
+    return _programa(bloques)

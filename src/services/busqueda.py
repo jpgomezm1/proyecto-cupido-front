@@ -30,7 +30,7 @@ import re
 import threading
 import time
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -274,6 +274,7 @@ class Gazetteer:
                 WHERE p.activa
             """)
         puntos = defaultdict(list)
+        nombres: Dict[str, Counter] = defaultdict(Counter)   # clave → cómo se escribe en los datos
         self.municipios: Dict[str, str] = {_clave(m): m for m in MUNICIPIOS}
         self.municipios["itagui"] = "Itagüí"
         for r in filas:
@@ -281,6 +282,8 @@ class Gazetteer:
                 k = _clave(nombre)
                 if k and r["lat"] and r["lng"]:
                     puntos[k].append((float(r["lat"]), float(r["lng"])))
+                    nombres[k][nombre.strip()] += 1
+        self.etiquetas = {k: c.most_common(1)[0][0] for k, c in nombres.items()}
         self.centros: Dict[str, Tuple[float, float]] = {}
         for k, ps in puntos.items():
             if len(ps) < 2:
@@ -324,6 +327,19 @@ class Gazetteer:
             if len(c) >= 5 and (c in k or k in c):
                 return v
         return self.resolver(nombre).get("centro")
+
+
+def zona_en_texto(texto: str) -> Optional[Tuple[str, bool]]:
+    """La zona que nombra un texto libre («¿cómo está Laureles?») → (nombre, es_municipio), sin IA.
+    Un barrio gana sobre el municipio («Laureles, Medellín» → Laureles); entre barrios, el más largo."""
+    t = f" {_plano(texto)} "
+    g = gazetteer()
+    barrios = [k for k in g.centros if len(k) >= 4 and k not in g.municipios and f" {k} " in t]
+    if barrios:
+        k = max(barrios, key=len)
+        return g.etiquetas.get(k, k.title()), False
+    munis = [k for k in g.municipios if f" {k} " in t]
+    return (g.municipios[max(munis, key=len)], True) if munis else None
 
 
 _GAZ: Optional[Gazetteer] = None

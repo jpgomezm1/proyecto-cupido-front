@@ -5,7 +5,7 @@ API Blueprint para Conversaciones de Búsqueda
 Sistema de conversaciones persistentes tipo ChatGPT
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, g, request, jsonify
 from datetime import datetime
 import traceback
 import json
@@ -18,6 +18,7 @@ from src.core.search_config import normalizar_texto_busqueda
 from src.api.chat_auth import require_chat_auth, get_current_user
 from src.api.access import sin_contacto, uso_justo
 from src.services import compradores_service as compradores
+from src.services import findy_intencion, findy_ui
 
 # v2.4: Nuevos módulos para sistema de fases
 from src.core.search_state import (
@@ -840,8 +841,19 @@ def send_message(conversation_id):
             # =================================================================
             # Búsqueda inversa: "tengo este inmueble, ¿quién lo busca?"
             # =================================================================
+            # Una sola barra: sin modo, Findy decide (reglas → modo anterior → Haiku). Un modo
+            # explícito (las opciones, «Cambiar a…») se respeta.
             modo = str(data.get('modo') or '').strip().lower()
-            if modo == 'compradores' or (modo != 'propiedades' and compradores.es_entrada_de_inmueble(content)):
+            if modo in ('propiedades', 'compradores', 'analisis'):
+                razon_modo = 'elegido'
+            else:
+                modo, razon_modo = findy_intencion.clasificar(content, _modo_previo(db, conversation_id))
+            g.findy_intencion = {'modo': modo, 'razon': razon_modo}
+            print(f"🧭 [INTENCION] {modo} ({razon_modo})")
+            if modo == 'analisis':
+                return _responder_preanalisis(db, conversation_id, user_id, user_message, content,
+                                              conv_nombre, total_mensajes)
+            if modo == 'compradores':
                 return _responder_compradores(
                     db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes,
                     prev_criteria if (prev_criteria or {}).get('modo') == 'compradores' else None
@@ -1299,6 +1311,65 @@ def _frase_mejor(c):
     return f"El mejor {nivel}{cuando}."
 
 
+def _modo_previo(db, conversation_id):
+    """El modo de la última respuesta de Findy en la conversación (None si es la primera)."""
+    db.cursor.execute(
+        """SELECT search_response->>'modo' AS modo FROM mensajes_conversacion
+           WHERE conversacion_id = %s AND role = 'assistant' AND search_response IS NOT NULL
+           ORDER BY id DESC LIMIT 1""", (conversation_id,))
+    fila = db.cursor.fetchone()
+    if not fila:
+        return None
+    modo = fila['modo'] if isinstance(fila, dict) else fila[0]
+    return modo or 'propiedades'   # las respuestas de búsqueda viejas no guardaban el modo
+
+
+def _responder_preanalisis(db, conversation_id, user_id, user_message, content, conv_nombre, total_mensajes):
+    """
+    Una pregunta de mercado desde la barra única: lo que Fynder sabe gratis (oferta y demanda de la
+    zona, sin IA) y el botón «Analizarlo a fondo», que es el que gasta 1 análisis del cupo. Nunca se
+    gasta cupo sin que el agente lo pida. No toca los criterios de la conversación: si después sigue
+    buscando, la búsqueda anterior sigue ahí.
+    """
+    start_time = datetime.now()
+    zona, balance = None, None
+    try:
+        encontrada = busqueda_v3.zona_en_texto(content)
+        if encontrada:
+            from src.services import market_service
+            zona, es_municipio = encontrada
+            balance = market_service.get_supply_demand_balance(
+                zona if es_municipio else None, None if es_municipio else zona, "apartamento")
+    except Exception as e:  # noqa: BLE001 — sin datos, queda el botón de análisis
+        print(f"⚠️ [PREANALISIS] {type(e).__name__}: {e}")
+    ui = findy_ui.programa_preanalisis(content, zona, balance)
+    assistant_content = (f"{zona}: {balance['oferta_inventario']} en venta y {balance['demanda_total']} compradores. "
+                         "Para el análisis completo, toca «Analizarlo a fondo»."
+                         if zona and balance and balance.get('oferta_inventario') else
+                         "Esta pregunta necesita un análisis de mercado: toca «Analizarlo a fondo».")
+    search_response = {'modo': 'preanalisis', 'intencion': getattr(g, 'findy_intencion', None), 'ui': ui,
+                       'pregunta': content, 'zona': zona, 'results': [], 'criteria': {}, 'total_found': 0}
+    elapsed_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+    db.cursor.execute(
+        """INSERT INTO mensajes_conversacion
+           (conversacion_id, role, content, total_resultados, tiempo_respuesta_ms, search_response)
+           VALUES (%s, 'assistant', %s, 0, %s, %s) RETURNING id, fecha_creacion""",
+        (conversation_id, assistant_content, elapsed_ms, json.dumps(search_response, default=str)))
+    fila = db.cursor.fetchone()
+    db.cursor.execute("UPDATE conversaciones_busqueda SET fecha_actualizacion = NOW() WHERE id = %s",
+                      (conversation_id,))
+    if total_mensajes == 0 and conv_nombre == 'Nueva Conversación':
+        db.cursor.execute("UPDATE conversaciones_busqueda SET nombre = %s WHERE id = %s",
+                          (content[:60], conversation_id))
+    db.conn.commit()
+    msg_id = fila['id'] if isinstance(fila, dict) else fila[0]
+    fecha = fila['fecha_creacion'] if isinstance(fila, dict) else fila[1]
+    return jsonify({'success': True, 'data': {'user_message': user_message, 'assistant_message': {
+        'id': msg_id, 'role': 'assistant', 'content': assistant_content, 'total_resultados': 0,
+        'tiempo_respuesta_ms': elapsed_ms, 'fecha_creacion': fecha.isoformat() if fecha else None,
+        'search_response': search_response}}})
+
+
 def _cambios_ficha(antes, ahora):
     """Qué cambió entre dos fichas, en palabras: ['$590 millones', '2 habitaciones']."""
     out = []
@@ -1356,9 +1427,15 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
             'total_found': total,
             'compradores': lista,
             'conteos': res.get('conteos'),
+            'intencion': getattr(g, 'findy_intencion', None),
             'error_type': None,
             'mensaje_error': None,
         }
+        try:
+            search_response['ui'] = findy_ui.programa_compradores(
+                assistant_content, search_response['propiedad'], lista, res.get('conteos'), total)
+        except Exception as e:  # noqa: BLE001 — sin programa, el frontend pinta la vista de siempre
+            print(f"⚠️ [FINDY-UI] compradores: {e}")
     else:
         total = 0
         error_type = resuelto.get('error_type') or 'datos_insuficientes'
@@ -1617,7 +1694,15 @@ def _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
 
     # Guardar mensaje del asistente
     # v2.11: Incluir search_type, relaxation_applied, alignment_info
+    ui = None
+    if accumulated_criteria.get('pedido_v3') is not None or search_response.get('search_type') == 'no_es_busqueda':
+        try:
+            ui = findy_ui.programa_busqueda(assistant_content, accumulated_criteria, results, search_response)
+        except Exception as e:  # noqa: BLE001 — sin programa, el frontend pinta la vista de siempre
+            print(f"⚠️ [FINDY-UI] búsqueda: {e}")
+    extra_ui = {'modo': 'propiedades', 'intencion': getattr(g, 'findy_intencion', None), 'ui': ui}
     search_response_json = json.dumps({
+        **extra_ui,
         'criteria': accumulated_criteria,
         'results': results,
         'total_found': total_found,
@@ -1683,6 +1768,7 @@ def _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
 
     # v2.11: Build search_response with relaxation metadata
     search_response_for_frontend = {
+        **extra_ui,
         'criteria': accumulated_criteria,
         'results': results,
         'total_found': total_found,

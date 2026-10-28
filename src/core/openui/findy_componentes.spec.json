@@ -2,12 +2,24 @@
   "root": "Respuesta",
   "components": {
     "Respuesta": {
-      "signature": "Respuesta(bloques: (Texto | Cifras | Termometro | Barras | Espejo | Dona | RangoPrecio | Tabla | Inmuebles | Compradores | Hallazgos | Aviso | Siguientes)[])",
+      "signature": "Respuesta(bloques: (Texto | Entendi | TuInmueble | AnalizarAFondo | Cifras | Termometro | Barras | Espejo | Dona | RangoPrecio | Tabla | Inmuebles | Compradores | Hallazgos | Aviso | Siguientes)[])",
       "description": "La raíz: los bloques de la respuesta, en orden de lectura."
     },
     "Texto": {
       "signature": "Texto(texto: string)",
       "description": "Un párrafo corto. El primero de la respuesta lleva la conclusión (qué significa para captar, vender o negociar)."
+    },
+    "Entendi": {
+      "signature": "Entendi(chips: string[])",
+      "description": "Lo que Findy entendió del pedido, como chips. Lo arma el backend en las búsquedas."
+    },
+    "TuInmueble": {
+      "signature": "TuInmueble(titulo: string, precio?: string, specs?: string[], origen?: string)",
+      "description": "El inmueble del agente (al que se le buscan compradores), en una ficha corta."
+    },
+    "AnalizarAFondo": {
+      "signature": "AnalizarAFondo(pregunta: string)",
+      "description": "Botón para hacer el análisis completo de una pregunta (gasta 1 análisis). Solo en respuestas sin IA."
     },
     "Cifras": {
       "signature": "Cifras(items: {valor: string, etiqueta: string, detalle?: string}[])",
@@ -42,8 +54,8 @@
       "description": "Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids."
     },
     "Compradores": {
-      "signature": "Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[]}[])",
-      "description": "Lista de pedidos de compradores que encajan, sin datos personales."
+      "signature": "Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[], pedido?: number, nivel?: \"perfecto\" | \"encaja\" | \"casi\", hace?: string, porque?: string, accion?: \"llave\" | \"conectar\" | \"abierto\"}[], plegado?: boolean)",
+      "description": "Pedidos de compradores que encajan, sin datos personales: con pedido y porque se ve el botón de contacto y la razón para elegirlo."
     },
     "Hallazgos": {
       "signature": "Hallazgos(titulo: string, items: {prioridad: \"alta\" | \"media\" | \"baja\", titulo: string, accion: string}[])",
@@ -67,6 +79,15 @@
       },
       "Texto": {
         "$ref": "#/$defs/Texto"
+      },
+      "Entendi": {
+        "$ref": "#/$defs/Entendi"
+      },
+      "TuInmueble": {
+        "$ref": "#/$defs/TuInmueble"
+      },
+      "AnalizarAFondo": {
+        "$ref": "#/$defs/AnalizarAFondo"
       },
       "Cifras": {
         "$ref": "#/$defs/Cifras"
@@ -108,6 +129,9 @@
     "required": [
       "Respuesta",
       "Texto",
+      "Entendi",
+      "TuInmueble",
+      "AnalizarAFondo",
       "Cifras",
       "Termometro",
       "Barras",
@@ -132,6 +156,15 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/Texto"
+                },
+                {
+                  "$ref": "#/$defs/Entendi"
+                },
+                {
+                  "$ref": "#/$defs/TuInmueble"
+                },
+                {
+                  "$ref": "#/$defs/AnalizarAFondo"
                 },
                 {
                   "$ref": "#/$defs/Cifras"
@@ -193,6 +226,63 @@
         "additionalProperties": false,
         "id": "Texto",
         "description": "Un párrafo corto. El primero de la respuesta lleva la conclusión (qué significa para captar, vender o negociar)."
+      },
+      "Entendi": {
+        "type": "object",
+        "properties": {
+          "chips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "chips"
+        ],
+        "additionalProperties": false,
+        "id": "Entendi",
+        "description": "Lo que Findy entendió del pedido, como chips. Lo arma el backend en las búsquedas."
+      },
+      "TuInmueble": {
+        "type": "object",
+        "properties": {
+          "titulo": {
+            "type": "string"
+          },
+          "precio": {
+            "type": "string"
+          },
+          "specs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "origen": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "titulo"
+        ],
+        "additionalProperties": false,
+        "id": "TuInmueble",
+        "description": "El inmueble del agente (al que se le buscan compradores), en una ficha corta."
+      },
+      "AnalizarAFondo": {
+        "type": "object",
+        "properties": {
+          "pregunta": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pregunta"
+        ],
+        "additionalProperties": false,
+        "id": "AnalizarAFondo",
+        "description": "Botón para hacer el análisis completo de una pregunta (gasta 1 análisis). Solo en respuestas sin IA."
       },
       "Cifras": {
         "type": "object",
@@ -504,6 +594,31 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "pedido": {
+                  "type": "number"
+                },
+                "nivel": {
+                  "type": "string",
+                  "enum": [
+                    "perfecto",
+                    "encaja",
+                    "casi"
+                  ]
+                },
+                "hace": {
+                  "type": "string"
+                },
+                "porque": {
+                  "type": "string"
+                },
+                "accion": {
+                  "type": "string",
+                  "enum": [
+                    "llave",
+                    "conectar",
+                    "abierto"
+                  ]
                 }
               },
               "required": [
@@ -511,6 +626,9 @@
               ],
               "additionalProperties": false
             }
+          },
+          "plegado": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -519,7 +637,7 @@
         ],
         "additionalProperties": false,
         "id": "Compradores",
-        "description": "Lista de pedidos de compradores que encajan, sin datos personales."
+        "description": "Pedidos de compradores que encajan, sin datos personales: con pedido y porque se ve el botón de contacto y la razón para elegirlo."
       },
       "Hallazgos": {
         "type": "object",

@@ -15,8 +15,11 @@ Tu respuesta final es SIEMPRE un programa openui-lang y nada más: sin texto ant
 
 Arguments marked with ? are optional. Sub-components can be inline or referenced; prefer references for better streaming.
 
-Respuesta(bloques: (Texto | Cifras | Termometro | Barras | Espejo | Dona | RangoPrecio | Tabla | Inmuebles | Compradores | Hallazgos | Aviso | Siguientes)[]) — La raíz: los bloques de la respuesta, en orden de lectura.
+Respuesta(bloques: (Texto | Entendi | TuInmueble | AnalizarAFondo | Cifras | Termometro | Barras | Espejo | Dona | RangoPrecio | Tabla | Inmuebles | Compradores | Hallazgos | Aviso | Siguientes)[]) — La raíz: los bloques de la respuesta, en orden de lectura.
 Texto(texto: string) — Un párrafo corto. El primero de la respuesta lleva la conclusión (qué significa para captar, vender o negociar).
+Entendi(chips: string[]) — Lo que Findy entendió del pedido, como chips. Lo arma el backend en las búsquedas.
+TuInmueble(titulo: string, precio?: string, specs?: string[], origen?: string) — El inmueble del agente (al que se le buscan compradores), en una ficha corta.
+AnalizarAFondo(pregunta: string) — Botón para hacer el análisis completo de una pregunta (gasta 1 análisis). Solo en respuestas sin IA.
 Cifras(items: {valor: string, etiqueta: string, detalle?: string}[]) — Fila de 2 a 4 cifras clave grandes. Úsala casi siempre, arriba.
 Termometro(titulo: string, valor: number, maximo: number, etiqueta: string, referencia?: number, referenciaEtiqueta?: string) — Tubo de termómetro de 0 a maximo lleno hasta el valor: qué tan caliente está una zona.
 Barras(titulo: string, items: {etiqueta: string, valor: number, texto: string}[], nota?: string) — Ranking de barras horizontales (zonas, barrios, categorías).
@@ -25,7 +28,7 @@ Dona(titulo: string, partes: {etiqueta: string, valor: number}[], centro?: strin
 RangoPrecio(titulo: string, sugerido: number, minimo: number, maximo: number, precioActual?: number, nota?: string) — Rango de precio con el sugerido marcado (y el precio actual, si hay). Para estimar precio de captación.
 Tabla(titulo: string, columnas: string[], filas: string[][], destacar?: number, nota?: string) — Tabla comparativa simple (comparar inmuebles, costo mensual por concepto).
 Inmuebles(titulo: string, ids: number[]) — Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids.
-Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[]}[]) — Lista de pedidos de compradores que encajan, sin datos personales.
+Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[], pedido?: number, nivel?: "perfecto" | "encaja" | "casi", hace?: string, porque?: string, accion?: "llave" | "conectar" | "abierto"}[], plegado?: boolean) — Pedidos de compradores que encajan, sin datos personales: con pedido y porque se ve el botón de contacto y la razón para elegirlo.
 Hallazgos(titulo: string, items: {prioridad: "alta" | "media" | "baja", titulo: string, accion: string}[]) — Diagnóstico priorizado: hallazgo + acción.
 Aviso(texto: string, tono: "info" | "oportunidad" | "alerta") — Una frase destacada (oportunidad, alerta o dato).
 Siguientes(preguntas: string[]) — Botones con las siguientes preguntas sugeridas. Va al final.
