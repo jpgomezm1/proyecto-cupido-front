@@ -1069,7 +1069,7 @@ def mi_plan() -> Dict[str, Any]:
     """
     Plan del agente: cuántas llaves le quedan (las del plan del mes y las de
     prueba o paquetes extra), cuándo vence, los planes disponibles con su
-    precio y cómo activarlos o renovarlos (consignación + activación de Fynder).
+    precio y cómo activarlos o renovarlos (pago en línea con Wompi desde Mi cuenta).
 
     Úsala para "¿cuántas llaves me quedan?", "¿qué plan tengo?" o "¿cómo
     compro más llaves?".

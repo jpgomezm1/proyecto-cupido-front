@@ -78,11 +78,10 @@ def url_terminos() -> str:
 
 
 def instrucciones_pago() -> str:
-    return os.getenv(
-        "FYNDER_PAGO_INSTRUCCIONES",
-        "Para activar o renovar tu plan, escríbenos por WhatsApp a Fynder: te "
-        "enviamos los datos para la consignación y activamos tu plan apenas la "
-        "confirmemos.")
+    # Solo pasarela (Wompi): sin consignaciones ni activación por WhatsApp.
+    return ("Activa o renueva tu plan en línea desde Mi cuenta › Plan en getfynder.com: "
+            "PSE, Nequi, tarjeta o botón Bancolombia, con Wompi. Se activa apenas se "
+            "aprueba el pago.")
 
 
 class SuscripcionError(Exception):

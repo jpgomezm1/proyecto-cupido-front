@@ -50,7 +50,7 @@ propose→apply (con `confirmation_token` firmado, expira a los 10 min) y quedan
 Buscar y analizar es gratis (con uso justo diario en `search_properties`). El
 CONTACTO de quien tiene un inmueble o de quien hizo un pedido se obtiene con
 `ver_contacto` / `ver_contacto_pedido` y gasta 1 desbloqueo del plan del agente
-(prueba de 2, Básico 7, Medio 15, Pro 30; activación manual). Las reglas viven
+(prueba de 2, Visita 7, Negocio 15, Cierre 30; pago en línea con Wompi). Las reglas viven
 en `src/services/suscripcion_service.py`: no se cobra si el inmueble no está
 disponible (verificación HTTP en vivo), si no hay contacto usable, si ya estaba
 desbloqueado o si es propio; los pedidos solo se desbloquean si quien pidió es
