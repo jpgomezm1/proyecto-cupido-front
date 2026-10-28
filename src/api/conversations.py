@@ -1435,7 +1435,8 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
         }
         try:
             search_response['ui'] = findy_ui.programa_compradores(
-                assistant_content, search_response['propiedad'], lista, res.get('conteos'), total)
+                assistant_content, search_response['propiedad'], lista, res.get('conteos'), total,
+                res.get('contexto'))
         except Exception as e:  # noqa: BLE001 — sin programa, el frontend pinta la vista de siempre
             print(f"⚠️ [FINDY-UI] compradores: {e}")
     else:

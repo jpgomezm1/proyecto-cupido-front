@@ -136,8 +136,32 @@ def _item_comprador(c: Dict[str, Any]) -> Dict[str, Any]:
             "porque": c.get("porque") or None, "accion": c.get("accion")}
 
 
+def _contexto_compradores(ctx: Optional[Dict[str, Any]]) -> List[str]:
+    """Lo que piden quienes encajan (barras) y un aviso con el presupuesto típico y cómo pagan."""
+    if not ctx or not ctx.get("pedidos"):
+        return []
+    n = ctx["pedidos"]
+    bloques = []
+    if ctx.get("pide"):
+        bloques.append(_llamada("Barras", "Lo que más piden quienes encajan con tu inmueble",
+                                [{"etiqueta": p["texto"].capitalize(), "valor": p["n"],
+                                  "texto": f"{p['n']} de {n}"} for p in ctx["pide"]],
+                                "Úsalo al presentarlo: si lo tiene, dilo de primero"))
+    partes = []
+    if ctx.get("presupuesto_mediana"):
+        partes.append(f"la mitad tiene presupuesto de hasta {_millones(ctx['presupuesto_mediana'])}")
+    if ctx.get("pagan_contado"):
+        partes.append(f"{ctx['pagan_contado']} pagan de contado")
+    if ctx.get("con_credito"):
+        partes.append(f"{ctx['con_credito']} con crédito")
+    if partes:
+        bloques.append(_llamada("Aviso", "De los que encajan: " + ", ".join(partes) + ".", "info"))
+    return bloques
+
+
 def programa_compradores(mensaje: str, propiedad: Optional[Dict[str, Any]], compradores: List[Dict[str, Any]],
-                         conteos: Optional[Dict[str, int]], total: int) -> str:
+                         conteos: Optional[Dict[str, int]], total: int,
+                         contexto: Optional[Dict[str, Any]] = None) -> str:
     bloques = [_llamada("Texto", mensaje)]
     if propiedad:
         bloques.append(_tu_inmueble(propiedad))
@@ -150,6 +174,7 @@ def programa_compradores(mensaje: str, propiedad: Optional[Dict[str, Any]], comp
         {"valor": f"{conteos.get('recientes', 0)}", "etiqueta": "del último mes"},
         {"valor": f"{conteos.get('perfecto', 0)}", "etiqueta": "encajan perfecto"},
     ]))
+    bloques += _contexto_compradores(contexto)
     top = [c for c in compradores if c.get("grupo") == "top"]
     vale = [c for c in compradores if c.get("grupo") == "vale_la_pena"][:12]
     bloques.append(_llamada("Compradores", f"Empieza por {'este' if len(top) == 1 else f'estos {len(top)}'}",

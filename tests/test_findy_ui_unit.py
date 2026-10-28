@@ -82,3 +82,13 @@ def test_avisa_lo_que_las_publicaciones_no_traen():
 def test_busqueda_sin_resultados_sugiere_ajustes():
     p = ui.programa_busqueda("No encontré.", {"chips": ["Laureles"]}, [], {"search_type": "v3"})
     assert 'Entendi(["Laureles"])' in p and "Inmuebles(" not in p and "Siguientes(" in p
+
+
+def test_compradores_con_contexto_del_mercado():
+    ctx = {"pedidos": 163, "pide": [{"texto": "balcón", "n": 44}, {"texto": "cuarto útil", "n": 26}],
+           "presupuesto_mediana": 800_000_000, "pagan_contado": 25, "con_credito": 7}
+    p = ui.programa_compradores("Encontré.", None, [{"pedido_id": 1, "busca": "Apto", "grupo": "top", "accion": "conectar"}],
+                                {"recientes": 1, "perfecto": 1}, 163, ctx)
+    assert 'Barras("Lo que más piden quienes encajan con tu inmueble", [{etiqueta: "Balcón", valor: 44, texto: "44 de 163"}' in p
+    assert "la mitad tiene presupuesto de hasta $800 M, 25 pagan de contado, 7 con crédito." in p
+    assert "Barras(" not in ui.programa_compradores("x", None, [], {}, 0, {"pedidos": 0})

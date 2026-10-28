@@ -618,6 +618,32 @@ def etiquetas_pedido(crit: Dict[str, Any]) -> List[str]:
     return out[:4]
 
 
+def contexto_compradores(candidatos: List[tuple]) -> Dict[str, Any]:
+    """Qué piden quienes encajan con el inmueble: lo que más se repite, el presupuesto típico y cómo pagan.
+    Sale de todos los pedidos que encajan, no solo de los que se muestran."""
+    from collections import Counter
+    from src.services.busqueda import _ETIQUETAS_CARACT
+    pide, pagos, presupuestos = Counter(), Counter(), []
+    for _, f, _, crit in candidatos:
+        orig = crit.get("_original") or crit
+        caracts = crit.get("obligatorias") if crit.get("_v") == 2 else None
+        etiquetas = ([_ETIQUETAS_CARACT.get(c, c) for c in caracts] if caracts is not None
+                     else [str(e).lower() for e in crit.get("exigencias") or []])
+        pide.update(set(etiquetas))
+        if orig.get("pago"):
+            pagos["contado" if orig["pago"] == "contado" else "credito" if "credito" in orig["pago"] else "otro"] += 1
+        pmax = crit.get("presupuesto_max") or f.get("presupuesto_estimado")
+        if pmax:
+            presupuestos.append(float(pmax))
+    presupuestos.sort()
+    return {
+        "pedidos": len(candidatos),
+        "pide": [{"texto": t, "n": n} for t, n in pide.most_common(5) if n >= 2],
+        "presupuesto_mediana": int(presupuestos[len(presupuestos) // 2]) if presupuestos else None,
+        "pagan_contado": pagos["contado"], "con_credito": pagos["credito"],
+    }
+
+
 def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None,
                        dias: int = DIAS_PEDIDOS, limit: int = 15) -> Dict[str, Any]:
     precio = ficha.get("precio")
@@ -696,7 +722,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             "desbloqueable": bool(f.get("desbloqueable")),
             "contacto_desbloqueado": f["id"] in vistos,
         })
-    return {"total_found": len(candidatos), "compradores": compradores, "conteos": resumen}
+    return {"total_found": len(candidatos), "compradores": compradores, "conteos": resumen,
+            "contexto": contexto_compradores(candidatos)}
 
 
 def buscar_compradores_public(entrada: str, user_id: Optional[int] = None, limit: int = 15) -> Dict[str, Any]:
