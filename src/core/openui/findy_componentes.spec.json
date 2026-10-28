@@ -50,7 +50,7 @@
       "description": "Tabla comparativa simple (comparar inmuebles, costo mensual por concepto)."
     },
     "Inmuebles": {
-      "signature": "Inmuebles(titulo: string, ids: number[])",
+      "signature": "Inmuebles(titulo: string, ids: number[], comparar?: string)",
       "description": "Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids."
     },
     "Compradores": {
@@ -559,6 +559,9 @@
             "items": {
               "type": "number"
             }
+          },
+          "comparar": {
+            "type": "string"
           }
         },
         "required": [

@@ -92,3 +92,12 @@ def test_compradores_con_contexto_del_mercado():
     assert 'Barras("Lo que más piden quienes encajan con tu inmueble", [{etiqueta: "Balcón", valor: 44, texto: "44 de 163"}' in p
     assert "la mitad tiene presupuesto de hasta $800 M, 25 pagan de contado, 7 con crédito." in p
     assert "Barras(" not in ui.programa_compradores("x", None, [], {}, 0, {"pedidos": 0})
+
+
+def test_busqueda_con_comparativa_de_los_primeros():
+    res = [{"id": i} for i in (11, 22, 33, 44)]
+    link = "https://getfynder.com/comparar/abc.def"
+    p = ui.programa_busqueda("Encontré 4", {"chips": []}, res, {"comparar": link})
+    assert f'Inmuebles("4 inmuebles para tu cliente", [11, 22, 33, 44], "{link}")' in p
+    sin = ui.programa_busqueda("Encontré 4", {"chips": []}, res, {})
+    assert 'Inmuebles("4 inmuebles para tu cliente", [11, 22, 33, 44])' in sin

@@ -1699,6 +1699,11 @@ def _guardar_y_responder(db, conversation_id, user_id, user_message, criteria,
     ui = None
     if accumulated_criteria.get('pedido_v3') is not None or search_response.get('search_type') == 'no_es_busqueda':
         try:
+            # O8: la comparativa de los 3 primeros, lista para abrir o mandarle al cliente (link firmado, sin contactos)
+            top = [r['id'] for r in results if r.get('id')][:3]
+            if len(top) >= 2:
+                from src.services.share_service import link_comparativa
+                search_response['comparar'] = link_comparativa(top, user_id)
             ui = findy_ui.programa_busqueda(assistant_content, accumulated_criteria, results, search_response)
         except Exception as e:  # noqa: BLE001 — sin programa, el frontend pinta la vista de siempre
             print(f"⚠️ [FINDY-UI] búsqueda: {e}")

@@ -106,7 +106,8 @@ def programa_busqueda(mensaje: str, criteria: Dict[str, Any], results: List[Dict
     ids = [r["id"] for r in results if r.get("id")][:10]
     if ids:
         titulo = f"{len(ids)} {'inmueble' if len(ids) == 1 else 'inmuebles'} para tu cliente"
-        bloques.append(_llamada("Inmuebles", titulo, ids))
+        comparar = search_response.get("comparar")
+        bloques.append(_llamada("Inmuebles", titulo, ids, comparar) if comparar else _llamada("Inmuebles", titulo, ids))
     elif search_response.get("search_type") != "no_es_busqueda":
         bloques.append(_llamada("Siguientes", ["Busca también en zonas cercanas", "Súbele el presupuesto un 10 %"]))
         return _programa(bloques)
