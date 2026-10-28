@@ -287,6 +287,14 @@ def _validar_v2(p: Dict[str, Any], texto: str = "") -> Dict[str, Any]:
     pedido lo diga (parqueadero «cubierto», perfil «familia») se quita contra el texto."""
     import re
     t = texto.lower()
+    # A veces el modelo devuelve un texto donde va un objeto ("Laureles" en vez de {nombre: "Laureles"}).
+    def objetos(lista, clave, extra):
+        return [x if isinstance(x, dict) else {clave: str(x), **extra} for x in lista or [] if x]
+    for g in [p] + [o for o in p.get("opciones") or [] if isinstance(o, dict)]:
+        g["ubicaciones"] = objetos(g.get("ubicaciones"), "nombre", {"nivel": "barrio"})
+    p["unidades"] = objetos(p.get("unidades"), "nombre", {"tipo": "estilo"})
+    p["deseables"] = objetos(p.get("deseables"), "caracteristica", {"peso": 2})
+    p["opciones"] = [o for o in p.get("opciones") or [] if isinstance(o, dict)]
     techo = 2e8 if p.get("negocio") == "arriendo" else 5e10
     for g in [p] + list(p.get("opciones") or []):
         for k in ("presupuesto_min", "presupuesto_max"):

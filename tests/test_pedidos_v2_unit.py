@@ -39,3 +39,12 @@ def test_validar_respeta_el_parqueadero_cubierto_si_lo_dice():
 def test_arriendo_con_su_propio_techo():
     v = pia._validar_v2({"negocio": "arriendo", "presupuesto_max": 13_000_000, "opciones": []}, "")
     assert v["presupuesto_max"] == 13_000_000
+
+
+def test_acepta_textos_donde_van_objetos():
+    v = pia._validar_v2({"ubicaciones": ["Laureles"], "unidades": ["Urbanity"], "deseables": ["balcon"],
+                         "opciones": ["opción rara", {"etiqueta": "A", "ubicaciones": ["Envigado"]}]}, "")
+    assert v["ubicaciones"] == [{"nombre": "Laureles", "nivel": "barrio"}]
+    assert v["unidades"][0]["nombre"] == "Urbanity" and v["deseables"][0]["caracteristica"] == "balcon"
+    assert len(v["opciones"]) == 1 and v["opciones"][0]["ubicaciones"][0]["nombre"] == "Envigado"
+    assert pia._compat_v1(v)["zonas"] == ["Laureles", "Envigado"]
