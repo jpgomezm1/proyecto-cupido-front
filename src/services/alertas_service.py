@@ -217,7 +217,7 @@ def _compradores(cur, pedidos: List[Dict[str, Any]]) -> int:
                 continue   # su propio pedido
             if por_inmueble.get(p["id"], 0) >= MAX_COMPRADORES_POR_INMUEBLE:
                 continue
-            puntaje, razones, descartado = comp.puntuar(ficha, crit)
+            puntaje, razones, descartado, _, _ = comp.puntuar_pedido(ficha, crit)   # la mejor opción del pedido
             if descartado or puntaje < UMBRAL_COMPRADOR:
                 continue
             cur.execute("""

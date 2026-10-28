@@ -263,6 +263,20 @@ def resumen_pedido(c: Dict[str, Any]) -> str:
     return f"{tipos} en {lugar}" if lugar else tipos
 
 
+def _municipios_pedidos(c: Dict[str, Any]) -> List[str]:
+    """Municipios que el pedido nombra como lugar (v2: nivel municipio o región)."""
+    if c.get("_v") != 2:
+        return []
+    from src.services.pedidos_ia import _municipios_de_region
+    out: List[str] = []
+    for u in c.get("ubicaciones") or []:
+        if isinstance(u, dict) and u.get("nivel") == "municipio" and u.get("nombre"):
+            out.append(u["nombre"])
+        elif isinstance(u, dict) and u.get("nivel") == "region":
+            out += _municipios_de_region(u.get("nombre"))
+    return list(dict.fromkeys(out))
+
+
 def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]], bool]:
     """Devuelve (puntaje 0-100, razones, descartado)."""
     razones: List[Dict[str, Any]] = []
@@ -298,17 +312,24 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
         if _misma_zona(z, zona_f):
             return 0, [], True
     zonas, ciudades = c.get("zonas") or [], c.get("ciudades") or []
+    # Versión 2: los municipios que el pedido nombró como lugar («Envigado, Sabaneta, El Poblado o Laureles»)
+    # cuentan aunque también nombre barrios. Las «ciudades» de la v1 mezclan eso con el municipio de cada
+    # barrio (Medellín por Laureles), así que solo valen cuando no hay barrios.
+    munis = _municipios_pedidos(c)
     posibles += 30
     if zonas and any(_misma_zona(z, zona_f) or _misma_zona(z, ciudad_f) for z in zonas):
         puntos += 30
-        razon("zona", True, _lista(zonas, "o", 4))
+        razon("zona", True, _lista(zonas + munis, "o", 4))
+    elif munis and any(_misma_zona(m, ciudad_f) for m in munis):
+        puntos += 26
+        razon("zona", True, _lista(munis + zonas, "o", 4))
     elif not zonas and ciudades and any(_misma_zona(cc, ciudad_f) for cc in ciudades):
         # Solo pidió la ciudad: cumple, aunque menos preciso que un barrio
         puntos += 22
         razon("zona", True, _lista(ciudades, "o", 4))
     elif zonas or ciudades:
         # Pidió barrios y ninguno coincide (aunque sea la misma ciudad): no cumple
-        razon("zona", False, _lista(zonas or ciudades, "o", 4))
+        razon("zona", False, _lista((zonas + munis) or ciudades, "o", 4))
     else:
         puntos += 12
 
@@ -430,11 +451,11 @@ def _millones(v: float) -> str:
     return f"${round(v / 1e6):,} M".replace(",", ".")
 
 
-def _porque(crit: Dict[str, Any], ficha: Dict[str, Any], dias: int, pmax) -> str:
-    """«Lo pidió hace 2 días · su presupuesto te cubre con $60 M de margen · solo busca en Laureles»."""
+def _porque(crit: Dict[str, Any], ficha: Dict[str, Any], dias: int, pmax, opcion: Optional[str] = None) -> str:
+    """«Su presupuesto te cubre con $60 M de margen · solo busca en Laureles». Cuándo lo pidió ya lo dice la tarjeta."""
     partes = []
-    if dias < 999:
-        partes.append("Lo pidió hoy" if dias == 0 else "Lo pidió ayer" if dias == 1 else f"Lo pidió {_hace(dias)}")
+    if opcion:
+        partes.append(f"Encaja con su opción «{opcion}»")
     precio = ficha.get("precio")
     if precio and pmax:
         margen = float(pmax) - float(precio)
@@ -450,7 +471,8 @@ def _porque(crit: Dict[str, Any], ficha: Dict[str, Any], dias: int, pmax) -> str
         partes.append(f"solo busca en {zonas[0]}")
     elif len(zonas) > 1 and ficha.get("zona"):
         partes.append(f"busca en {len(zonas)} zonas, entre ellas la tuya")
-    return " · ".join(partes)
+    texto = " · ".join(partes)
+    return texto[:1].upper() + texto[1:]
 
 
 def _valor(puntaje: int, f: Dict[str, Any], crit: Dict[str, Any], ficha: Dict[str, Any]) -> float:
@@ -483,6 +505,118 @@ def _frescura(fecha) -> float:
     return 1.0 if d <= 14 else 0.92 if d <= 30 else 0.8 if d <= 60 else 0.65
 
 
+# ---------------------------------------------------------------------------
+# Pedidos versión 2: opciones, unidades y el detalle del encaje
+# ---------------------------------------------------------------------------
+
+def _variantes(crit: Dict[str, Any]) -> List[Tuple[Optional[str], Dict[str, Any]]]:
+    """Un pedido con «O» se evalúa opción por opción: cada una es lo común + lo que cambia esa opción.
+    Sin opciones (o versión 1), el pedido tal cual."""
+    opciones = [o for o in crit.get("opciones") or [] if isinstance(o, dict)] if crit.get("_v") == 2 else []
+    if not opciones:
+        return [(None, crit)]
+    from src.services.pedidos_ia import _compat_v1
+    base = {k: v for k, v in crit.items() if k != "opciones"}
+    out = []
+    for o in opciones:
+        propio = {k: v for k, v in o.items() if v not in (None, [], "") and k not in ("etiqueta", "condicion")}
+        m = {**base, **propio, "opciones": []}
+        out.append((o.get("etiqueta") or o.get("condicion"), {**m, **_compat_v1(m)}))
+    return out
+
+
+def puntuar_pedido(ficha: Dict[str, Any], crit: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]], bool, Optional[str], Dict[str, Any]]:
+    """`puntuar` sobre la mejor opción del pedido → (puntaje, razones, descartado, opción, criterios de esa opción)."""
+    mejor = None
+    for etiqueta, c in _variantes(crit):
+        puntaje, razones, descartado = puntuar(ficha, c)
+        clave = (not descartado, puntaje)
+        if mejor is None or clave > mejor[0]:
+            mejor = (clave, puntaje, razones, descartado, etiqueta, c)
+    _, puntaje, razones, descartado, etiqueta, c = mejor
+    return puntaje, razones, descartado, etiqueta, c
+
+
+_ETIQUETA_CRITERIO = {"tipo": "Tipo", "zona": "Zona", "presupuesto": "Precio", "habitaciones": "Habitaciones",
+                      "banos": "Baños", "parqueaderos": "Parqueaderos", "area": "Área", "exigencias": "Pide",
+                      "excluye": "No quiere"}
+
+
+def _tuyo(criterio: str, ficha: Dict[str, Any]) -> Optional[str]:
+    if criterio == "zona":
+        return ficha.get("zona") or ficha.get("ciudad")
+    if criterio == "presupuesto":
+        return format_cop(ficha["precio"]) if ficha.get("precio") else None
+    if criterio == "tipo":
+        return (ficha.get("tipo") or "").capitalize() or None
+    if criterio == "area":
+        return f"{int(ficha['area_m2'])} m²" if ficha.get("area_m2") else None
+    if criterio in ("habitaciones", "banos", "parqueaderos"):
+        v = ficha.get(criterio)
+        return str(v) if v is not None else None
+    return None
+
+
+def detalle_encaje(ficha: Dict[str, Any], crit: Dict[str, Any], razones: List[Dict[str, Any]],
+                   opcion: Optional[str] = None) -> List[Dict[str, Any]]:
+    """«¿Por qué encaja?» criterio por criterio: lo que pide · lo de tu inmueble · sí / no / por confirmar."""
+    filas = []
+    zonas = crit.get("zonas") or []
+    for r in razones:
+        fila = {"criterio": _ETIQUETA_CRITERIO.get(r["criterio"], r["criterio"].capitalize()), "pide": r["texto"],
+                "tuyo": _tuyo(r["criterio"], ficha),
+                "estado": "si" if r["ok"] is True else "no" if r["ok"] is False else "duda"}
+        n_lugares = len(zonas) + len(_municipios_pedidos(crit))
+        if r["criterio"] == "zona" and r["ok"] and n_lugares > 1:
+            fila["nota"] = f"1 de sus {n_lugares} opciones de zona"
+        pmax = crit.get("presupuesto_max")
+        if r["criterio"] == "presupuesto" and ficha.get("precio") and pmax and ficha["precio"] > pmax:
+            fila["estado"] = "duda"
+            fila["nota"] = f"Tu precio está {_millones(ficha['precio'] - pmax)} por encima: negociable"
+        if r["criterio"] in ("exigencias", "excluye") and r["ok"] is not False:
+            fila["tuyo"] = "Lo menciona" if r["ok"] else "No lo dice"
+        filas.append(fila)
+    # Unidades puntuales: «en Urbanity». Es una de sus alternativas, no un requisito si también nombra barrios.
+    texto = _norm(" ".join(str(ficha.get(k) or "") for k in ("titulo", "texto", "zona")))
+    for u in crit.get("unidades") or []:
+        if not isinstance(u, dict) or not u.get("nombre"):
+            continue
+        dentro = _norm(u["nombre"]) in texto
+        if u.get("tipo") == "puntual":
+            filas.append({"criterio": "Unidad", "pide": f"En {u['nombre']}", "tuyo": "Está ahí" if dentro else "No está ahí",
+                          "estado": "si" if dentro else "no",
+                          "nota": "Es una de sus alternativas" if zonas else "La quiere en esa unidad"})
+        else:
+            filas.append({"criterio": "Estilo", "pide": f"Como {u['nombre']}", "tuyo": None, "estado": "duda",
+                          "nota": "Una referencia de cómo la quiere"})
+    if opcion:
+        filas.insert(0, {"criterio": "Opción", "pide": opcion, "tuyo": None, "estado": "si",
+                         "nota": "Su pedido tiene varias opciones: tu inmueble encaja con esta"})
+    return filas
+
+
+_PAGO = {"contado": "De contado", "credito": "Con crédito", "credito_preaprobado": "Crédito preaprobado",
+         "leasing": "Leasing", "subsidio": "Con subsidio", "permuta": "Acepta permuta", "mixto": "Pago mixto"}
+_PERFIL = {"inversion": "Inversión", "renta_corta": "Rentas cortas", "familia": "Familia", "adulto_mayor": "Adulto mayor",
+           "extranjero": "Extranjero", "mascotas": "Con mascotas", "primera_vivienda": "Primera vivienda",
+           "estudiante": "Estudiante", "uso_comercial": "Uso comercial"}
+
+
+def etiquetas_pedido(crit: Dict[str, Any]) -> List[str]:
+    """Lo que el agente quiere saber de un vistazo: cómo paga, urgencia, comisión, perfil."""
+    out = []
+    if crit.get("pago") in _PAGO:
+        out.append(_PAGO[crit["pago"]])
+    if crit.get("urgencia") == "inmediata":
+        out.append("Ingreso inmediato")
+    elif crit.get("urgencia") == "pronto":
+        out.append("Lo necesita pronto")
+    if crit.get("comision"):
+        out.append(f"Comisión {crit['comision']}" if "/" in str(crit["comision"]) else "Comparte comisión")
+    out += [_PERFIL[x] for x in crit.get("perfil") or [] if x in _PERFIL]
+    return out[:4]
+
+
 def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None,
                        dias: int = DIAS_PEDIDOS, limit: int = 15) -> Dict[str, Any]:
     precio = ficha.get("precio")
@@ -504,10 +638,10 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
     candidatos = []
     for f in filas:
         crit = f["criterios"] if isinstance(f["criterios"], dict) else {}
-        puntaje, razones, descartado = puntuar(ficha, crit)
+        puntaje, razones, descartado, opcion, crit_op = puntuar_pedido(ficha, crit)
         if descartado or puntaje < PUNTAJE_MINIMO:
             continue
-        candidatos.append((puntaje, f, razones, crit))
+        candidatos.append((puntaje, f, razones, {**crit_op, "_opcion": opcion, "_original": crit}))
     # Orden: encaje × frescura. Un pedido de hace 3 meses al 100 % vale menos que uno de esta semana
     # al 90 %: ese comprador probablemente ya compró.
     candidatos.sort(key=lambda x: (-_valor(x[0], x[1], x[3], ficha),
@@ -548,7 +682,10 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             "dias": dias_f,
             "hace": _hace(dias_f),
             # Por qué abrir ESTE contacto y no otro, en una línea.
-            "porque": _porque(crit, ficha, dias_f, pmax),
+            "porque": _porque(crit, ficha, dias_f, pmax, crit.get("_opcion")),
+            "opcion": crit.get("_opcion"),
+            "encaje": detalle_encaje(ficha, crit, razones, crit.get("_opcion")),
+            "etiquetas": etiquetas_pedido(crit.get("_original") or crit),
             "accion": "abierto" if abierto else "llave" if f.get("desbloqueable") else "conectar",
             "grupo": "top" if i < TOP else "vale_la_pena" if _vale_la_pena((puntaje, f, razones, crit)) else "resto",
             "razones": razones,

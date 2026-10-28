@@ -13,7 +13,7 @@ def test_compat_v1_regiones_unidades_y_opciones():
                        "ubicaciones": [{"nombre": "Oriente antioqueño", "nivel": "region"}]}]}
     v1 = pia._compat_v1(p)
     assert v1["zonas"] == ["Laureles"]                      # ni el municipio, ni la región, ni la unidad
-    assert set(v1["ciudades"]) == {"Medellín", "Envigado"}
+    assert {"Medellín", "Envigado", "Rionegro", "La Ceja"} <= set(v1["ciudades"])   # la región suma sus municipios
     assert v1["tipos"] == ["casa"] and v1["presupuesto_max"] == 750_000_000   # unión de las opciones
     assert v1["exigencias"] == ["unidad cerrada", "balcón"] and v1["excluye"] == ["primer piso"]
 

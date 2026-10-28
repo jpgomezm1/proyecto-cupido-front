@@ -232,6 +232,23 @@ def _etiqueta(c: str) -> str:
     return _ETIQUETAS_CARACT.get(c, c.replace("_", " "))
 
 
+_REGIONES = {
+    "valle de aburra": ["Medellín", "Envigado", "Sabaneta", "Itagüí", "La Estrella", "Bello", "Copacabana",
+                        "Girardota", "Caldas", "Barbosa"],
+    "oriente antioqueno": ["Rionegro", "La Ceja", "El Retiro", "Guarne", "Marinilla", "El Carmen de Viboral",
+                           "La Unión", "El Santuario", "San Vicente", "Guatapé", "El Peñol"],
+}
+
+
+def _municipios_de_region(nombre: str) -> List[str]:
+    import unicodedata
+    k = "".join(c for c in unicodedata.normalize("NFKD", nombre or "") if not unicodedata.combining(c)).lower()
+    for region, munis in _REGIONES.items():
+        if region in k or k.replace("oriente", "oriente antioqueno").strip() == region:
+            return munis
+    return []
+
+
 def _compat_v1(p: Dict[str, Any]) -> Dict[str, Any]:
     """Las claves de la versión 1, para lo que todavía las lee (compradores, alertas, barrios)."""
     def lugares(ubs):
@@ -241,6 +258,7 @@ def _compat_v1(p: Dict[str, Any]) -> Dict[str, Any]:
             if not n:
                 continue
             if u.get("nivel") == "region":
+                ciudades.extend(_municipios_de_region(n))
                 continue
             if u.get("nivel") == "municipio":
                 ciudades.append(n)

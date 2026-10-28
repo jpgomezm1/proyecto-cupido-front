@@ -81,10 +81,11 @@ def test_porque_dice_frescura_margen_y_zona():
     from src.services import compradores_service as cs
     ficha = {"precio": 640_000_000, "zona": "Laureles"}
     assert cs._porque({"zonas": ["Laureles"]}, ficha, 2, 700_000_000) == \
-        "Lo pidió hace 2 días · su presupuesto te cubre con $60 M de margen · solo busca en Laureles"
-    assert "pide $20 M menos: negociable" in cs._porque({"zonas": ["Laureles", "Belén"]}, ficha, 0, 620_000_000)
+        "Su presupuesto te cubre con $60 M de margen · solo busca en Laureles"
+    assert "Pide $20 M menos: negociable" in cs._porque({"zonas": ["Laureles", "Belén"]}, ficha, 0, 620_000_000)
     assert "busca en 2 zonas, entre ellas la tuya" in cs._porque({"zonas": ["Laureles", "Belén"]}, ficha, 0, 620_000_000)
-    assert cs._porque({}, ficha, 1, 642_000_000) == "Lo pidió ayer · su presupuesto es justo tu precio"
+    assert cs._porque({}, ficha, 1, 642_000_000) == "Su presupuesto es justo tu precio"
+    assert cs._porque({}, ficha, 2, 700_000_000, "Valle de Aburrá").startswith("Encaja con su opción «Valle de Aburrá»")
 
 
 def test_valor_premia_lo_reciente_sobre_lo_viejo():
@@ -94,3 +95,28 @@ def test_valor_premia_lo_reciente_sobre_lo_viejo():
     ayer = {"fecha_captura": datetime.now() - timedelta(days=1)}
     viejo = {"fecha_captura": datetime.now() - timedelta(days=90)}
     assert cs._valor(90, ayer, {}, ficha) > cs._valor(100, viejo, {}, ficha)
+
+
+def test_pedido_con_opciones_y_unidad_puntual():
+    from src.services import compradores_service as cs
+    from src.services.pedidos_ia import _compat_v1
+    v2 = {"_v": 2, "negocio": "venta", "tipos": ["apartamento", "casa"], "ubicaciones": [], "unidades": [],
+          "opciones": [
+              {"etiqueta": "Valle de Aburrá", "tipos": ["apartamento"], "presupuesto_max": 450_000_000, "habitaciones_min": 2,
+               "ubicaciones": [{"nombre": "Envigado", "nivel": "municipio"}, {"nombre": "Laureles", "nivel": "barrio"}]},
+              {"etiqueta": "Oriente", "tipos": ["casa"], "presupuesto_max": 750_000_000, "habitaciones_min": 3,
+               "ubicaciones": [{"nombre": "Oriente antioqueño", "nivel": "region"}]}]}
+    crit = {**v2, **_compat_v1(v2)}
+    apto = {"tipo": "apartamento", "negocio": "venta", "ciudad": "Envigado", "zona": "Zúñiga", "precio": 430_000_000,
+            "habitaciones": 2, "texto": ""}
+    puntaje, razones, desc, opcion, _ = cs.puntuar_pedido(apto, crit)
+    assert not desc and opcion == "Valle de Aburrá" and puntaje >= 90          # el municipio cuenta aunque nombre barrios
+
+    urb = {"_v": 2, "zonas": ["Belén Fátima", "Laureles"], "ciudades": ["Medellín"],
+           "unidades": [{"nombre": "Urbanity", "tipo": "puntual"}], "presupuesto_max": 620_000_000}
+    ficha = {"zona": "Laureles", "ciudad": "Medellín", "precio": 640_000_000, "texto": "apto en Laureles"}
+    p, raz, _, op, c = cs.puntuar_pedido(ficha, urb)
+    filas = {f["criterio"]: f for f in cs.detalle_encaje(ficha, c, raz, op)}
+    assert filas["Zona"]["estado"] == "si" and filas["Zona"]["nota"] == "1 de sus 2 opciones de zona"
+    assert filas["Unidad"]["estado"] == "no" and filas["Unidad"]["nota"] == "Es una de sus alternativas"
+    assert filas["Precio"]["estado"] == "duda" and "$20 M por encima" in filas["Precio"]["nota"]
