@@ -56,6 +56,16 @@ def test_compradores_destacados_y_plegados():
     assert 'TuInmueble("Apartamento en Laureles", "$640 millones", ["95 m²", "3 hab"], "Descrito por ti")' in p
 
 
+def test_avisa_lo_que_las_publicaciones_no_traen():
+    rs = [{"id": i, "requisitos": [{"texto": "piso 4+", "estado": "duda"}, {"texto": "balcón", "estado": "si"}]}
+          for i in range(5)]
+    p = ui.programa_busqueda("Encontré 5.", {"chips": ["Laureles"]}, rs, {"search_type": "v3"})
+    assert "Las publicaciones casi nunca dicen el piso" in p and "balcón" not in p.split("Aviso(")[1].split(")")[0]
+    # Si la mayoría sí lo trae, no hay aviso
+    rs2 = [{"id": i, "requisitos": [{"texto": "piso 4+", "estado": "si" if i else "duda"}]} for i in range(5)]
+    assert "Aviso(" not in ui.programa_busqueda("Encontré 5.", {}, rs2, {"search_type": "v3"})
+
+
 def test_busqueda_sin_resultados_sugiere_ajustes():
     p = ui.programa_busqueda("No encontré.", {"chips": ["Laureles"]}, [], {"search_type": "v3"})
     assert 'Entendi(["Laureles"])' in p and "Inmuebles(" not in p and "Siguientes(" in p

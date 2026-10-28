@@ -71,6 +71,23 @@ def _siguientes_busqueda(criteria: Dict[str, Any], total: int) -> List[str]:
     return out[:3]
 
 
+def _sin_dato(results: List[Dict[str, Any]]) -> List[str]:
+    """Lo que pidió el agente y casi ninguna publicación trae (el piso, en Medellín, nunca viene):
+    mejor decirlo una vez que dejar un «?» sin explicación en cada tarjeta."""
+    if not results:
+        return []
+    cuenta: Dict[str, List[int]] = {}
+    for r in results:
+        for q in r.get("requisitos") or []:
+            texto = q.get("texto") or ""
+            # «3+ hab», «piso 4+», «balcón»: se agrupan por lo que se pide, no por el número
+            clave = "piso" if texto.startswith(("piso", "hasta piso")) else texto
+            par = cuenta.setdefault(clave, [0, 0])
+            par[0] += 1
+            par[1] += q.get("estado") == "duda"
+    return [k for k, (n, dudas) in cuenta.items() if n >= 3 and dudas / n >= 0.8]
+
+
 def programa_busqueda(mensaje: str, criteria: Dict[str, Any], results: List[Dict[str, Any]],
                       search_response: Dict[str, Any]) -> str:
     bloques = [_llamada("Texto", mensaje)]
@@ -79,6 +96,12 @@ def programa_busqueda(mensaje: str, criteria: Dict[str, Any], results: List[Dict
         bloques.append(_llamada("Entendi", chips))
     if search_response.get("relaxation_applied"):
         bloques.append(_llamada("Aviso", "No encontré exactamente lo que pediste: estas son las opciones más cercanas.", "info"))
+    faltan = _sin_dato(results)
+    if faltan:
+        lista = " ni ".join(faltan) if len(faltan) <= 2 else ", ".join(faltan[:-1]) + " ni " + faltan[-1]
+        bloques.append(_llamada("Aviso", f"Las publicaciones casi nunca dicen {'el ' if faltan == ['piso'] else ''}"
+                                         f"{lista}: los marqué con «?». Confírmalo con quien tiene el inmueble antes "
+                                         f"de mostrárselo a tu cliente.", "info"))
     ids = [r["id"] for r in results if r.get("id")][:10]
     if ids:
         titulo = f"{len(ids)} {'inmueble' if len(ids) == 1 else 'inmuebles'} para tu cliente"
