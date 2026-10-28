@@ -14,6 +14,7 @@ Búsqueda inversa: dado un INMUEBLE, qué PEDIDOS de compradores encajan mejor.
 
 Sin Flask: lo usan la API (Findy) y el MCP (find_buyers_for_property).
 """
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -239,6 +240,22 @@ def _tiene(ficha: Dict[str, Any], requisito: str) -> Optional[bool]:
 _SINGULAR = {"habitaciones": "habitación", "baños": "baño", "parqueaderos": "parqueadero"}
 
 
+def _lista(items: List[str], conj: str = "y", maximo: int = 3) -> str:
+    """['Laureles', 'Nogal', 'Belén'] → 'Laureles, Nogal o Belén' (y «y 2 más» si se pasa)."""
+    items = [str(i) for i in items if i]
+    if len(items) > maximo:
+        return ", ".join(items[:maximo]) + f" y {len(items) - maximo} más"
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f" {conj} {items[-1]}" if items else ""
+
+
+def resumen_pedido(c: Dict[str, Any]) -> str:
+    """Lo que busca el comprador, normalizado desde sus criterios (nunca el texto del grupo:
+    trae nombres y firmas). «Apartamento en Laureles, Nogal o Belén»."""
+    tipos = _lista([t.capitalize() for t in c.get("tipos") or []], "o") or "Inmueble"
+    lugar = _lista(c.get("zonas") or c.get("ciudades") or [], "o", 4)
+    return f"{tipos} en {lugar}" if lugar else tipos
+
+
 def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]], bool]:
     """Devuelve (puntaje 0-100, razones, descartado)."""
     razones: List[Dict[str, Any]] = []
@@ -260,7 +277,7 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
         if fam_f not in {_familia(t) for t in tipos}:
             return 0, [], True
         puntos += 10
-        razon("tipo", True, (ficha.get("tipo") or tipos[0]).capitalize())
+        razon("tipo", True, _lista([t.capitalize() for t in tipos], "o"))
     posibles += 10
 
     # Exclusiones explícitas ("NO dúplex")
@@ -277,14 +294,14 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
     posibles += 30
     if zonas and any(_misma_zona(z, zona_f) or _misma_zona(z, ciudad_f) for z in zonas):
         puntos += 30
-        razon("zona", True, zona_f or ciudad_f)
+        razon("zona", True, _lista(zonas, "o", 4))
     elif not zonas and ciudades and any(_misma_zona(cc, ciudad_f) for cc in ciudades):
         # Solo pidió la ciudad: cumple, aunque menos preciso que un barrio
         puntos += 22
-        razon("zona", True, ciudad_f)
+        razon("zona", True, _lista(ciudades, "o", 4))
     elif zonas or ciudades:
         # Pidió barrios y ninguno coincide (aunque sea la misma ciudad): no cumple
-        razon("zona", False, f"Busca en {', '.join((zonas or ciudades)[:2])}")
+        razon("zona", False, _lista(zonas or ciudades, "o", 4))
     else:
         puntos += 12
 
@@ -321,7 +338,7 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
             puntos += peso * 0.4
         elif val >= req:
             puntos += peso
-            razon(criterio, True, f"{val} {_SINGULAR.get(etiqueta, etiqueta) if val == 1 else etiqueta}")
+            razon(criterio, True, f"{req}+ {_SINGULAR.get(etiqueta, etiqueta) if req == 1 else etiqueta}")
         elif val == req - 1:
             puntos += peso * 0.3
             razon(criterio, False, f"Pide {req}+ {etiqueta}")
@@ -333,16 +350,22 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
     minimo("parqueaderos_min", "parqueaderos", 5, "parqueaderos")
 
     area, amin, amax = ficha.get("area_m2"), c.get("area_min"), c.get("area_max")
+    pide_area = (f"{int(amin)}–{int(amax)} m²" if amin and amax else
+                 f"Desde {int(amin)} m²" if amin else f"Hasta {int(amax or 0)} m²")
     if amin or amax:
         posibles += 8
         if area is None:
             puntos += 3
-            razon("area", None, f"Pide {int(amin or 0)}–{int(amax) if amax else '+'} m²")
-        elif (not amin or area >= amin * 0.92) and (not amax or area <= amax * 1.1):
+            razon("area", None, pide_area)
+        elif (not amin or area >= amin) and (not amax or area <= amax):
             puntos += 8
-            razon("area", True, f"{int(area)} m²")
+            razon("area", True, pide_area)
+        elif (not amin or area >= amin * 0.92) and (not amax or area <= amax * 1.1):
+            # Casi: suma, pero se lo decimos al agente (95 m² cuando pide desde 100)
+            puntos += 5
+            razon("area", None, f"{pide_area} (el tuyo: {int(area)} m²)")
         else:
-            razon("area", False, f"Pide {int(amin) if amin else ''}{'–' + str(int(amax)) if amax else '+'} m²".replace("Pide –", "Pide hasta "))
+            razon("area", False, pide_area)
 
     # Exigencias (8)
     exig = c.get("exigencias") or []
@@ -355,6 +378,8 @@ def puntuar(ficha: Dict[str, Any], c: Dict[str, Any]) -> Tuple[int, List[Dict[st
                 cumplidas += 1
             razon("exigencias", t, e)
         puntos += 8 * (cumplidas / min(len(exig), 5)) if exig else 0
+    for ex in (c.get("excluye") or [])[:3]:
+        razon("excluye", None, f"No {ex}")
 
     puntaje = int(round(100 * puntos / posibles)) if posibles else 0
     # La zona y el presupuesto mandan: sin zona no pasa de 55
@@ -403,6 +428,16 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             continue
         candidatos.append((puntaje, f, razones, crit))
     candidatos.sort(key=lambda x: (-x[0], -(x[1]["fecha_captura"].timestamp() if x[1].get("fecha_captura") else 0)))
+    # El mismo pedido reenviado a varios grupos: se queda el más reciente.
+    unicos, huellas = [], set()
+    for cand in candidatos:
+        crit = {k: v for k, v in cand[3].items() if not k.startswith("_")}
+        huella = (json.dumps(crit, sort_keys=True, ensure_ascii=False), _norm(cand[1].get("texto_pedido"))[:200])
+        if huella in huellas:
+            continue
+        huellas.add(huella)
+        unicos.append(cand)
+    candidatos = unicos
     top = candidatos[:limit]
 
     vistos = set()
@@ -415,7 +450,10 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         pmax = crit.get("presupuesto_max") or f.get("presupuesto_estimado")
         compradores.append({
             "pedido_id": f["id"],
-            "busca": redact_phones(f["texto_pedido"] or "", cut_signatures=True),
+            # Normalizado desde los criterios; el mensaje original solo con el contacto abierto.
+            "busca": resumen_pedido(crit),
+            "mensaje_original": redact_phones(f["texto_pedido"] or "", cut_signatures=True)
+            if f["id"] in vistos else None,
             "score": puntaje,
             "razones": razones,
             "presupuesto_estimado": int(pmax) if pmax else None,
