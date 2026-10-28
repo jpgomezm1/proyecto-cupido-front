@@ -554,6 +554,17 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
         partes.append(0.5)
     if ped.get("area_max") and p.get("area") and float(p["area"]) > ped["area_max"] * 1.15:
         partes.append(0.5)
+    # Lo que pidió más allá de las cifras de la tarjeta: sí / no / por confirmar (la publicación no lo dice).
+    requisitos = []
+    if ped.get("piso_min") or ped.get("piso_max"):
+        p0, p1 = ped.get("piso_min"), ped.get("piso_max")
+        etq = f"piso {int(p0)}+" if p0 and not p1 else f"hasta piso {int(p1)}" if p1 and not p0 else f"piso {int(p0)}–{int(p1)}"
+        if p.get("piso") is None:
+            requisitos.append({"texto": etq, "estado": "duda"})
+        else:
+            ok = (not p0 or p["piso"] >= p0) and (not p1 or p["piso"] <= p1)
+            requisitos.append({"texto": f"piso {p['piso']:g}" if isinstance(p["piso"], (int, float)) else etq,
+                               "estado": "si" if ok else "no"})
     if ped.get("piso_max") and p.get("piso") is not None:
         partes.append(1.0 if p["piso"] <= ped["piso_max"] else 0.3)
     if ped.get("piso_min") and p.get("piso") is not None:
@@ -575,6 +586,7 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
     tiene = set(p.get("caracteristicas") or [])
     factor_oblig = 1.0
     for c in ped.get("obligatorias") or []:
+        requisitos.append({"texto": _ETIQUETAS_CARACT.get(c, c), "estado": "si" if c in tiene else "duda"})
         if c in tiene:
             cumple.append(_ETIQUETAS_CARACT.get(c, c))
         else:
@@ -587,6 +599,8 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
         logrado = sum(d["peso"] for d in des if d["caracteristica"] in tiene)
         s_des = logrado / total
         for d in des:
+            requisitos.append({"texto": _ETIQUETAS_CARACT.get(d["caracteristica"], d["caracteristica"]),
+                               "estado": "si" if d["caracteristica"] in tiene else "duda", "deseable": True})
             if d["caracteristica"] in tiene:
                 cumple.append(_ETIQUETAS_CARACT.get(d["caracteristica"], d["caracteristica"]))
     if ped.get("estados") and p.get("estado"):
@@ -607,7 +621,7 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
         score *= 0.6
     score *= factor_oblig
     return {"id": p["id"], "score": round(score * 100, 1), "cumple": cumple[:6], "no_cumple": no_cumple[:4],
-            "_p": p}
+            "requisitos": requisitos, "_p": p}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -858,7 +872,8 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
         fecha = f.get("fecha_ultima_validacion") or (f.get("fecha_actualizacion") if f.get("fuente") == "Fynder" else None)
         f["verificada_hace_dias"] = frescura(fecha)["verificada_hace_dias"]
         resultados.append({**f, "match_score": x.get("score_final", x["score"]),
-                           "match_reasons": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or []})
+                           "match_reasons": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or [],
+                           "requisitos": x.get("requisitos") or []})
     scores = [x["match_score"] for x in resultados]
     return {
         "success": True, "results": resultados, "total_found": len(resultados), "total_candidatos": r["total"],
