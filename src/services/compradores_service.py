@@ -563,7 +563,8 @@ def detalle_encaje(ficha: Dict[str, Any], crit: Dict[str, Any], razones: List[Di
     filas = []
     zonas = crit.get("zonas") or []
     for r in razones:
-        fila = {"criterio": _ETIQUETA_CRITERIO.get(r["criterio"], r["criterio"].capitalize()), "pide": r["texto"],
+        pide = r["texto"][5:] if r["texto"].startswith("Pide ") else r["texto"]   # la columna ya dice «lo que pide»
+        fila = {"criterio": _ETIQUETA_CRITERIO.get(r["criterio"], r["criterio"].capitalize()), "pide": pide[:1].upper() + pide[1:],
                 "tuyo": _tuyo(r["criterio"], ficha),
                 "estado": "si" if r["ok"] is True else "no" if r["ok"] is False else "duda"}
         n_lugares = len(zonas) + len(_municipios_pedidos(crit))
