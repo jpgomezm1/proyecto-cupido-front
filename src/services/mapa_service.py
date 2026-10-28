@@ -214,7 +214,7 @@ _SQL_INMUEBLES = """
     SELECT id, zona, latitud::float AS lat, longitud::float AS lng, precio, precio_m2,
            area_construida, habitaciones, tipo_propiedad, fecha_creacion
     FROM propiedades
-    WHERE activa AND COALESCE(tipo_negocio, 'Venta') ILIKE 'venta'
+    WHERE activa AND NOT es_prueba AND COALESCE(tipo_negocio, 'Venta') ILIKE 'venta'
       AND latitud BETWEEN %s AND %s AND longitud BETWEEN %s AND %s
 """
 

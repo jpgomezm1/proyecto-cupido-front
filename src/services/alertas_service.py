@@ -244,7 +244,7 @@ def generar(max_inmuebles: int = 400) -> Dict[str, int]:
             desde_i, desde_p = _cursor(cur, "inmuebles"), _cursor(cur, "precios")
             nuevos = fetch_all(cur, """
                 SELECT id, fecha_creacion FROM propiedades
-                WHERE activa AND fecha_creacion > %s ORDER BY fecha_creacion LIMIT %s
+                WHERE activa AND NOT es_prueba AND fecha_creacion > %s ORDER BY fecha_creacion LIMIT %s
             """, (desde_i, max_inmuebles))
             cambios = fetch_all(cur, """
                 SELECT DISTINCT ON (propiedad_id) propiedad_id, precio_anterior, precio_nuevo, created_at

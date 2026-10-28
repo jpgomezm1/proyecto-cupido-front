@@ -37,7 +37,7 @@ def _location_filter(ciudad: Optional[str], zona: Optional[str],
                      alias: str = "p"):
     """Condiciones WHERE + params para filtrar propiedades por zona. La consulta debe
     llevar `FROM propiedades p {facetas.JOIN}`: ubicación y tipo van contra el alias `x`."""
-    conditions = [f"{alias}.activa = TRUE", f"{alias}.precio IS NOT NULL", f"{alias}.precio > 0"]
+    conditions = [f"{alias}.activa = TRUE", f"NOT {alias}.es_prueba", f"{alias}.precio IS NOT NULL", f"{alias}.precio > 0"]
     params: List[Any] = []
 
     if tipo_negocio:
@@ -302,7 +302,7 @@ def segmentos_precio(cur, ciudad: Optional[str], zona: Optional[str],
 
     out = []
     for etq, lo, hi in bandas:
-        of_cond = [f"p.activa", "p.tipo_negocio='Venta'", "p.precio > %s"] + ubic
+        of_cond = ["p.activa", "NOT p.es_prueba", "p.tipo_negocio='Venta'", "p.precio > %s"] + ubic
         of_params: List[Any] = [lo] + ubic_params
         if hi is not None:
             of_cond.append("p.precio <= %s"); of_params.append(hi)

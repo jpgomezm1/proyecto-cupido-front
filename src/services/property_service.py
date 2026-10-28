@@ -170,6 +170,7 @@ def find_comparables(cur, property_id, limit: int = 20,
 
         if not incluir_inactivas:
             conditions.append("p.activa = TRUE")
+        conditions.append("NOT p.es_prueba")   # inmuebles de cuentas de prueba: solo su dueño
         # Tipo, ubicación, área y habitaciones salen de facetas (portal → ficha → catálogo).
         conds, ps = facetas.condiciones(ciudad=base.get("ciudad"),
                                         zona=base.get("zona") if usar_zona else None,
@@ -270,7 +271,7 @@ def estimate_price(cur, ciudad: Optional[str] = None, zona: Optional[str] = None
     usando el precio/m² mediano del segmento y el área objetivo.
     """
     conditions = [
-        "p.activa = TRUE",
+        "p.activa = TRUE", "NOT p.es_prueba",
         "p.precio IS NOT NULL AND p.precio > 0",
         "x.area > 0",
         "p.tipo_negocio = %s",
@@ -488,7 +489,7 @@ def capacidad_de_compra(cur, ingreso_mensual: float, cuota_inicial: float = 0,
 
     # Si hay filtros, cuántas propiedades entran en el techo.
     if any([ciudad, zona, tipo_propiedad]):
-        conditions = ["p.activa = TRUE", "p.precio > 0", "p.precio <= %s", "p.tipo_negocio = 'Venta'"]
+        conditions = ["p.activa = TRUE", "NOT p.es_prueba", "p.precio > 0", "p.precio <= %s", "p.tipo_negocio = 'Venta'"]
         params: List[Any] = [precio_max]
         conds, ps = facetas.condiciones(ciudad=ciudad, zona=zona, tipo=tipo_propiedad)
         conditions += conds

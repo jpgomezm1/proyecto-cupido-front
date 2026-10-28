@@ -271,7 +271,7 @@ class Gazetteer:
                        COALESCE(f.barrio, p.zona) AS barrio,
                        p.zona, p.latitud AS lat, p.longitud AS lng
                 FROM propiedades p LEFT JOIN propiedades_ficha f ON f.propiedad_id = p.id
-                WHERE p.activa
+                WHERE p.activa AND NOT p.es_prueba
             """)
         puntos = defaultdict(list)
         nombres: Dict[str, Counter] = defaultdict(Counter)   # clave → cómo se escribe en los datos
@@ -387,7 +387,7 @@ _FAMILIA = {
 def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]],
                 ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     """`ids`: limita la búsqueda a esos inmuebles (lo usan las alertas de cruce)."""
-    cond = ["p.activa", "p.precio IS NOT NULL"]
+    cond = ["p.activa", "NOT p.es_prueba", "p.precio IS NOT NULL"]   # los de prueba solo los ve su dueño
     params: List[Any] = []
     if ids is not None:
         cond.append("p.id = ANY(%s)")

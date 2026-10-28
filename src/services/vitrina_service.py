@@ -64,7 +64,7 @@ def _inmuebles_oportunidad(cur) -> List[Dict[str, Any]]:
         return []
     filas = fetch_all(cur, """
         SELECT id FROM propiedades
-        WHERE id = ANY(%s) AND activa
+        WHERE id = ANY(%s) AND activa AND NOT es_prueba
           AND fecha_ultima_validacion > NOW() - INTERVAL '72 hours'
           AND fecha_creacion > NOW() - INTERVAL '30 days'
           AND COALESCE(total_imagenes, 0) >= 5

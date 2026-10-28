@@ -153,6 +153,9 @@ def get_properties():
             WHERE {status_condition}
             AND (p.tipo_negocio = 'Venta' OR p.tipo_negocio IS NULL)
         """
+        # Los inmuebles de cuentas de prueba solo los ven su dueño (Mis inmuebles) y el admin.
+        if not owner_phone and not es_admin():
+            where_clause += " AND NOT p.es_prueba"
         params = []
 
         # Filtro por dueño (Mis Propiedades en chat). Match por los ultimos 10 digitos
@@ -1921,7 +1924,7 @@ def get_similar_properties(slug: str):
                 p.imagen_principal as cover_image,
                 p.fuente as source
             FROM propiedades p
-            WHERE p.activa = true
+            WHERE p.activa = true AND NOT p.es_prueba
             AND p.id != %s
             AND (
                 -- Priorizar misma ciudad y tipo

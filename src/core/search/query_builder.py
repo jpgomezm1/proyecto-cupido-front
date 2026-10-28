@@ -213,7 +213,7 @@ class QueryBuilder:
             asesor, telefono, inmobiliaria, imagen_principal, total_imagenes,
             descripcion, fecha_creacion
         FROM propiedades
-        WHERE activa = TRUE
+        WHERE activa = TRUE AND NOT es_prueba
         AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL)
         """
 
