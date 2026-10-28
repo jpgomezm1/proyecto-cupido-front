@@ -1290,6 +1290,28 @@ def _nombre_compradores(ficha):
     return f"Compradores · {tipo}{' en ' + lugar if lugar else ''}"[:80]
 
 
+def _frase_mejor(c):
+    """«El mejor encaja perfecto y lo pidieron hace 2 días.»"""
+    nivel = {'perfecto': 'encaja perfecto', 'encaja': 'encaja bien'}.get(c.get('nivel'), 'encaja en parte')
+    d = c.get('dias')
+    cuando = ('' if d is None or d >= 999 else ' y lo pidieron hoy' if d == 0 else ' y lo pidieron ayer' if d == 1
+              else f" y lo pidieron hace {d} días" if d < 60 else f" y lo pidieron hace {d // 30} meses")
+    return f"El mejor {nivel}{cuando}."
+
+
+def _cambios_ficha(antes, ahora):
+    """Qué cambió entre dos fichas, en palabras: ['$590 millones', '2 habitaciones']."""
+    out = []
+    if ahora.get('precio') and ahora.get('precio') != antes.get('precio'):
+        out.append(compradores.format_cop(ahora['precio']))
+    for k, etq in (('habitaciones', 'habitaciones'), ('banos', 'baños'), ('parqueaderos', 'parqueaderos')):
+        if ahora.get(k) is not None and ahora.get(k) != antes.get(k):
+            out.append(f"{ahora[k]} {etq}")
+    if ahora.get('area_m2') and ahora.get('area_m2') != antes.get('area_m2'):
+        out.append(f"{int(ahora['area_m2'])} m²")
+    return out
+
+
 def _responder_compradores(db, conversation_id, user_id, user_message, content,
                            conv_nombre, total_mensajes, previo=None):
     """
@@ -1303,25 +1325,23 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
     ficha = resuelto.get('ficha')
 
     if ficha:
-        res = compradores.buscar_compradores(db.cursor, ficha, user_id)
+        res = compradores.buscar_compradores(db.cursor, ficha, user_id, limit=60)
         total = res['total_found']
         lista = res['compradores']
         lugar = ficha.get('zona') or ficha.get('ciudad')
         tipo = (ficha.get('tipo') or 'inmueble').lower()
         antes = (previo or {}).get('total')
-        if previa and antes is not None and ficha.get('precio') and ficha.get('precio') != previa.get('precio'):
+        cambios = _cambios_ficha(previa, ficha) if previa and antes is not None else []
+        if cambios:
             dif = total - antes
-            cambio = (f"{dif} más que" if dif > 0 else f"{-dif} menos que" if dif < 0 else "los mismos")
-            assistant_content = (
-                f"Con {compradores.format_cop(ficha['precio'])}: {total} "
-                f"{'pedido encaja' if total == 1 else 'pedidos encajan'} ({cambio} "
-                f"con {compradores.format_cop(previa['precio'])})."
-            )
+            cambio = (f"{dif} más que antes" if dif > 0 else f"{-dif} menos que antes" if dif < 0 else "los mismos que antes")
+            assistant_content = (f"Con {' y '.join(cambios)}: {total} "
+                                 f"{'pedido encaja' if total == 1 else 'pedidos encajan'} ({cambio}).")
         elif lista:
             assistant_content = (
                 f"Encontré {total} {'pedido que encaja' if total == 1 else 'pedidos que encajan'} "
                 f"con tu {tipo}{' en ' + lugar if lugar else ''}. "
-                f"El mejor coincide en {lista[0]['score']}%."
+                f"{_frase_mejor(lista[0])}"
             )
         else:
             assistant_content = (
@@ -1335,6 +1355,7 @@ def _responder_compradores(db, conversation_id, user_id, user_message, content,
             'propiedad': compradores.ficha_publica(ficha),
             'total_found': total,
             'compradores': lista,
+            'conteos': res.get('conteos'),
             'error_type': None,
             'mensaje_error': None,
         }

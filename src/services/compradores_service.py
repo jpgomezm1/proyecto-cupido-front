@@ -409,6 +409,22 @@ _SQL_DESBLOQUEABLE = f"""
 """
 
 
+DIAS_RECIENTE = 30
+
+
+def _dias(fecha) -> int:
+    if not fecha:
+        return 999
+    from datetime import datetime
+    ahora = datetime.now(fecha.tzinfo) if getattr(fecha, "tzinfo", None) else datetime.now()
+    return max(0, (ahora - fecha).days)
+
+
+def _frescura(fecha) -> float:
+    d = _dias(fecha)
+    return 1.0 if d <= 14 else 0.92 if d <= 30 else 0.8 if d <= 60 else 0.65
+
+
 def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None,
                        dias: int = DIAS_PEDIDOS, limit: int = 15) -> Dict[str, Any]:
     precio = ficha.get("precio")
@@ -434,7 +450,10 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         if descartado or puntaje < PUNTAJE_MINIMO:
             continue
         candidatos.append((puntaje, f, razones, crit))
-    candidatos.sort(key=lambda x: (-x[0], -(x[1]["fecha_captura"].timestamp() if x[1].get("fecha_captura") else 0)))
+    # Orden: encaje × frescura. Un pedido de hace 3 meses al 100 % vale menos que uno de esta semana
+    # al 90 %: ese comprador probablemente ya compró.
+    candidatos.sort(key=lambda x: (-x[0] * _frescura(x[1].get("fecha_captura")),
+                                   -(x[1]["fecha_captura"].timestamp() if x[1].get("fecha_captura") else 0)))
     # El mismo pedido reenviado a varios grupos: se queda el más reciente.
     unicos, huellas = [], set()
     for cand in candidatos:
@@ -445,6 +464,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         huellas.add(huella)
         unicos.append(cand)
     candidatos = unicos
+    resumen = {"recientes": sum(1 for c in candidatos if _dias(c[1].get("fecha_captura")) <= DIAS_RECIENTE),
+               "perfecto": sum(1 for c in candidatos if c[0] >= 90), "todos": len(candidatos)}
     top = candidatos[:limit]
 
     vistos = set()
@@ -462,6 +483,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             "mensaje_original": redact_phones(f["texto_pedido"] or "", cut_signatures=True)
             if f["id"] in vistos else None,
             "score": puntaje,
+            "nivel": "perfecto" if puntaje >= 90 else "encaja" if puntaje >= 75 else "casi",
+            "dias": _dias(f.get("fecha_captura")),
             "razones": razones,
             "presupuesto_estimado": int(pmax) if pmax else None,
             "presupuesto_legible": format_cop(pmax) if pmax else None,
@@ -469,7 +492,7 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             "desbloqueable": bool(f.get("desbloqueable")),
             "contacto_desbloqueado": f["id"] in vistos,
         })
-    return {"total_found": len(candidatos), "compradores": compradores}
+    return {"total_found": len(candidatos), "compradores": compradores, "conteos": resumen}
 
 
 def buscar_compradores_public(entrada: str, user_id: Optional[int] = None, limit: int = 15) -> Dict[str, Any]:
