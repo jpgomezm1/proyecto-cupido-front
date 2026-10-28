@@ -47,7 +47,11 @@ def cupo():
 def analizar(conversation_id):
     if not _activo():
         return jsonify({"success": False, "error": "no_disponible"}), 404
-    pregunta = ((request.get_json(silent=True) or {}).get("content") or "").strip()
+    cuerpo = request.get_json(silent=True) or {}
+    pregunta = (cuerpo.get("content") or "").strip()
+    # «Analizarlo a fondo» de una pregunta que ya está en la conversación (la del pre-análisis): no se
+    # vuelve a guardar como mensaje del agente, así no sale repetida.
+    continuacion = bool(cuerpo.get("continuacion"))
     if not pregunta:
         return jsonify({"success": False, "error": "El mensaje no puede estar vacío"}), 400
     if len(pregunta) > 2000:
@@ -73,15 +77,17 @@ def analizar(conversation_id):
     # La pregunta se guarda YA: si el agente se va a WhatsApp y el celular recarga la página,
     # la conversación muestra su pregunta y "Findy sigue analizando" (el front consulta hasta
     # que llega la respuesta).
-    with get_db() as db:
-        u = fetch_one(db.cursor, """
-            INSERT INTO mensajes_conversacion (conversacion_id, role, content) VALUES (%s, 'user', %s)
-            RETURNING id, fecha_creacion
-        """, (conversation_id, pregunta))
-        if conv["nombre"] in (None, "", "Nueva Conversación"):
-            db.cursor.execute("UPDATE conversaciones_busqueda SET nombre = %s WHERE id = %s", (pregunta[:60], conversation_id))
-        db.conn.commit()
-    user_message = {"id": u["id"], "role": "user", "content": pregunta, "fecha_creacion": u["fecha_creacion"].isoformat()}
+    user_message = None
+    if not continuacion:
+        with get_db() as db:
+            u = fetch_one(db.cursor, """
+                INSERT INTO mensajes_conversacion (conversacion_id, role, content) VALUES (%s, 'user', %s)
+                RETURNING id, fecha_creacion
+            """, (conversation_id, pregunta))
+            if conv["nombre"] in (None, "", "Nueva Conversación"):
+                db.cursor.execute("UPDATE conversaciones_busqueda SET nombre = %s WHERE id = %s", (pregunta[:60], conversation_id))
+            db.conn.commit()
+        user_message = {"id": u["id"], "role": "user", "content": pregunta, "fecha_creacion": u["fecha_creacion"].isoformat()}
 
     # El análisis corre en un hilo aparte que SIEMPRE termina y guarda la respuesta, aunque el
     # celular corte la conexión del streaming; el streaming solo retransmite sus eventos.
