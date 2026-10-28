@@ -140,6 +140,7 @@ NO es una ubicación.
 - "Cerca del colegio Montessori / de Oviedo / del metro" → cerca_de.
 - Lo que dice "debe", "indispensable", "muy importante", "OJO" → obligatorias si es una característica \
 del vocabulario; "ojalá", "le gusta", "preferible" → deseables.
+- "Con parqueadero" = parqueaderos_min 1 (NO es parqueadero_cubierto, salvo que diga "cubierto"). "No primer piso" = piso_min 2.
 - "Unidad completa/cerrada" = unidad_cerrada. "Sin ruido" = tranquilo. "Vista a verde/montaña" = vista_verde.
 - Si hay un pedido anterior y el mensaje lo ajusta ("más barato", "mejor en Envigado", "con balcón"), \
 devuelve el pedido COMPLETO actualizado: conserva lo anterior y cambia solo lo que el mensaje cambia. \
@@ -723,7 +724,7 @@ _COLUMNAS = """id, id::text AS slug, codigo_propiedad, fuente, url, titulo, prec
     tipo_propiedad, estado, ciudad, zona, direccion_completa, area_construida, habitaciones,
     banos, parqueaderos, estrato, piso, ano_construccion, administracion, predial,
     amenidades_internas, amenidades_externas, total_amenidades, asesor, telefono, inmobiliaria,
-    imagen_principal, total_imagenes, descripcion, fecha_creacion"""
+    imagen_principal, total_imagenes, descripcion, fecha_creacion, fecha_ultima_validacion"""
 
 
 def chips(ped: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -753,6 +754,10 @@ def chips(ped: Dict[str, Any]) -> List[Dict[str, str]]:
                     (f"Desde {int(a0)} m²" if a0 else f"Hasta {int(a1)} m²")})
     if ped.get("estrato_min"):
         out.append({"tipo": "otro", "texto": f"Estrato {int(ped['estrato_min'])}+"})
+    p0, p1 = ped.get("piso_min"), ped.get("piso_max")
+    if p0 or p1:
+        out.append({"tipo": "otro", "texto": f"Piso {int(p0)} a {int(p1)}" if p0 and p1 else
+                    (f"Piso {int(p0)} o más" if p0 else f"Hasta piso {int(p1)}")})
     for c in ped.get("obligatorias") or []:
         out.append({"tipo": "obligatoria", "texto": _ETIQUETAS_CARACT.get(c, c)})
     for d in ped.get("deseables") or []:
@@ -812,7 +817,7 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
     ped = r["pedido"]
     if r["tipo"] == "no_es_busqueda" and previo:
         ped = previo  # un mensaje que no es búsqueda no borra lo que el agente ya pidió
-    criteria = {**criterios_legibles(ped), "pedido_v3": ped}
+    criteria = {**criterios_legibles(ped), "pedido_v3": ped, "chips": [c["texto"] for c in chips(ped)]}
     if r["tipo"] == "no_es_busqueda":
         return {"success": True, "results": [], "total_found": 0, "criteria": criteria,
                 "search_type": "no_es_busqueda",
@@ -838,6 +843,9 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
              "banos": f.get("banos") or x.get("banos"),
              "area_construida": f.get("area_construida") or x.get("area")}
         f.update(precios.get(x["id"], {}))
+        # Frescura: sin esto la tarjeta dice «Sin verificar» aunque se haya verificado ayer.
+        from src.services.property_service import frescura
+        f["verificada_hace_dias"] = frescura(f.get("fecha_ultima_validacion"))["verificada_hace_dias"]
         resultados.append({**f, "match_score": x.get("score_final", x["score"]),
                            "match_reasons": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or []})
     scores = [x["match_score"] for x in resultados]
