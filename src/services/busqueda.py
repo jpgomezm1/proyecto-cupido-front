@@ -779,6 +779,8 @@ def chips(ped: Dict[str, Any]) -> List[Dict[str, str]]:
         out.append({"tipo": "zona", "texto": f"Sin {x}"})
     for x in ped.get("cerca_de") or []:
         out.append({"tipo": "zona", "texto": f"Cerca de {x}"})
+    for x in ped.get("edificios_referencia") or []:
+        out.append({"tipo": "zona", "texto": f"Como {x}"})   # «tipo Cibeles»: una referencia, no un lugar
     pmin, pmax = ped.get("presupuesto_min"), ped.get("presupuesto_max")
     if pmin and pmax:
         out.append({"tipo": "precio", "texto": f"{_millones(pmin)} a {_millones(pmax)}"})
