@@ -71,7 +71,7 @@ def _telefono_en_otra_cuenta(cur, telefono: str, user_id: Optional[int]) -> bool
 # ---------------------------------------------------------------------------
 
 def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_terminos: bool,
-              desde: Optional[str] = None) -> Dict[str, Any]:
+              desde: Optional[str] = None, codigo_acceso: Optional[str] = None) -> Dict[str, Any]:
     nombre = " ".join((nombre or "").split())
     email = (email or "").strip().lower()
     if len(nombre) < 3:
@@ -83,6 +83,13 @@ def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_termino
     tel = _celular(telefono)
     if not acepta_terminos:
         raise RegistroError("invalido", "Para crear tu cuenta debes aceptar los términos y el tratamiento de datos.", "terminos")
+    # Código de la beta: se valida antes de crear la cuenta (uno mal escrito no deja una cuenta a medias).
+    from src.services import codigos_acceso_service as codigos
+    if (codigo_acceso or "").strip():
+        try:
+            codigos.validar(codigo_acceso)
+        except codigos.CodigoError as e:
+            raise RegistroError("invalido", e.mensaje, "codigo")
 
     with get_db() as db:
         cur = db.cursor
@@ -103,7 +110,13 @@ def registrar(nombre: str, email: str, clave: str, telefono: str, acepta_termino
     eventos.registrar_uno(user_id, "cuenta_creada",
                           {"desde": desde if desde in eventos.ORIGENES_REGISTRO else "directo"})
     correo_service.bienvenida(nombre, email)
-    return {"ok": True, "user_id": user_id, "email": email}
+    res: Dict[str, Any] = {"ok": True, "user_id": user_id, "email": email}
+    if (codigo_acceso or "").strip():
+        try:
+            res["codigo"] = codigos.canjear(user_id, codigo_acceso)
+        except codigos.CodigoError as e:    # p. ej. se agotó entre validar y canjear: la cuenta queda igual
+            res["codigo_error"] = e.mensaje
+    return res
 
 
 # ---------------------------------------------------------------------------

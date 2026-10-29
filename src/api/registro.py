@@ -40,12 +40,28 @@ def registro():
     d = request.get_json(silent=True) or {}
     try:
         res = svc.registrar(d.get('nombre'), d.get('email'), d.get('clave'), d.get('telefono'),
-                            bool(d.get('acepta_terminos')), desde=d.get('desde'))
+                            bool(d.get('acepta_terminos')), desde=d.get('desde'),
+                            codigo_acceso=d.get('codigo_acceso'))
         return jsonify({"success": True, "data": res}), 201
     except svc.RegistroError as e:
         return _error(e)
     except Exception as e:
         return _fallo(e, 'registro')
+
+
+@registro_bp.route('/codigo-acceso', methods=['POST'])
+@require_chat_auth
+def canjear_codigo_acceso():
+    """El código de la beta para una cuenta que ya existe (Mi cuenta › Plan)."""
+    from src.services import codigos_acceso_service as codigos
+    d = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"success": True, "data": codigos.canjear(request.chat_user['id'], d.get('codigo'))})
+    except codigos.CodigoError as e:
+        estado = 409 if e.codigo in ("ya_usado", "ya_fundador", "sin_cupos") else 400
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), estado
+    except Exception as e:
+        return _fallo(e, 'canjear_codigo_acceso')
 
 
 @registro_bp.route('/telefono/codigo', methods=['POST'])
