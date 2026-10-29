@@ -465,6 +465,35 @@ def pago_rechazado(nombre: str, email: str, pago: Dict[str, Any], **kw) -> None:
     enviar(email, f"Tu pago de {plan} no se completó", html_, texto, "pago_rechazado", **kw)
 
 
+def renovacion_activada(nombre: str, email: str, plan: str, monto_cop: Any, tarjeta: str, proximo: Any, **kw) -> None:
+    n = _primer_nombre(nombre)
+    cuando = f"el <b>{_e(_fecha(proximo))}</b>" if proximo else "cuando termine tu periodo"
+    cuerpo = _parrafo(f"{_e(n)}, activaste la <b>renovación automática</b> de tu plan <b>{_e(plan)}</b> con la tarjeta "
+                      f"<b>{_e(tarjeta)}</b>. Te cobraremos {_e(_pesos(monto_cop))} {cuando} y así cada 30 días. "
+                      "Puedes cancelarla cuando quieras en Mi cuenta › Plan, sin permanencia.")
+    html_ = _layout(preheader=f"Tu plan {plan} se renueva solo con {tarjeta}. Cancélalo cuando quieras.",
+                    icono="renovacion", eyebrow="Renovación automática", titulo="Tu plan se renueva solo",
+                    intro="Sin acordarte de pagar y sin perder días.", acento=MENTA, cuerpo=cuerpo,
+                    cta=("Ver mi plan", f"{_frontend()}/app/cuenta/plan"))
+    texto = (f"{n}, activaste la renovación automática de {plan} con {tarjeta}: {_pesos(monto_cop)} cada 30 días. "
+             f"Cancélala cuando quieras: {_frontend()}/app/cuenta/plan")
+    enviar(email, f"Renovación automática de {plan} activada", html_, texto, "renovacion_activada", **kw)
+
+
+def renovacion_fallida(nombre: str, email: str, plan: str, tarjeta: str, **kw) -> None:
+    n = _primer_nombre(nombre)
+    cuerpo = _parrafo(f"{_e(n)}, intentamos renovar tu plan <b>{_e(plan)}</b> con la tarjeta <b>{_e(tarjeta)}</b> "
+                      "varias veces y el banco no lo aprobó, así que <b>no se te cobró nada</b> y la renovación "
+                      "automática quedó en pausa. Actualiza la tarjeta o renueva con PSE o Nequi.")
+    html_ = _layout(preheader="No se te cobró nada. Actualiza la tarjeta para no perder tus llaves.",
+                    icono="findy-piensa", eyebrow="Renovación automática", titulo="No pudimos renovar tu plan",
+                    intro="No se te cobró nada.", acento=CORAL, cuerpo=cuerpo,
+                    cta=("Actualizar mi tarjeta", f"{_frontend()}/app/cuenta/plan"))
+    texto = (f"{n}, no pudimos renovar {plan} con {tarjeta} y no se te cobró nada. "
+             f"Actualiza la tarjeta: {_frontend()}/app/cuenta/plan")
+    enviar(email, f"No pudimos renovar tu plan {plan}", html_, texto, "renovacion_fallida", **kw)
+
+
 def plan_por_vencer(nombre: str, email: str, plan: str, vence: Any, llaves_restantes: int, **kw) -> None:
     n = _primer_nombre(nombre)
     cuerpo = _parrafo(f"{_e(n)}, tu plan <b>{_e(plan)}</b> vence el <b>{_e(_fecha(vence))}</b>. "
@@ -736,6 +765,8 @@ def recordatorios_plan() -> Dict[str, int]:
                    OR (s.fin <= NOW() AND s.gracia_hasta > NOW()))
               AND NOT EXISTS (SELECT 1 FROM suscripciones s2 WHERE s2.user_id = s.user_id
                               AND s2.estado = 'activa' AND s2.inicio >= s.fin)
+              -- Con renovación automática el plan se cobra solo: no se le pide renovar.
+              AND NOT EXISTS (SELECT 1 FROM medios_pago m WHERE m.user_id = s.user_id AND m.estado = 'activa')
         """)
         for f in filas:
             if not _marcar(cur, f"plan_{f['momento']}", str(f["id"]), f["user_id"]):

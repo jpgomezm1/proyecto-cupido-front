@@ -54,6 +54,51 @@ def crear():
         return jsonify({"success": False, "error": "Error en el servidor"}), 500
 
 
+# ---------------------------------------------------------------------------
+# Renovación automática con tarjeta (renovacion_service, migración 067)
+# ---------------------------------------------------------------------------
+
+def _renovacion(fn, contexto: str):
+    from src.services import renovacion_service as ren
+    try:
+        return jsonify({"success": True, "data": fn(ren)})
+    except ren.RenovacionError as e:
+        estado = {"no_disponible": 503, "no_encontrado": 404}.get(e.codigo, 400)
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), estado
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ Error en renovación ({contexto}): {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": "Error en el servidor"}), 500
+
+
+@pagos_bp.route('/chat/renovacion', methods=['GET'])
+@require_chat_auth
+def renovacion_estado():
+    """Estado + lo que el widget necesita: llave pública y los documentos de Wompi que el agente acepta."""
+    def _datos(ren):
+        res = ren.estado(request.chat_user['id'])
+        if res.get("habilitada"):
+            acc = ren.aceptacion()
+            res.update(llave_publica=svc._cfg("WOMPI_PUBLIC_KEY"), reglamento=acc.get("permalink"),
+                       datos_personales=acc.get("datos_permalink"))
+        return res
+    return _renovacion(_datos, 'estado')
+
+
+@pagos_bp.route('/chat/renovacion', methods=['POST'])
+@require_chat_auth
+def renovacion_activar():
+    d = request.get_json(silent=True) or {}
+    return _renovacion(lambda ren: ren.activar(request.chat_user['id'], d.get('plan'), d.get('token'),
+                                               bool(d.get('acepta'))), 'activar')
+
+
+@pagos_bp.route('/chat/renovacion', methods=['DELETE'])
+@require_chat_auth
+def renovacion_cancelar():
+    return _renovacion(lambda ren: ren.cancelar(request.chat_user['id']), 'cancelar')
+
+
 @pagos_bp.route('/chat/pagos/<referencia>', methods=['GET'])
 @require_chat_auth
 def estado(referencia: str):

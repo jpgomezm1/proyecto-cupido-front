@@ -222,8 +222,18 @@ if __name__ == '__main__':
             except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
                 _reportar("PAGOS", e)
 
+        def _renovar():
+            # Renovación automática con tarjeta (R19): cobra un día antes de vencer, con reintentos.
+            try:
+                from src.services import renovacion_service
+                print(f"[PAGOS] Renovación automática: {renovacion_service.renovar()}")
+            except Exception as e:  # noqa: BLE001 — nunca tumbar el worker
+                _reportar("RENOVACION", e)
+
         sched_pagos = BackgroundScheduler()
         sched_pagos.add_job(_reconciliar, 'interval', minutes=15, id='pagos_reconciliar',
+                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_pagos.add_job(_renovar, 'interval', hours=1, id='pagos_renovar',
                             next_run_time=datetime.now(), max_instances=1, coalesce=True)
         sched_pagos.start()
         print("[WORKER] Conciliación de pagos programada (cada 15 min)")
