@@ -384,6 +384,11 @@ _FAMILIA = {
 }
 
 
+# «Hasta $700 M»: el cliente está cerca del techo. Puntaje completo entre el 85 % y el 100 % del
+# presupuesto (sin mínimo dicho); debajo baja de a poco (70 % ≈ 0,77; 50 % ≈ 0,46) y bajo el 50 % ni entra.
+PRECIO_PISO, PRECIO_CAIDA, PRECIO_MINIMO = 0.85, 1.3, 0.50
+
+
 def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]],
                 ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     """`ids`: limita la búsqueda a esos inmuebles (lo usan las alertas de cruce)."""
@@ -407,7 +412,7 @@ def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]],
         cond.append("p.precio <= %s")
         params.append(pmax * 1.15)
         cond.append("p.precio >= %s")
-        params.append((pmin * 0.85) if pmin else pmax * 0.40)
+        params.append((pmin * 0.85) if pmin else pmax * PRECIO_MINIMO)
     elif pmin:
         cond.append("p.precio >= %s")
         params.append(pmin * 0.85)
@@ -536,8 +541,8 @@ def _puntuar(p: Dict[str, Any], ped: Dict[str, Any], ub: Dict[str, Any]) -> Opti
     pmax, pmin, precio = ped.get("presupuesto_max"), ped.get("presupuesto_min"), float(p["precio"])
     if pmax:
         if precio <= pmax:
-            piso = pmin or pmax * 0.7
-            s_pr = 1.0 if precio >= piso else max(0.35, 1 - (piso - precio) / piso * 1.5)
+            piso = pmin or pmax * PRECIO_PISO
+            s_pr = 1.0 if precio >= piso else max(0.35, 1 - (piso - precio) / piso * PRECIO_CAIDA)
             cumple.append(_millones(precio))
         else:
             exceso = precio / pmax - 1
