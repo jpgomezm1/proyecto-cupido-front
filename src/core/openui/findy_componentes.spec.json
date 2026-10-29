@@ -54,7 +54,7 @@
       "description": "Tarjetas reales de inmuebles de Fynder (foto, precio y botón de llave) a partir de sus ids."
     },
     "Compradores": {
-      "signature": "Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[], pedido?: number, nivel?: \"perfecto\" | \"encaja\" | \"casi\", hace?: string, porque?: string, accion?: \"llave\" | \"conectar\" | \"abierto\"}[], plegado?: boolean)",
+      "signature": "Compradores(titulo: string, items: {resumen: string, presupuesto?: string, encaje?: number, razones?: string[], pedido?: number, nivel?: \"perfecto\" | \"encaja\" | \"casi\", hace?: string, porque?: string, accion?: \"llave\" | \"conectar\" | \"conectando\" | \"abierto\"}[], plegado?: boolean)",
       "description": "Pedidos de compradores que encajan, sin datos personales: con pedido y porque se ve el botón de contacto y la razón para elegirlo."
     },
     "Hallazgos": {
@@ -620,6 +620,7 @@
                   "enum": [
                     "llave",
                     "conectar",
+                    "conectando",
                     "abierto"
                   ]
                 }
