@@ -285,14 +285,17 @@ def search_properties(query: str, limit: int = 10, offset: int = 0) -> Dict[str,
 @mcp.tool(title="Ficha de una propiedad", annotations=_LECTURA)
 def get_property(id_or_slug: str) -> Dict[str, Any]:
     """
-    Obtiene la ficha completa de una propiedad por su id numérico o su slug
-    (código de propiedad). Incluye precio, área, precio/m², specs, amenidades,
+    Obtiene la ficha completa de una propiedad por su id de Fynder o por su código
+    (el código del portal que pasan los colegas, p. ej. el de Wasi «9849500» o el de
+    Lobbie «407350», también sirve). Incluye precio, área, precio/m², specs, amenidades,
     descripción, días en inventario y las URLs de sus fotos (`imagenes_urls`).
     Para VER las fotos de una propiedad propia, usa `revisar_fotos`.
     """
     prop = ps.get_property_public(id_or_slug)
     if not prop:
-        return {"error": "no_encontrada", "mensaje": f"No existe la propiedad {id_or_slug}"}
+        return {"error": "no_encontrada",
+                "mensaje": f"No encontré {id_or_slug} en Fynder, ni como id ni como código de Wasi o Lobbie. "
+                           "Puede que ese aviso todavía no esté en el inventario."}
     _marcar_desbloqueos([prop])
     return prop
 

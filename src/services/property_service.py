@@ -136,14 +136,25 @@ def _row_to_property(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_property(cur, id_or_slug) -> Optional[Dict[str, Any]]:
-    """Obtiene una propiedad por id numérico o por slug (`codigo_propiedad`)."""
-    id_or_slug = str(id_or_slug).strip()
+    """Obtiene una propiedad por id de Fynder o por su código (`codigo_propiedad`).
+
+    Un número puede ser cualquiera de los dos: los colegas pasan el código del portal (Wasi 7–8 dígitos,
+    Lobbie 6). Si coinciden ambos, con 6 o más dígitos gana el código (los ids de Fynder tienen hasta 5);
+    con menos, el id, que es lo que pasan las llamadas internas.
+    """
+    id_or_slug = str(id_or_slug).strip().lstrip("#")
     if id_or_slug.isdigit():
-        where, param = "p.id = %s", int(id_or_slug)
+        pid = int(id_or_slug) if len(id_or_slug) <= 9 else -1      # integer de Postgres
+        primero = "p.codigo_propiedad = %s" if len(id_or_slug) >= 6 else "p.id = %s"
+        primero_param = id_or_slug if len(id_or_slug) >= 6 else pid
+        row = fetch_one(cur, f"""
+            SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS} FROM propiedades p {facetas.JOIN}
+            WHERE p.id = %s OR p.codigo_propiedad = %s
+            ORDER BY ({primero}) DESC, p.activa DESC, p.fecha_creacion DESC LIMIT 1
+        """, (pid, id_or_slug, primero_param))
     else:
-        where, param = "p.codigo_propiedad = %s", id_or_slug
-    row = fetch_one(cur, f"SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS} FROM propiedades p {facetas.JOIN} WHERE {where}",
-                    (param,))
+        row = fetch_one(cur, f"SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS} FROM propiedades p {facetas.JOIN} "
+                             "WHERE p.codigo_propiedad = %s", (id_or_slug,))
     return _row_to_property(row) if row else None
 
 
