@@ -193,16 +193,33 @@ def find_comparables(cur, property_id, limit: int = 20,
             hi = base["area_construida"] * 1.30
             conditions.append("(x.area IS NULL OR x.area BETWEEN %s AND %s)")
             params.extend([lo, hi])
+        if (base.get("tipo_negocio") or "Venta") == "Venta":
+            # Fuera los precios imposibles (arriendos mal marcados, $1 M «en venta»): eran los primeros.
+            conditions.append("p.precio >= 30000000 AND (x.area IS NULL OR x.area = 0 OR p.precio / x.area BETWEEN 1500000 AND 40000000)")
+
+        # Los MÁS PARECIDOS (área y habitaciones), no los más baratos: con ORDER BY precio + LIMIT el informe
+        # y el diagnóstico comparaban contra la punta barata del mercado.
+        area = float(base.get("area_construida") or 0)
+        hab = base.get("habitaciones")
+        orden = []
+        if area:
+            orden.append("ABS(COALESCE(x.area, %s) - %s) / %s")
+            params_orden: List[Any] = [area * 2, area, area]     # sin área: cuenta como lejano
+        else:
+            params_orden = []
+        if hab is not None:
+            orden.append("ABS(COALESCE(x.hab, %s) - %s) * 0.15")
+            params_orden += [hab + 3, hab]                         # sin habitaciones: lejano
+        orden_sql = (" + ".join(orden) + ", ") if orden else ""
 
         where = " AND ".join(conditions)
-        params.append(limit)
         rows = fetch_all(cur, f"""
             SELECT {_PROPERTY_COLUMNS}, {facetas.COLUMNAS}
             FROM propiedades p {facetas.JOIN}
             WHERE {where}
-            ORDER BY p.precio
+            ORDER BY {orden_sql}p.fecha_ultima_validacion DESC NULLS LAST
             LIMIT %s
-        """, params)
+        """, params + params_orden + [limit])
         return [_row_to_property(r) for r in rows]
 
     comps = _query(usar_zona=True)
