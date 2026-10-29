@@ -499,6 +499,8 @@ def get_property_by_slug(slug: str):
                 COALESCE(p.ubicacion_aproximada, TRUE) as location_approximate,
                 p.estado as condition,
                 p.caracteristicas_adicionales as features,
+                p.amenidades_internas as amenidades_internas,
+                p.amenidades_externas as amenidades_externas,
                 p.activa as published,
                 CASE WHEN p.fuente = 'Pulppo' THEN true ELSE false END as exclusive,
                 false as featured,
@@ -550,6 +552,9 @@ def get_property_by_slug(slug: str):
             'location_approximate': bool(prop.get('location_approximate')) if prop.get('location_approximate') is not None else True,
             'condition': prop.get('condition'),
             'features': prop.get('features'),
+            # Amenidades separadas (R9): del inmueble y del edificio/conjunto, «A | B | C» → lista
+            'amenidades_internas': [x.strip() for x in (prop.get('amenidades_internas') or '').split('|') if x.strip()],
+            'amenidades_externas': [x.strip() for x in (prop.get('amenidades_externas') or '').split('|') if x.strip()],
             'published': prop.get('published'),
             'exclusive': prop.get('exclusive'),
             'featured': prop.get('featured'),
@@ -1885,7 +1890,7 @@ def get_similar_properties(slug: str):
             SELECT id, ciudad, precio, tipo_propiedad, habitaciones, zona
             FROM propiedades
             WHERE (codigo_propiedad = %s OR id::text = %s) AND activa = true
-        """, (slug, slug))
+        """, (slug, slug.split('-')[0] if '-' in slug else slug))   # «19649-acogedor-…» → id 19649
 
         ref_prop = db.cursor.fetchone()
 
