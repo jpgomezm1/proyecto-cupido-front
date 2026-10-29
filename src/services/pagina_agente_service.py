@@ -6,7 +6,8 @@ sube su logo (y su foto). La página muestra sus inmuebles activos, que son los
 que captó con su celular verificado, y un botón para escribirle por WhatsApp.
 Solo se publica con el celular verificado: el número que sale es ese.
 
-Diseño (migración 069, `chat_users.pagina_config`): plantilla, color, tipografía,
+Diseño (migración 069, `chat_users.pagina_config`): plantilla (8), color, tipografía (9),
+fondo, esquinas, estilo de tarjetas, columnas, oscurecer la portada, animaciones,
 portada, titular, secciones en orden (con su interruptor), destacados, cifras,
 testimonios, preguntas frecuentes y redes. `normalizar` valida todo lo que entra;
 lo que no sirve se descarta en silencio y nunca rompe la página.
@@ -35,8 +36,12 @@ _URL_IMG = re.compile(r"^https://[^\s]+$")
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _HANDLE = re.compile(r"^@?([A-Za-z0-9._-]{1,60})$")
 
-PLANTILLAS = ("clasica", "editorial", "minimal", "lujo")
-FUENTES = ("moderna", "elegante", "clasica")
+PLANTILLAS = ("clasica", "editorial", "minimal", "lujo", "boutique", "audaz", "ejecutiva", "natural")
+FUENTES = ("moderna", "geometrica", "contemporanea", "amigable", "fuerte", "elegante", "editorial", "lujo", "clasica")
+# Estilo fino; "auto" = lo que trae la plantilla.
+FONDOS = ("auto", "blanco", "hueso", "crema", "gris", "salvia", "oscuro", "noche")
+ESQUINAS = ("auto", "rectas", "suaves", "redondas")
+TARJETAS = ("auto", "borde", "sombra", "foto")
 SECCIONES = ("sobre_mi", "destacados", "cifras", "inmuebles", "testimonios", "zonas", "preguntas", "valorador", "redes")
 REDES = {
     "instagram": "https://instagram.com/{}", "facebook": "https://facebook.com/{}", "tiktok": "https://tiktok.com/@{}",
@@ -50,6 +55,7 @@ DEFECTO = {
     "plantilla": "clasica", "color": "#16A34A", "fuente": "moderna", "titular": None, "subtitular": None,
     "portada_url": None, "secciones": [{"id": s, "visible": True} for s in SECCIONES], "destacados": [],
     "cifras": {}, "testimonios": [], "preguntas": [], "redes": {}, "mensaje_whatsapp": None,
+    "fondo": "auto", "esquinas": "auto", "tarjetas": "auto", "columnas": 3, "oscurecer": 45, "animaciones": True,
 }
 
 
@@ -103,6 +109,15 @@ def normalizar(c: Any) -> Dict[str, Any]:
         out["color"] = c["color"].upper()
     if c.get("fuente") in FUENTES:
         out["fuente"] = c["fuente"]
+    for campo, opciones in (("fondo", FONDOS), ("esquinas", ESQUINAS), ("tarjetas", TARJETAS)):
+        if c.get(campo) in opciones:
+            out[campo] = c[campo]
+    if c.get("columnas") in (2, 3):
+        out["columnas"] = c["columnas"]
+    if isinstance(c.get("oscurecer"), (int, float)) and not isinstance(c.get("oscurecer"), bool):
+        out["oscurecer"] = max(0, min(80, int(c["oscurecer"])))
+    if isinstance(c.get("animaciones"), bool):
+        out["animaciones"] = c["animaciones"]
     out["titular"] = _texto(c.get("titular"), 90)
     out["subtitular"] = _texto(c.get("subtitular"), 160)
     out["mensaje_whatsapp"] = _texto(c.get("mensaje_whatsapp"), 160)

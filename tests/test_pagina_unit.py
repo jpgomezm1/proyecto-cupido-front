@@ -43,3 +43,11 @@ def test_listas_con_tope_y_sin_vacios():
 def test_paleta_de_la_ia_es_valida():
     assert all(p._COLOR.match(col) for col in ia.PALETA)
     assert ia.PALETA[0] == p.DEFECTO["color"]
+
+
+def test_estilo_fino():
+    c = p.normalizar({"fondo": "salvia", "esquinas": "redondas", "tarjetas": "foto", "columnas": 2, "oscurecer": 200, "animaciones": False})
+    assert (c["fondo"], c["esquinas"], c["tarjetas"], c["columnas"], c["oscurecer"], c["animaciones"]) == ("salvia", "redondas", "foto", 2, 80, False)
+    c = p.normalizar({"fondo": "neon", "columnas": 5, "oscurecer": True, "animaciones": "si", "plantilla": "boutique", "fuente": "lujo"})
+    assert (c["fondo"], c["columnas"], c["oscurecer"], c["animaciones"]) == ("auto", 3, 45, True)
+    assert c["plantilla"] == "boutique" and c["fuente"] == "lujo"

@@ -2,7 +2,7 @@
 Asistente con IA de «Mi página» (migración 069).
 
     armar(user_id, indicaciones)          propuesta completa: titular, presentación, preguntas
-                                          frecuentes, plantilla, color, tipografía y destacados,
+                                          frecuentes, plantilla, color, tipografía, fondo, esquinas y destacados,
                                           a partir del perfil, las zonas y los inmuebles del agente
     mejorar(user_id, campo, texto, pedido) reescribe un texto («más corto», «más cercano»…)
 
@@ -26,7 +26,8 @@ MODELO_RESPALDO = "claude-haiku-4-5-20251001"
 TOPE_DIARIO = int(os.getenv("FYNDER_PAGINA_IA_DIA", "10"))
 
 # Colores que se ven bien en las cuatro plantillas (los mismos del editor).
-PALETA = ["#16A34A", "#0F766E", "#2563EB", "#1E3A8A", "#7C3AED", "#BE185D", "#B45309", "#B91C1C", "#0A0A0A", "#A16207"]
+PALETA = ["#16A34A", "#0F766E", "#2563EB", "#1E3A8A", "#7C3AED", "#BE185D", "#B45309", "#B91C1C", "#0A0A0A", "#A16207",
+          "#9A3412", "#4D7C0F", "#0E7490", "#8B5E3C"]
 
 ESTILO = """Eres el redactor de marca de Fynder. Escribes la página web personal de un agente inmobiliario
 de Colombia (Medellín y el Valle de Aburrá sobre todo), la que comparte en su Instagram y por WhatsApp.
@@ -124,13 +125,17 @@ _ESQUEMA_ARMAR = {
                       "items": {"type": "object", "properties": {"p": {"type": "string"}, "r": {"type": "string"}}, "required": ["p", "r"]}},
         "mensaje_whatsapp": {"type": "string", "description": "Mensaje prellenado con el que el cliente le escribe, máx. 120 caracteres, en primera persona del cliente."},
         "plantilla": {"type": "string", "enum": list(pagina.PLANTILLAS),
-                      "description": "clasica: cercana y versátil; editorial: portada grande con foto, para quien tiene buenas fotos; minimal: sobria; lujo: oscura y elegante, para inmuebles de alto valor."},
+                      "description": "clasica: cercana y versátil; editorial: portada grande con foto, para quien tiene buenas fotos; minimal: sobria; lujo: oscura y elegante, alto valor; boutique: cálida y refinada, foto en arco; audaz: bloque de color y titular gigante, para destacar; ejecutiva: dividida, sobria y corporativa; natural: tonos tierra, amable, para familias."},
         "color": {"type": "string", "enum": PALETA, "description": "Color de marca que combine con el estilo."},
-        "fuente": {"type": "string", "enum": list(pagina.FUENTES), "description": "moderna (sans), elegante (serif de lujo) o clasica (serif tradicional)."},
+        "fuente": {"type": "string", "enum": list(pagina.FUENTES),
+                   "description": "moderna, geometrica, contemporanea, amigable y fuerte son sans; elegante, editorial, lujo y clasica son serif."},
+        "fondo": {"type": "string", "enum": [f for f in pagina.FONDOS if f != "auto"], "description": "Fondo de la página que combine con la plantilla."},
+        "esquinas": {"type": "string", "enum": [e for e in pagina.ESQUINAS if e != "auto"]},
         "destacados": {"type": "array", "items": {"type": "integer"}, "description": "Hasta 3 ids de su lista para destacar arriba (los más atractivos)."},
         "explicacion": {"type": "string", "description": "Una o dos frases para el agente: por qué este estilo."},
     },
-    "required": ["titular", "subtitular", "bio", "zonas", "preguntas", "mensaje_whatsapp", "plantilla", "color", "fuente", "destacados", "explicacion"],
+    "required": ["titular", "subtitular", "bio", "zonas", "preguntas", "mensaje_whatsapp", "plantilla", "color", "fuente",
+                 "fondo", "esquinas", "destacados", "explicacion"],
 }
 
 
@@ -161,6 +166,8 @@ def armar(user_id: int, indicaciones: Optional[str] = None) -> Dict[str, Any]:
         "plantilla": r.get("plantilla") if r.get("plantilla") in pagina.PLANTILLAS else "clasica",
         "color": r.get("color") if r.get("color") in PALETA else PALETA[0],
         "fuente": r.get("fuente") if r.get("fuente") in pagina.FUENTES else "moderna",
+        "fondo": r.get("fondo") if r.get("fondo") in pagina.FONDOS else "auto",
+        "esquinas": r.get("esquinas") if r.get("esquinas") in pagina.ESQUINAS else "auto",
         "destacados": [i for i in r.get("destacados") or [] if i in ids][:3],
         "explicacion": (r.get("explicacion") or "")[:300],
     }
