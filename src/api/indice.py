@@ -4,6 +4,7 @@
 Público (solo ediciones publicadas):
     GET /api/indice              → la última edición + la lista de ediciones
     GET /api/indice/<AAAA-MM>    → una edición
+    GET /api/cifras              → las cifras de la página de inicio (redondeadas hacia abajo)
 
 El admin (calcular, revisar, publicar y la nota de prensa) vive en admin_negocio:
 /api/admin/negocio/indice...
@@ -32,6 +33,17 @@ def _manejar(fn, contexto: str):
 @indice_bp.route('/indice', methods=['GET'])
 def ultima():
     return _manejar(svc.ultima_publicada, 'ultima')
+
+
+@indice_bp.route('/cifras', methods=['GET'])
+def cifras():
+    """Las cifras de la página de inicio («+8.000 inmuebles activos»…), en caché 10 min."""
+    from src.services import market_service
+    try:
+        return jsonify({"success": True, "data": market_service.cifras_publicas_public()})
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ Error en cifras: {e}")
+        return jsonify({"success": False, "error": "Error en el servidor"}), 500
 
 
 @indice_bp.route('/indice/<mes>', methods=['GET'])

@@ -453,3 +453,34 @@ def get_supply_demand_balance(ciudad=None, zona=None, tipo_propiedad=None,
 def donde_captar_public(ciudad=None, tipo_propiedad="apartamento", dias=90, top=8):
     with get_db() as db:
         return donde_captar(db.cursor, ciudad, tipo_propiedad, dias, top)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cifras públicas (la página de inicio): lo mismo que cuenta el Inventario
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hacia_abajo(n: int) -> int:
+    """6.595 → 6.500, 821 → 800, 57 → 50: «+6.500» nunca promete más de lo que hay."""
+    paso = 100 if n >= 300 else 10
+    return (int(n) // paso) * paso
+
+
+@_foto
+def cifras_publicas(cur) -> Dict[str, int]:
+    """Inmuebles en venta (como el Inventario), pedidos desde el 29-mar-2026, agentes y zonas; redondeadas."""
+    f = fetch_one(cur, """
+        SELECT
+          (SELECT COUNT(*) FROM propiedades WHERE activa AND NOT es_prueba
+                 AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL))                         AS inmuebles,
+          (SELECT COUNT(*) FROM pedidos WHERE fecha_captura >= '2026-03-29'
+                 AND estado NOT IN ('retirado', 'reemplazado'))                                AS pedidos,
+          (SELECT COUNT(*) FROM chat_users WHERE activo AND COALESCE(origen, '') <> 'prueba_ui') AS agentes,
+          (SELECT COUNT(DISTINCT lower(zona)) FROM propiedades WHERE activa AND NOT es_prueba
+                 AND zona IS NOT NULL AND zona <> '')                                          AS zonas
+    """)
+    return {k: _hacia_abajo(int(f[k] or 0)) for k in ("inmuebles", "pedidos", "agentes", "zonas")}
+
+
+def cifras_publicas_public() -> Dict[str, int]:
+    with get_db() as db:
+        return cifras_publicas(db.cursor)
