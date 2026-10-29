@@ -407,6 +407,7 @@ def _candidatos(ped: Dict[str, Any], vector: Optional[List[float]],
     if tipos:
         cond.append(f"COALESCE(f.tipo, {_TIPO_ORIGINAL}) = ANY(%s)")
         params.append(sorted(tipos))
+    cond.append("p.precio >= 30000000")    # R21: en venta, < $30 M son arriendos mal marcados o dólares
     pmax, pmin = ped.get("presupuesto_max"), ped.get("presupuesto_min")
     if pmax:
         cond.append("p.precio <= %s")
@@ -726,6 +727,8 @@ def buscar(texto: str, previo: Optional[Dict[str, Any]] = None, limite: int = 10
         limite = ped["cantidad"]
     if not ped.get("es_busqueda", True):
         return {"pedido": ped, "resultados": [], "tipo": "no_es_busqueda", "ms": 0}
+    if ped.get("negocio") == "arriendo":     # R21: por ahora Fynder trabaja venta (los arriendos están ocultos)
+        return {"pedido": ped, "resultados": [], "tipo": "arriendo", "ms": 0}
     cands = _candidatos(ped, vector)
     ub = _ubicaciones(ped)
     puntuados = [r for r in (_puntuar(p, ped, ub) for p in cands) if r]
@@ -870,6 +873,11 @@ def buscar_compat(texto: str, previo: Optional[Dict[str, Any]] = None, limite: i
         return {"success": True, "results": [], "total_found": 0, "criteria": criteria,
                 "search_type": "no_es_busqueda",
                 "mensaje_usuario": "Cuéntame qué busca tu cliente: tipo de inmueble, zona y presupuesto."}
+    if r["tipo"] == "arriendo":
+        return {"success": True, "results": [], "total_found": 0, "criteria": criteria,
+                "search_type": "no_es_busqueda",
+                "mensaje_usuario": "Por ahora Fynder trabaja inmuebles en venta: los arriendos llegan pronto. "
+                                   "Si tu cliente también compraría, cuéntame qué busca y su presupuesto."}
     filas: Dict[Any, Dict[str, Any]] = {}
     ids = [x["id"] for x in r["resultados"]]
     if ids:

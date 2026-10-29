@@ -172,6 +172,8 @@ def get_properties():
         # Los inmuebles de cuentas de prueba solo los ven su dueño (Mis inmuebles) y el admin.
         if not owner_phone and not es_admin():
             where_clause += " AND NOT p.es_prueba"
+            # R21: en venta, lo de menos de $30 M son arriendos mal marcados o precios en dólares.
+            where_clause += " AND p.precio >= 30000000"
         params = []
 
         # Filtro por dueño (Mis Propiedades en chat). Match por los ultimos 10 digitos

@@ -37,7 +37,9 @@ def _location_filter(ciudad: Optional[str], zona: Optional[str],
                      alias: str = "p"):
     """Condiciones WHERE + params para filtrar propiedades por zona. La consulta debe
     llevar `FROM propiedades p {facetas.JOIN}`: ubicación y tipo van contra el alias `x`."""
-    conditions = [f"{alias}.activa = TRUE", f"NOT {alias}.es_prueba", f"{alias}.precio IS NOT NULL", f"{alias}.precio > 0"]
+    conditions = [f"{alias}.activa = TRUE", f"NOT {alias}.es_prueba", f"{alias}.precio IS NOT NULL", f"{alias}.precio > 0",
+                  # R21: en venta, < $30 M son arriendos mal marcados o dólares (en arriendo el canon sí es bajo)
+                  f"({alias}.tipo_negocio IS DISTINCT FROM 'Venta' OR {alias}.precio >= 30000000)"]
     params: List[Any] = []
 
     if tipo_negocio:
@@ -470,7 +472,7 @@ def cifras_publicas(cur) -> Dict[str, int]:
     """Inmuebles en venta (como el Inventario), pedidos desde el 29-mar-2026, agentes y zonas; redondeadas."""
     f = fetch_one(cur, """
         SELECT
-          (SELECT COUNT(*) FROM propiedades WHERE activa AND NOT es_prueba
+          (SELECT COUNT(*) FROM propiedades WHERE activa AND NOT es_prueba AND precio >= 30000000
                  AND (tipo_negocio = 'Venta' OR tipo_negocio IS NULL))                         AS inmuebles,
           (SELECT COUNT(*) FROM pedidos WHERE fecha_captura >= '2026-03-29'
                  AND estado NOT IN ('retirado', 'reemplazado'))                                AS pedidos,
