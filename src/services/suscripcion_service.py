@@ -781,8 +781,19 @@ def reportar_invalido(user_id: int, desbloqueo_id: int, motivo: str,
         if reembolsar:
             cur.execute("UPDATE desbloqueos SET estado = 'reembolsado' WHERE id = %s", (desbloqueo_id,))
         if d["tipo"] == "propiedad" and motivo == "ya_no_disponible":
-            # Que la revalidación lo revise primero.
-            cur.execute("UPDATE propiedades SET fecha_ultimo_intento = NULL WHERE id = %s", (d["ref_id"],))
+            # «Ya se vendió» (R23): quien abrió el contacto habló con el dueño. Se baja para todos de una vez,
+            # aunque el link siga vivo: desactivada_por = 'reporte_agente' (la revalidación solo reactiva lo
+            # que bajó ella misma, desactivada_por = 'validador').
+            cur.execute("""
+                UPDATE propiedades SET activa = FALSE, desactivada_por = 'reporte_agente',
+                       disponibilidad_motivo = 'Un agente reportó que ya se vendió'
+                WHERE id = %s AND activa RETURNING id
+            """, (d["ref_id"],))
+            if cur.fetchone():
+                cur.execute("""
+                    INSERT INTO verificaciones_disponibilidad (propiedad_id, veredicto, motivo, origen, cambio)
+                    VALUES (%s, 'muerto', 'reportado_vendido', 'reporte_agente', 'desactivada')
+                """, (d["ref_id"],))
         db.conn.commit()
 
     if reembolsar:
