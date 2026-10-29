@@ -90,6 +90,21 @@ def marca():
     return _manejar(f, 'marca')
 
 
+@logros_bp.route('/conexiones', methods=['POST'])
+@require_chat_auth
+def conexion_solicitar():
+    """«Te conectamos · 1 llave» (R20): {pedido_id}. Fynder le pide permiso a quien pidió."""
+    from src.services import conexiones_service as cx
+    try:
+        return _ok(cx.solicitar(_uid(), int(_json().get('pedido_id') or 0)))
+    except cx.ConexionError as e:
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), 400
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ Error en conexiones: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": "Error en el servidor"}), 500
+
+
 @logros_bp.route('/informes', methods=['POST'])
 @require_chat_auth
 def informes():

@@ -699,6 +699,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
         from src.services import suscripcion_service as suscripciones
         vistos = suscripciones.ids_desbloqueados(user_id, "pedido", [t[1]["id"] for t in top])
 
+    from src.services import conexiones_service
+    conectando = conexiones_service.estados(user_id, [t[1]["id"] for t in top]) if user_id else {}
     compradores = []
     for i, (puntaje, f, razones, crit) in enumerate(top):
         pmax = crit.get("presupuesto_max") or f.get("presupuesto_estimado")
@@ -719,7 +721,8 @@ def buscar_compradores(cur, ficha: Dict[str, Any], user_id: Optional[int] = None
             "opcion": crit.get("_opcion"),
             "encaje": detalle_encaje(ficha, crit, razones, crit.get("_opcion")),
             "etiquetas": etiquetas_pedido(crit.get("_original") or crit),
-            "accion": "abierto" if abierto else "llave" if f.get("desbloqueable") else "conectar",
+            "accion": ("abierto" if abierto else "llave" if f.get("desbloqueable")
+                       else "conectando" if conectando.get(f["id"]) == "conectando" else "conectar"),
             "grupo": "top" if i < TOP else "vale_la_pena" if _vale_la_pena((puntaje, f, razones, crit)) else "resto",
             "razones": razones,
             "presupuesto_estimado": int(pmax) if pmax else None,

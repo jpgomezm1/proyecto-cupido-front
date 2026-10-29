@@ -235,6 +235,17 @@ if __name__ == '__main__':
                             next_run_time=datetime.now(), max_instances=1, coalesce=True)
         sched_pagos.add_job(_renovar, 'interval', hours=1, id='pagos_renovar',
                             next_run_time=datetime.now(), max_instances=1, coalesce=True)
+
+        def _conexiones():
+            # «Te conectamos» (R20): lo pendiente de más de 48 h devuelve la llave.
+            try:
+                from src.services import conexiones_service
+                print(f"[PAGOS] Conexiones: {conexiones_service.vencer()}")
+            except Exception as e:  # noqa: BLE001
+                _reportar("CONEXIONES", e)
+
+        sched_pagos.add_job(_conexiones, 'interval', hours=1, id='conexiones_vencer',
+                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
         sched_pagos.start()
         print("[WORKER] Conciliación de pagos programada (cada 15 min)")
 

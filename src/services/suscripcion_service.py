@@ -649,6 +649,7 @@ def ids_desbloqueados(user_id: int, tipo: str, ref_ids: List[int]) -> Set[int]:
         rows = fetch_all(db.cursor, """
             SELECT ref_id FROM desbloqueos
             WHERE user_id = %s AND tipo = %s AND estado = 'vigente' AND ref_id = ANY(%s)
+              AND (tipo <> 'pedido' OR contacto_telefono IS NOT NULL)   -- «Te conectamos» pendiente: aún sin contacto
         """, (user_id, tipo, ids))
     return {r["ref_id"] for r in rows}
 
@@ -672,8 +673,9 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                    v.habitaciones AS v_hab, v.intencion AS v_intencion, v.plazo AS v_plazo, v.resultado AS v_resultado,
                    r.id AS reporte_id, r.reembolsado,
                    s.estado AS seg_estado, s.nota AS seg_nota, s.recordatorio AS seg_recordatorio,
-                   s.updated_at AS seg_updated_at
+                   s.updated_at AS seg_updated_at, cx.estado AS conexion_estado, cx.vence_at AS conexion_vence
             FROM desbloqueos d
+            LEFT JOIN conexiones cx ON cx.desbloqueo_id = d.id
             LEFT JOIN propiedades p ON d.tipo = 'propiedad' AND p.id = d.ref_id
             LEFT JOIN pedidos pe ON d.tipo = 'pedido' AND pe.id = d.ref_id
             LEFT JOIN valoraciones v ON d.tipo = 'valoracion' AND v.id = d.ref_id
@@ -719,8 +721,13 @@ def listar_desbloqueos(user_id: int, limit: int = 50, offset: int = 0) -> Dict[s
                 "banos": d.get("banos"),
                 "activa": d.get("activa"),
             } if d["tipo"] == "propiedad" else None,
+            # «Te conectamos» (R20): mientras quien pidió no acepte, ni su celular ni su firma.
+            "conexion": {"estado": d["conexion_estado"],
+                         "vence": d["conexion_vence"].isoformat() if d.get("conexion_vence") else None}
+            if d.get("conexion_estado") else None,
             "pedido": {
-                "texto": d.get("texto_pedido"),
+                "texto": (redact_phones(d.get("texto_pedido") or "", cut_signatures=True)
+                          if d.get("conexion_estado") == "pendiente" else d.get("texto_pedido")),
                 "presupuesto": int(d["presupuesto_estimado"]) if d.get("presupuesto_estimado") else None,
             } if d["tipo"] == "pedido" else None,
             "propietario": {

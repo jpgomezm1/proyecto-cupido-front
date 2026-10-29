@@ -46,6 +46,31 @@ def _iso(fila: Dict[str, Any]) -> Dict[str, Any]:
     return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in fila.items()}
 
 
+@admin_negocio_bp.route('/conexiones', methods=['GET'])
+def conexiones_pendientes():
+    """Admin › Conexiones (R20): «Te conectamos» pagados que hay que atender antes de 48 h."""
+    from src.services import conexiones_service as cx
+    try:
+        return _ok({"conexiones": [_iso(f) for f in cx.pendientes()]})
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'conexiones')
+
+
+@admin_negocio_bp.route('/conexiones/<int:conexion_id>', methods=['POST'])
+def conexion_resolver(conexion_id: int):
+    """{aceptada: bool, nota?}: aceptada → el agente recibe el contacto; si no, vuelve la llave."""
+    from src.services import conexiones_service as cx
+    d = request.get_json(silent=True) or {}
+    try:
+        from src.api.access import admin_actual
+        quien = (admin_actual() or {}).get("email") or "admin"
+        return _ok(cx.resolver(conexion_id, bool(d.get('aceptada')), admin=quien, nota=d.get('nota')))
+    except cx.ConexionError as e:
+        return jsonify({"success": False, "code": e.codigo, "error": e.mensaje}), 400
+    except Exception as e:  # noqa: BLE001
+        return _fallo(e, 'conexion_resolver')
+
+
 @admin_negocio_bp.route('/resumen', methods=['GET'])
 def resumen():
     dias = _int('dias', 30)
