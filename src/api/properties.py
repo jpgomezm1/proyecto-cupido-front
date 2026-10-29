@@ -76,6 +76,22 @@ def _con_cambios_precio(props):
         p.update(cambios.get(int(p['id']) if p.get('id') else -1, {}))
 
 
+# Inmuebles con el m² al menos un 5 % por debajo de la MEDIANA de su barrio (barrios con 5+ inmuebles,
+# solo m² plausibles: un aviso mal cargado de $7.000 M/m² no mueve la comparación). La mediana por barrio
+# se calcula una sola vez: la versión anterior (AVG correlacionado por fila) tardaba ~10 s.
+_BAJO_SU_ZONA = """
+    SELECT q.id FROM propiedades q
+    JOIN (SELECT LOWER(zona) AS z, COUNT(*) AS n,
+                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY precio / area_construida) AS med
+          FROM propiedades
+          WHERE activa AND NOT es_prueba AND area_construida > 0 AND zona <> ''
+            AND precio / area_construida BETWEEN 1500000 AND 40000000
+          GROUP BY LOWER(zona)) m ON m.z = LOWER(q.zona)
+    WHERE q.activa AND q.area_construida > 0 AND m.n >= 5
+      AND q.precio / q.area_construida BETWEEN 1500000 AND m.med * 0.95
+"""
+
+
 @api_bp.route('/properties', methods=['GET'])
 def get_properties():
     """
@@ -239,27 +255,10 @@ def get_properties():
             params.append(int(max_year))
 
         if opportunity and opportunity.lower() == 'true':
-            where_clause += """
-                AND p.area_construida > 0 AND p.precio > 0
-                AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days'
-                AND p.precio / p.area_construida < (
-                    SELECT AVG(p2.precio / p2.area_construida)
-                    FROM propiedades p2
-                    WHERE p2.activa = true AND p2.area_construida > 0
-                    AND p2.precio > 0 AND LOWER(p2.zona) = LOWER(p.zona)
-                )
-            """
+            where_clause += " AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days' AND p.id IN (" + _BAJO_SU_ZONA + ")"
 
         if below_zone_avg and below_zone_avg.lower() == 'true':
-            where_clause += """
-                AND p.area_construida > 0 AND p.precio > 0
-                AND p.precio / p.area_construida < (
-                    SELECT AVG(p2.precio / p2.area_construida)
-                    FROM propiedades p2
-                    WHERE p2.activa = true AND p2.area_construida > 0
-                    AND p2.precio > 0 AND LOWER(p2.zona) = LOWER(p.zona)
-                )
-            """
+            where_clause += " AND p.id IN (" + _BAJO_SU_ZONA + ")"
 
         if min_price_m2:
             where_clause += " AND p.area_construida > 0 AND (p.precio / p.area_construida) >= %s"

@@ -607,16 +607,18 @@ def get_market_prices():
             for row in db.cursor.fetchall()
         ]
 
-        # Precio/m² por zona (top zonas)
+        # Precio/m² por zona. avg_price_m2 es la MEDIANA (el nombre se mantiene por compatibilidad):
+        # un promedio lo arruina un solo aviso mal cargado (Zúñiga salía en $445 M/m²). Solo m² plausibles.
         db.cursor.execute("""
             SELECT
                 COALESCE(zona, ciudad) as zone,
                 COUNT(*) as count,
-                AVG(CASE WHEN area_construida > 0 THEN precio / area_construida END) as avg_price_m2,
-                MIN(CASE WHEN area_construida > 0 THEN precio / area_construida END) as min_price_m2,
-                MAX(CASE WHEN area_construida > 0 THEN precio / area_construida END) as max_price_m2
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY precio / area_construida) as avg_price_m2,
+                MIN(precio / area_construida) as min_price_m2,
+                MAX(precio / area_construida) as max_price_m2
             FROM propiedades
-            WHERE activa = true AND precio > 0 AND area_construida > 0
+            WHERE activa = true AND NOT es_prueba AND precio > 0 AND area_construida > 0
+              AND precio / area_construida BETWEEN 1500000 AND 40000000
             GROUP BY COALESCE(zona, ciudad)
             HAVING COUNT(*) >= 2
             ORDER BY avg_price_m2 DESC
