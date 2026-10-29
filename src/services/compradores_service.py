@@ -65,7 +65,7 @@ def _familia(tipo: Optional[str]) -> Optional[str]:
     for clave, fam in _FAMILIA_TIPO.items():
         if clave in t:
             return fam
-    if "apto" in t or "aparta" in t or "estudio" in t:
+    if "apto" in t or "aparta" in t or "estudio" in t or "departamento" in t:   # «Departamento» = Pulppo/Tu360
         return "apto"
     return t
 
@@ -146,6 +146,12 @@ def _scrape(url: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if "lobbie" in host:
         from src.scrapers.lobbie import LobbieScraper
         return LobbieScraper().extract_property_data(url), "lobbie"
+    if "tu360" in host or "pulppo" in host:     # asesor.tu360inmobiliario-pulppo.com/property/…
+        from src.scrapers.tu360 import Tu360Scraper
+        datos = Tu360Scraper(verbose=False).extract_property_data(url)
+        if datos and _norm(datos.get("tipo_propiedad")) == "departamento":
+            datos["tipo_propiedad"] = "Apartamento"
+        return datos, "tu360"
     from src.scrapers.wasi import WasiScraper  # Wasi también vive en dominios propios de las agencias
     return WasiScraper().extract_property_data(url), "wasi"
 
@@ -176,7 +182,7 @@ def resolver_inmueble(cur, entrada: str, previa: Optional[Dict[str, Any]] = None
             datos, origen = None, "wasi"
         if not datos or not (datos.get("precio") or datos.get("zona") or datos.get("ciudad")):
             return {"error_type": "link_no_soportado",
-                    "mensaje_error": "No pude leer ese link. Por ahora leo links de Wasi y Lobbie; "
+                    "mensaje_error": "No pude leer ese link. Por ahora leo links de Wasi, Lobbie y Tu360; "
                                      "también puedes describirme el inmueble."}
         ficha = _ficha_desde_propiedad({**datos, "url": enlace}, origen)
         ficha["url_origen"] = enlace

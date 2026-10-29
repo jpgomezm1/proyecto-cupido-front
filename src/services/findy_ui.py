@@ -127,7 +127,8 @@ _ESPECIFICACIONES = (("area_m2", "{:.0f} m²"), ("habitaciones", "{} hab"), ("ba
 def _tu_inmueble(p: Dict[str, Any]) -> str:
     titulo = p.get("titulo") or " en ".join(x for x in [(p.get("tipo") or "Inmueble").capitalize(), p.get("zona")] if x)
     specs = [f.format(p[k]) for k, f in _ESPECIFICACIONES if p.get(k)]
-    origen = {"wasi": "De Wasi", "lobbie": "De Lobbie", "fynder": "En Fynder", "texto": "Descrito por ti"}.get(p.get("origen"))
+    origen = {"wasi": "De Wasi", "lobbie": "De Lobbie", "tu360": "De Tu360", "fynder": "En Fynder",
+              "texto": "Descrito por ti"}.get(p.get("origen"))
     return _llamada("TuInmueble", titulo, p.get("precio_legible"), specs or None, origen)
 
 
