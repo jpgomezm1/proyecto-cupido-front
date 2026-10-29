@@ -27,6 +27,8 @@ PRICING = {
         'text-embedding-3-small': {'input': 0.02, 'output': 0.0},
         'gpt-4o-mini-transcribe': {'per_minute': 0.006},
         'gpt-image-1': {'input': 10.00, 'output': 40.00},
+        # Tarifa pública reportada (oct-2026): $8/M imagen de entrada, $30/M de salida. Una mejora ≈ US$0,05.
+        'gpt-image-2': {'input': 8.00, 'output': 30.00},
     }
 }
 

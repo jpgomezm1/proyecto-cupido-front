@@ -27,7 +27,8 @@ from src.services import mis_propiedades_service as mp
 from src.services import suscripcion_service
 from src.services.db import fetch_one, get_db, scalar
 
-MODELO = os.getenv("FYNDER_MODELO_FOTOS", "gpt-image-1")
+# gpt-image-1 ya no existe en la API (oct-2026: «The model 'gpt-image-1' does not exist»).
+MODELO = os.getenv("FYNDER_MODELO_FOTOS", "gpt-image-2")
 CALIDAD = os.getenv("FYNDER_FOTOS_IA_CALIDAD", "medium")
 LIMITE_DIA = int(os.getenv("FYNDER_FOTOS_IA_DIA", "40"))
 _LOCK_FOTOS = 7103
@@ -182,8 +183,10 @@ def mejorar(user_id: int, tel10: str, propiedad_id: int, url: str) -> Dict[str, 
     fid = _reservar(user_id, propiedad_id, url)["id"]
     t0 = time.time()
     try:
+        # input_fidelity solo lo aceptaba gpt-image-1; gpt-image-2 lo rechaza (y ya conserva la foto).
+        extra = {"input_fidelity": "high"} if MODELO.startswith("gpt-image-1") else {}
         resp = OpenAI().images.edit(model=MODELO, image=(f"foto.{ext}", original, tipo), prompt=INSTRUCCION,
-                                    quality=CALIDAD, size="auto", input_fidelity="high")
+                                    quality=CALIDAD, size="auto", **extra)
         datos = base64.b64decode(resp.data[0].b64_json)
     except Exception as e:  # noqa: BLE001
         _fallo(fid, str(e))
