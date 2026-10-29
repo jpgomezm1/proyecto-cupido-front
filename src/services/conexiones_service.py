@@ -126,7 +126,7 @@ def _avisar_agente(cur, c: Dict[str, Any], estado: str) -> None:
         return
     if estado == "aceptada":
         asunto = "Te conectamos: ya tienes el contacto"
-        cuerpo = "Quien hizo el pedido aceptó hablar contigo. Su contacto ya está en Clientes › Contactos."
+        cuerpo = "Quien hizo el pedido aceptó hablar contigo. Su contacto ya está en Guardados › Contactos."
     else:
         asunto = "No pudimos conectarte: te devolvimos la llave"
         cuerpo = ("Quien hizo el pedido no aceptó" if estado == "rechazada" else "Quien hizo el pedido no respondió en 48 horas") + \
