@@ -100,9 +100,16 @@ def listar(user_id: int, no_leidas: bool = False, limite: int = 30,
 
 
 def resumen(user_id: int) -> Dict[str, Any]:
+    """Sin leer: el total (campana), las de sus clientes (Negocios) y las de compradores para sus inmuebles."""
     with get_db() as db:
-        n = scalar(db.cursor, "SELECT COUNT(*) FROM alertas WHERE user_id = %s AND leida_at IS NULL", (user_id,)) or 0
-    return {"no_leidas": int(n)}
+        f = fetch_one(db.cursor, """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE cliente_id IS NOT NULL) AS clientes,
+                   COUNT(*) FILTER (WHERE tipo = 'comprador') AS compradores
+            FROM alertas WHERE user_id = %s AND leida_at IS NULL
+        """, (user_id,)) or {}
+    return {"no_leidas": int(f.get("total") or 0), "clientes": int(f.get("clientes") or 0),
+            "compradores": int(f.get("compradores") or 0)}
 
 
 def marcar_leidas(user_id: int, ids: Optional[List[int]] = None, todas: bool = False) -> Dict[str, Any]:
