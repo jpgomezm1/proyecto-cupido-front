@@ -8,6 +8,10 @@ Herramientas del agente: radar de oportunidades, calidad del aviso y su página.
     PUT  /api/chat/mi-pagina                             {slug?, bio?, zonas?, logo_url?, foto_url?, marca_nombre?, config?, activa?}
     POST /api/chat/mi-pagina/ia/armar                    {indicaciones?} → propuesta de la IA (no guarda)
     POST /api/chat/mi-pagina/ia/mejorar                  {campo, texto, pedido?, contexto?} → texto reescrito
+    GET  /api/chat/mi-pagina/imagenes                    → biblioteca de imágenes y cupo de imágenes con IA
+    POST /api/chat/mi-pagina/imagenes                    {descripcion, estilo?, formato?} → imagen con IA (gasta cupo)
+    POST /api/chat/mi-pagina/imagenes/subida             {url} → guarda en la biblioteca una imagen que subió
+    POST /api/chat/mi-pagina/imagenes/sugerir            {para?, pista?} → 3 descripciones para generar
     GET  /api/public/agente/<slug>                       → la página pública (sin login)
     POST /api/public/agente/<slug>/evento                {tipo: visita|whatsapp|inmueble|valorar}
     GET  /api/chat/fotos-ia/cupo                         → fotos mejoradas que le quedan este mes
@@ -24,6 +28,7 @@ from flask import Blueprint, jsonify, request
 from src.api.chat_auth import require_chat_auth
 from src.api.listings import _tel10_verificado
 from src.services import fotos_ia_service as fotos_ia, pagina_agente_service as pagina, pagina_ia_service as pagina_ia, radar_service
+from src.services import pagina_imagenes_service as pagina_img
 
 herramientas_bp = Blueprint('herramientas', __name__, url_prefix='/api')
 
@@ -37,6 +42,8 @@ def _manejar(fn, contexto: str):
     try:
         return fn()
     except fotos_ia.FotoError as e:
+        return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), e.status
+    except pagina_img.ImagenError as e:
         return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), e.status
     except pagina.PaginaError as e:
         return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), 404 if e.codigo == "no_encontrado" else 400
@@ -100,6 +107,36 @@ def pagina_ia_mejorar():
     d = request.get_json(silent=True) or {}
     return _manejar(lambda: _ok(pagina_ia.mejorar(request.chat_user['id'], d.get('campo'), d.get('texto') or '',
                                                   d.get('pedido'), d.get('contexto'))), 'pagina_ia_mejorar')
+
+
+@herramientas_bp.route('/chat/mi-pagina/imagenes', methods=['GET'])
+@require_chat_auth
+def pagina_imagenes():
+    return _manejar(lambda: _ok(pagina_img.biblioteca(request.chat_user['id'])), 'pagina_imagenes')
+
+
+@herramientas_bp.route('/chat/mi-pagina/imagenes', methods=['POST'])
+@require_chat_auth
+def pagina_imagen_generar():
+    d = request.get_json(silent=True) or {}
+    return _manejar(lambda: _ok(pagina_img.generar(request.chat_user['id'], d.get('descripcion') or '',
+                                                   d.get('estilo'), d.get('formato'))), 'pagina_imagen_generar')
+
+
+@herramientas_bp.route('/chat/mi-pagina/imagenes/subida', methods=['POST'])
+@require_chat_auth
+def pagina_imagen_subida():
+    d = request.get_json(silent=True) or {}
+    return _manejar(lambda: _ok(pagina_img.registrar_subida(request.chat_user['id'], d.get('url') or '')),
+                    'pagina_imagen_subida')
+
+
+@herramientas_bp.route('/chat/mi-pagina/imagenes/sugerir', methods=['POST'])
+@require_chat_auth
+def pagina_imagen_sugerir():
+    d = request.get_json(silent=True) or {}
+    return _manejar(lambda: _ok(pagina_img.sugerir(request.chat_user['id'], d.get('para'), d.get('pista'))),
+                    'pagina_imagen_sugerir')
 
 
 @herramientas_bp.route('/public/agente/<slug>', methods=['GET'])

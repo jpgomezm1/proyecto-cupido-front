@@ -24,6 +24,8 @@ CATALOGO: Dict[str, Dict[str, Any]] = {
     "fotos_5": {"titulo": "5 fotos con IA", "costo": 60, "detalle": "Mejora 5 fotos de tus inmuebles. No vencen."},
     "analisis_5": {"titulo": "5 análisis de Findy", "costo": 50,
                    "detalle": "Preguntas a fondo sobre zonas, precios y compradores, con gráficos. No vencen."},
+    "imagenes_5": {"titulo": "5 imágenes con IA para tu página", "costo": 50,
+                   "detalle": "Fondos y fotos para tu página web, creadas con IA. No vencen."},
     "vitrina": {"titulo": "La Vitrina de esta semana", "costo": 100,
                 "detalle": "Las oportunidades curadas de la semana, con 72 h de exclusividad."},
     "informe": {"titulo": "1 informe de captación", "costo": 60,
@@ -133,6 +135,9 @@ def canjear(user_id: int, producto: str) -> Dict[str, Any]:
                 INSERT INTO fotos_ia_movimientos (user_id, cantidad, referencia, creado_por)
                 VALUES (%s, 5, %s, 'fyns')
             """, (user_id, f"fyns:{mov}"))
+        elif producto == "imagenes_5":
+            from src.services import pagina_imagenes_service
+            pagina_imagenes_service.abonar_en(cur, user_id, 5, f"fyns:{mov}", "fyns")
         elif producto == "analisis_5":
             from src.services import analisis_service
             analisis_service.abonar_en(cur, user_id, 5, f"fyns:{mov}", "fyns")
