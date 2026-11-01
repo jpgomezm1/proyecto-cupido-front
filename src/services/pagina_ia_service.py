@@ -23,7 +23,8 @@ from src.services.db import fetch_one, get_db
 
 MODELO = os.getenv("FYNDER_PAGINA_MODELO", "claude-sonnet-5-5")
 MODELO_RESPALDO = "claude-haiku-4-5-20251001"
-TOPE_DIARIO = int(os.getenv("FYNDER_PAGINA_IA_DIA", "10"))
+# Los mensajes del chat de Mi página (pagina_chat_service) y los «Sugerir» de imágenes.
+TOPE_DIARIO = int(os.getenv("FYNDER_PAGINA_IA_DIA", "30"))
 
 # Colores que se ven bien en las cuatro plantillas (los mismos del editor).
 PALETA = ["#16A34A", "#0F766E", "#2563EB", "#1E3A8A", "#7C3AED", "#BE185D", "#B45309", "#B91C1C", "#0A0A0A", "#A16207",
@@ -82,7 +83,7 @@ def _cupo(user_id: int) -> int:
     with get_db() as db:
         usados = pagina.hoy(db.cursor, user_id, "ia")
     if usados >= TOPE_DIARIO:
-        raise PaginaIAError("limite", f"Usaste los {TOPE_DIARIO} usos de IA de hoy para tu página. Mañana se renuevan.")
+        raise PaginaIAError("limite", f"Usaste los {TOPE_DIARIO} mensajes de hoy para tu página. Mañana se renuevan.")
     return usados
 
 

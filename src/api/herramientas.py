@@ -12,6 +12,7 @@ Herramientas del agente: radar de oportunidades, calidad del aviso y su página.
     POST /api/chat/mi-pagina/imagenes                    {descripcion, estilo?, formato?} → imagen con IA (gasta cupo)
     POST /api/chat/mi-pagina/imagenes/subida             {url} → guarda en la biblioteca una imagen que subió
     POST /api/chat/mi-pagina/imagenes/sugerir            {para?, pista?} → 3 descripciones para generar
+    POST /api/chat/mi-pagina/chat                        {mensajes, borrador, seleccionado?} → respuesta + operaciones
     GET  /api/public/agente/<slug>                       → la página pública (sin login)
     POST /api/public/agente/<slug>/evento                {tipo: visita|whatsapp|inmueble|valorar}
     GET  /api/chat/fotos-ia/cupo                         → fotos mejoradas que le quedan este mes
@@ -28,6 +29,7 @@ from flask import Blueprint, jsonify, request
 from src.api.chat_auth import require_chat_auth
 from src.api.listings import _tel10_verificado
 from src.services import fotos_ia_service as fotos_ia, pagina_agente_service as pagina, pagina_ia_service as pagina_ia, radar_service
+from src.services import pagina_chat_service as pagina_chat
 from src.services import pagina_imagenes_service as pagina_img
 
 herramientas_bp = Blueprint('herramientas', __name__, url_prefix='/api')
@@ -43,6 +45,8 @@ def _manejar(fn, contexto: str):
         return fn()
     except fotos_ia.FotoError as e:
         return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), e.status
+    except pagina_chat.ChatPaginaError as e:
+        return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), 400
     except pagina_img.ImagenError as e:
         return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), e.status
     except pagina.PaginaError as e:
@@ -107,6 +111,14 @@ def pagina_ia_mejorar():
     d = request.get_json(silent=True) or {}
     return _manejar(lambda: _ok(pagina_ia.mejorar(request.chat_user['id'], d.get('campo'), d.get('texto') or '',
                                                   d.get('pedido'), d.get('contexto'))), 'pagina_ia_mejorar')
+
+
+@herramientas_bp.route('/chat/mi-pagina/chat', methods=['POST'])
+@require_chat_auth
+def pagina_conversar():
+    d = request.get_json(silent=True) or {}
+    return _manejar(lambda: _ok(pagina_chat.conversar(request.chat_user['id'], d.get('mensajes') or [], d.get('borrador') or {},
+                                                      d.get('seleccionado'))), 'pagina_conversar')
 
 
 @herramientas_bp.route('/chat/mi-pagina/imagenes', methods=['GET'])
