@@ -45,7 +45,7 @@ def marcas(user_id: int, ids: List[int]) -> Dict[int, Dict[str, Any]]:
         for f in fetch_all(cur, """
             SELECT DISTINCT ON (propiedad_id) propiedad_id, precio_anterior, precio_nuevo FROM cambios_precio
             WHERE propiedad_id = ANY(%s) AND aplicado AND created_at >= NOW() - INTERVAL '30 days'
-              AND precio_anterior > 0 AND precio_nuevo <= precio_anterior * 0.98   -- menos del 2 % es ruido
+              AND precio_anterior > 0 AND precio_nuevo <= precio_anterior * 0.98   -- menos del 2 por ciento es ruido (sin el signo: psycopg2 lo toma por parámetro)
             ORDER BY propiedad_id, created_at DESC
         """, (ids,)):
             out.setdefault(f["propiedad_id"], {})["baja_pct"] = round((1 - f["precio_nuevo"] / f["precio_anterior"]) * 100, 1)
