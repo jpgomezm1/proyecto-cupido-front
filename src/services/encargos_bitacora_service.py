@@ -426,9 +426,20 @@ def bitacora(user_id: int, encargo_id: int, limite: int = 80) -> List[Dict[str, 
             ORDER BY created_at
         """, (encargo_id, limite))
         ids = sorted({int(i) for f in filas for i in (f["datos"] or {}).get("match_ids") or []})
-        matches = {m["id"]: m for m in fetch_all(cur, "SELECT * FROM encargo_matches WHERE id = ANY(%s)", (ids,))} if ids else {}
+        # Opciones que no salen en ninguna entrada (encontradas antes de la bitácora): van al inicio.
+        sueltas = [m["id"] for m in fetch_all(cur, """
+            SELECT id FROM encargo_matches WHERE encargo_id = %s AND estado <> 'descartado' AND NOT (id = ANY(%s))
+            ORDER BY score DESC LIMIT 10
+        """, (encargo_id, ids or [0]))]
+        todos = ids + sueltas
+        matches = {m["id"]: m for m in fetch_all(cur, "SELECT * FROM encargo_matches WHERE id = ANY(%s)", (todos,))} if todos else {}
         salida_m = {i: _match_salida(cur, m, user_id) for i, m in matches.items()}
     out = []
+    if sueltas:
+        out.append({"id": 0, "autor": "findy", "tipo": "novedad", "respondida": True,
+                    "texto": "Esto es lo que llevo encontrado. Cuéntame qué le parece a tu cliente y afino la búsqueda.",
+                    "datos": {"match_ids": sueltas, "opciones": [salida_m[i] for i in sueltas if i in salida_m]},
+                    "created_at": (filas[0]["created_at"] if filas else matches[sueltas[0]]["created_at"]).isoformat()})
     for f in filas:
         d = dict(f["datos"] or {})
         if d.get("match_ids"):
