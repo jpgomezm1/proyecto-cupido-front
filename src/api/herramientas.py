@@ -2,6 +2,7 @@
 Herramientas del agente: radar de oportunidades, calidad del aviso y su página.
 
     GET  /api/chat/radar                                 → oportunidades del día (sin IA)
+    GET  /api/chat/oportunidades/marcas?ids=…            → badges del inventario (bajó de precio, Vitrina)
     GET  /api/chat/mis-propiedades/<id>/calidad          → puntaje del aviso y qué mejorar
     GET  /api/chat/mi-pagina                             → su página pública (config)
     PUT  /api/chat/mi-pagina                             {slug?, bio?, zonas?, logo_url?, foto_url?, marca_nombre?, config?, activa?}
@@ -55,6 +56,14 @@ def _manejar(fn, contexto: str):
 @require_chat_auth
 def radar():
     return _manejar(lambda: _ok(radar_service.radar(request.args.get('limite', 8, type=int))), 'radar')
+
+
+@herramientas_bp.route('/chat/oportunidades/marcas', methods=['GET'])
+@require_chat_auth
+def oportunidades_marcas():
+    """?ids=1,2,3 → badges de oportunidad para las tarjetas del inventario."""
+    ids = [x for x in (request.args.get('ids') or '').split(',') if x.strip().isdigit()]
+    return _manejar(lambda: _ok(radar_service.marcas(request.chat_user['id'], ids)), 'oportunidades_marcas')
 
 
 @herramientas_bp.route('/chat/mis-propiedades/<int:property_id>/calidad', methods=['GET'])

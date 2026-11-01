@@ -118,7 +118,7 @@ def get_properties():
     - max_admin: number (max admin fee)
     - min_year: number (min construction year)
     - max_year: number (max construction year)
-    - opportunity: string ('true') - below zone avg price/m2 + recent 30 days
+    - opportunity: string ('true') - (below zone avg price/m2 + recent 30 days) or price dropped in 30 days
     - min_price_m2: number (min price per m2)
     - max_price_m2: number (max price per m2)
     - below_zone_avg: string ('true') - below zone avg price/m2 (no date restriction)
@@ -257,7 +257,10 @@ def get_properties():
             params.append(int(max_year))
 
         if opportunity and opportunity.lower() == 'true':
-            where_clause += " AND p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days' AND p.id IN (" + _BAJO_SU_ZONA + ")"
+            # Oportunidad: nuevo (30 días) y bajo el m² de su zona, o bajó de precio en los últimos 30 días.
+            where_clause += (" AND ((p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days' AND p.id IN (" + _BAJO_SU_ZONA + "))"
+                             " OR p.id IN (SELECT propiedad_id FROM cambios_precio WHERE aplicado"
+                             " AND created_at >= NOW() - INTERVAL '30 days' AND precio_nuevo < precio_anterior))")
 
         if below_zone_avg and below_zone_avg.lower() == 'true':
             where_clause += " AND p.id IN (" + _BAJO_SU_ZONA + ")"

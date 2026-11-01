@@ -30,6 +30,35 @@ _LOCK = threading.Lock()
 _TTL = 20 * 60
 
 
+def marcas(user_id: int, ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Badges de oportunidad para las tarjetas del inventario (sin IA):
+    {id: {baja_pct?: bajó de precio en 30 días, vitrina?: está en la Vitrina de esta semana}}.
+    La Vitrina solo se marca si el agente ya la abrió esta semana o la tiene semanal: marcarla
+    antes regalaría la selección sin gastar su acceso."""
+    from src.services import beneficios_service, vitrina_service
+    ids = [int(i) for i in ids if str(i).isdigit()][:80]
+    if not ids:
+        return {}
+    out: Dict[int, Dict[str, Any]] = {}
+    with get_db() as db:
+        cur = db.cursor
+        for f in fetch_all(cur, """
+            SELECT DISTINCT ON (propiedad_id) propiedad_id, precio_anterior, precio_nuevo FROM cambios_precio
+            WHERE propiedad_id = ANY(%s) AND aplicado AND created_at >= NOW() - INTERVAL '30 days'
+              AND precio_nuevo < precio_anterior AND precio_anterior > 0
+            ORDER BY propiedad_id, created_at DESC
+        """, (ids,)):
+            out.setdefault(f["propiedad_id"], {})["baja_pct"] = round((1 - f["precio_nuevo"] / f["precio_anterior"]) * 100, 1)
+        semana = vitrina_service.lunes()
+        ve = (beneficios_service.beneficios_en(cur, user_id)["vitrina"] >= 4
+              or fetch_one(cur, "SELECT 1 AS ok FROM vitrina_accesos WHERE user_id = %s AND semana = %s", (user_id, semana)))
+        if ve:
+            for f in fetch_all(cur, """SELECT ref_id FROM vitrina_items WHERE semana = %s AND tipo = 'propiedad' AND ref_id = ANY(%s)""",
+                               (semana, ids)):
+                out.setdefault(f["ref_id"], {})["vitrina"] = True
+    return out
+
+
 def _cacheado(clave: str, fn):
     with _LOCK:
         v = _CACHE.get(clave)
