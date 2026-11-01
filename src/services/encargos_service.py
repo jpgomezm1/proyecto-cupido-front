@@ -18,6 +18,11 @@ quien recibe el negocio no paga. Con "Findy trabaja por ti" sus solicitudes
 llegan marcadas como prioritarias y van primero.
 Si la contraparte no es agente de Fynder, se usa el contacto normal (una llave)
 o `solicitar_visita`.
+
+BITÁCORA (migración 070, `encargos_bitacora_service`): cada encargo es una conversación.
+Findy cuenta lo que encuentra y pregunta por el avance; el agente califica las opciones
+y cuenta cómo va, y Findy afina el perfil del cliente con eso. Etapa: buscando → propuesto
+→ visitando → negociando → cerrado (ganado / perdido).
 """
 
 from datetime import timedelta
@@ -106,6 +111,12 @@ def crear(user_id: int, tipo: str, cliente_id: Optional[int] = None, propiedad_i
         eid = scalar(cur, """
             INSERT INTO encargos (user_id, tipo, cliente_id, propiedad_id, canal) VALUES (%s, %s, %s, %s, %s) RETURNING id
         """, (user_id, tipo, cliente_id, propiedad_id, canal if canal in ("web", "mcp") else "web"))
+        from src.services import encargos_bitacora_service as bit
+        bit.registrar(cur, eid, "findy", "estado",
+                      "Listo, desde hoy busco por ti todos los días. Te cuento lo que encuentre y te pregunto cómo va "
+                      "para ir afinando." if tipo == "buscar_inmueble" else
+                      "Listo, desde hoy busco compradores para tu inmueble todos los días y te aviso lo que encuentre.",
+                      {"etapa": "buscando"})
         db.conn.commit()
     trabajar(eid)   # primeros resultados de una vez
     return {"ok": True, "encargo_id": eid, **detalle(user_id, eid)}
@@ -166,16 +177,20 @@ def trabajar(encargo_id: int) -> int:
         if not e:
             return 0
         candidatos = _buscar_inmuebles(cur, e) if e["tipo"] == "buscar_inmueble" else _buscar_compradores(cur, e)
-        nuevos = 0
+        nuevos: List[int] = []
         for c in candidatos:
             cur.execute("""
                 INSERT INTO encargo_matches (encargo_id, contraparte_tipo, contraparte_id, score, razones)
                 VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id
             """, (encargo_id, c["tipo"], c["id"], c["score"], c["razones"]))
-            nuevos += 1 if cur.fetchone() else 0
+            fila = cur.fetchone()
+            if fila:
+                nuevos.append(fila["id"])
         cur.execute("UPDATE encargos SET ultimo_run_at = NOW() WHERE id = %s", (encargo_id,))
+        from src.services import encargos_bitacora_service as bit
+        bit.novedad(cur, e, nuevos)
         db.conn.commit()
-    return nuevos
+    return len(nuevos)
 
 
 def correr() -> Dict[str, int]:
@@ -198,13 +213,19 @@ def correr() -> Dict[str, int]:
         for e in encargos:
             por_usuario.setdefault(e["user_id"], []).append(e["id"])
         trabajados = nuevos = 0
+        from src.services import encargos_bitacora_service as bit
+        preguntas = 0
         for uid, ids in por_usuario.items():
             with get_db() as db:
                 total = cupo_en(db.cursor, uid)["total"]
             for eid in ids[:total]:
                 nuevos += trabajar(eid)
                 trabajados += 1
-        return {"encargos": trabajados, "matches_nuevos": nuevos, "presentaciones_vencidas": vencidas}
+                try:
+                    preguntas += 1 if bit.preguntar(eid) else 0
+                except Exception as ex:  # noqa: BLE001 — el seguimiento nunca frena la búsqueda
+                    print(f"[ENCARGOS] preguntar {eid}: {ex}")
+        return {"encargos": trabajados, "matches_nuevos": nuevos, "preguntas": preguntas, "presentaciones_vencidas": vencidas}
     finally:
         job_lock.soltar("encargos")
 
@@ -235,7 +256,8 @@ def _match_salida(cur, m: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     from src.services.clientes_service import propiedades_mini
     from src.services.redact import redact_phones
     out = {"id": m["id"], "tipo": m["contraparte_tipo"], "ref_id": m["contraparte_id"], "score": round(m["score"]),
-           "razones": list(m["razones"] or []), "estado": m["estado"], "created_at": m["created_at"].isoformat()}
+           "razones": list(m["razones"] or []), "estado": m["estado"], "created_at": m["created_at"].isoformat(),
+           "opinion": m.get("opinion"), "motivos": list(m.get("motivos") or [])}
     if m["contraparte_tipo"] == "propiedad":
         out["propiedad"] = propiedades_mini([m["contraparte_id"]]).get(m["contraparte_id"])
     else:
@@ -264,7 +286,23 @@ def detalle(user_id: int, encargo_id: int) -> Dict[str, Any]:
             ORDER BY score DESC, created_at DESC LIMIT 20
         """, (encargo_id,))
         salida = [_match_salida(cur, m, user_id) for m in matches]
+        pregunta = fetch_one(cur, """
+            SELECT id, texto FROM encargo_bitacora WHERE encargo_id = %s AND tipo = 'pregunta' AND NOT respondida
+            ORDER BY created_at DESC LIMIT 1
+        """, (encargo_id,))
+        ultima = fetch_one(cur, """
+            SELECT autor, tipo, texto, created_at FROM encargo_bitacora WHERE encargo_id = %s ORDER BY created_at DESC LIMIT 1
+        """, (encargo_id,))
+        opiniones = fetch_one(cur, """
+            SELECT COUNT(*) FILTER (WHERE opinion = 'le_gusta') AS gustan, COUNT(*) FILTER (WHERE opinion = 'no_le_gusta') AS no_gustan
+            FROM encargo_matches WHERE encargo_id = %s
+        """, (encargo_id,))
     return {
+        "etapa": e.get("etapa") or "buscando", "resultado": e.get("resultado"),
+        "pregunta": {"id": pregunta["id"], "texto": pregunta["texto"]} if pregunta else None,
+        "ultima": {"autor": ultima["autor"], "tipo": ultima["tipo"], "texto": ultima["texto"],
+                   "created_at": ultima["created_at"].isoformat()} if ultima else None,
+        "gustan": int((opiniones or {}).get("gustan") or 0), "no_gustan": int((opiniones or {}).get("no_gustan") or 0),
         "id": e["id"], "tipo": e["tipo"], "estado": e["estado"], "canal": e["canal"],
         "cliente": {"id": e["cliente_id"], "nombre": e["cliente_nombre"]} if e["cliente_id"] else None,
         "propiedad": propiedades_mini([e["propiedad_id"]]).get(e["propiedad_id"]) if e["propiedad_id"] else None,
@@ -449,4 +487,8 @@ def resumen_inicio(user_id: int) -> Dict[str, int]:
         """, (user_id,)) or 0
         pendientes = scalar(cur, "SELECT COUNT(*) FROM presentaciones WHERE receptor_id = %s AND estado = 'pendiente'",
                             (user_id,)) or 0
-    return {"opciones_nuevas": int(nuevos), "presentaciones_pendientes": int(pendientes)}
+        preguntas = scalar(cur, """
+            SELECT COUNT(*) FROM encargo_bitacora b JOIN encargos e ON e.id = b.encargo_id
+            WHERE e.user_id = %s AND e.estado = 'activo' AND b.tipo = 'pregunta' AND NOT b.respondida
+        """, (user_id,)) or 0
+    return {"opciones_nuevas": int(nuevos), "presentaciones_pendientes": int(pendientes), "preguntas": int(preguntas)}

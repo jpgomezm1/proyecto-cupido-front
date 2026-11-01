@@ -104,11 +104,11 @@ def compartir(cliente_id):
 
 
 def _encargo(fn, contexto: str):
-    from src.services import encargos_service as enc
+    from src.services import encargos_bitacora_service as bit, encargos_service as enc
     try:
         return _ok(fn(enc))
-    except enc.EncargoError as e:
-        estado = 404 if e.codigo == "no_encontrado" else 400
+    except (enc.EncargoError, bit.BitacoraError) as e:
+        estado = 404 if e.codigo == "no_encontrado" else 429 if e.codigo == "limite" else 400
         return jsonify({"success": False, "error": e.mensaje, "code": e.codigo}), estado
     except Exception as e:
         print(f"❌ Error en encargos/{contexto}: {e}")
@@ -152,7 +152,52 @@ def encargos_detalle(encargo_id):
 @clientes_bp.route('/encargos/<int:encargo_id>', methods=['DELETE'])
 @require_chat_auth
 def encargos_cerrar(encargo_id):
-    return _encargo(lambda enc: enc.cerrar(_uid(), encargo_id), 'cerrar')
+    """?resultado=ganado|perdido (opcional): cierra el encargo y libera el cupo."""
+    from src.services import encargos_bitacora_service as bit
+    resultado = request.args.get('resultado') or None
+    return _encargo(lambda enc: bit.cerrar_con_resultado(_uid(), encargo_id, resultado), 'cerrar')
+
+
+# ── bitácora (migración 070) ─────────────────────────────────────────────────
+
+@clientes_bp.route('/encargos/<int:encargo_id>/bitacora', methods=['GET'])
+@require_chat_auth
+def encargos_bitacora(encargo_id):
+    from src.services import encargos_bitacora_service as bit
+    return _encargo(lambda enc: {"entradas": bit.bitacora(_uid(), encargo_id), "motivos": bit.motivos_catalogo()}, 'bitacora')
+
+
+@clientes_bp.route('/encargos/<int:encargo_id>/nota', methods=['POST'])
+@require_chat_auth
+def encargos_nota(encargo_id):
+    """{texto}: lo que el agente cuenta; Findy afina el perfil con eso."""
+    from src.services import encargos_bitacora_service as bit
+    return _encargo(lambda enc: bit.nota(_uid(), encargo_id, _json().get('texto') or ''), 'nota')
+
+
+@clientes_bp.route('/encargos/<int:encargo_id>/etapa', methods=['POST'])
+@require_chat_auth
+def encargos_etapa(encargo_id):
+    """{etapa: buscando|propuesto|visitando|negociando}"""
+    from src.services import encargos_bitacora_service as bit
+    return _encargo(lambda enc: bit.cambiar_etapa(_uid(), encargo_id, _json().get('etapa')), 'etapa')
+
+
+@clientes_bp.route('/encargos/bitacora/<int:entrada_id>/responder', methods=['POST'])
+@require_chat_auth
+def encargos_responder(entrada_id):
+    """{opcion}: respuesta a una pregunta de Findy."""
+    from src.services import encargos_bitacora_service as bit
+    return _encargo(lambda enc: bit.responder(_uid(), entrada_id, _json().get('opcion') or ''), 'responder_pregunta')
+
+
+@clientes_bp.route('/encargos/opciones/<int:match_id>/opinion', methods=['POST'])
+@require_chat_auth
+def encargos_opinion(match_id):
+    """{opinion: le_gusta|no_le_gusta, motivos?: [...], texto?}"""
+    from src.services import encargos_bitacora_service as bit
+    d = _json()
+    return _encargo(lambda enc: bit.opinar(_uid(), match_id, d.get('opinion'), d.get('motivos'), d.get('texto')), 'opinion')
 
 
 @clientes_bp.route('/encargos/opciones/<int:match_id>/descartar', methods=['POST'])
