@@ -267,7 +267,18 @@ def perfil(user_id: int, cliente_id: int) -> Dict[str, Any]:
 
 # ── buscar para el cliente ─────────────────────────────────────────────────
 
-def buscar(user_id: int, cliente_id: int, limite: int = 12) -> Dict[str, Any]:
+# Niveles de encaje (puntaje 0–100 del buscador v3): «le cumple todo» y «casi» (le falta algo).
+# Lo de menos de NIVEL_CASI (otra zona, otro presupuesto) no se cuenta ni se muestra.
+NIVEL_TODO, NIVEL_CASI = 85, 60
+
+
+def buscar(user_id: int, cliente_id: int, limite: int = 48) -> Dict[str, Any]:
+    """Lo que le sirve al cliente, en grupos, y cómo afinar su perfil para achicar la lista.
+
+    {resultados: [... nivel 'todo' | 'casi'], perfectos, casi, total, facetas: [{grupo, etiqueta, n, cambio}]}
+    `cambio` es lo que se suma a su perfil si el agente toca esa faceta; `n`, cuántos de los que le
+    cumplen todo quedarían (estimado con los datos de cada aviso).
+    """
     with get_db() as db:
         cur = db.cursor
         c = _propio(cur, user_id, cliente_id)
@@ -277,15 +288,74 @@ def buscar(user_id: int, cliente_id: int, limite: int = 12) -> Dict[str, Any]:
     ped = dict(c["perfil"] or {})
     if not busqueda.chips(ped):
         raise ClienteError("sin_perfil", "Cuéntale a Findy qué busca este cliente para poder sugerirle opciones.")
-    limite = max(1, min(int(limite or 12), 30))
-    r = busqueda.buscar(busqueda.texto_de_pedido(ped), pedido=ped, limite=limite + len(descartados),
-                        reordenar=busqueda.REORDENAR)
-    elegidos = [x for x in r["resultados"] if x["id"] not in descartados][:limite]
+    limite = max(1, min(int(limite or 48), 60))
+    r = busqueda.buscar(busqueda.texto_de_pedido(ped), pedido=ped, limite=2000, reordenar=busqueda.REORDENAR)
+    puntaje = lambda x: x.get("score_final", x["score"])  # noqa: E731
+    vivos = [x for x in r["resultados"] if x["id"] not in descartados]
+    todo = [x for x in vivos if puntaje(x) >= NIVEL_TODO]
+    casi = [x for x in vivos if NIVEL_CASI <= puntaje(x) < NIVEL_TODO]
+    elegidos = todo[:limite] + casi[:12]
     minis = propiedades_mini([x["id"] for x in elegidos])
-    resultados = [{**minis[x["id"]], "score": x.get("score_final", x["score"]),
+    resultados = [{**minis[x["id"]], "score": puntaje(x), "nivel": "todo" if puntaje(x) >= NIVEL_TODO else "casi",
                    "razones": x.get("cumple") or [], "no_cumple": x.get("no_cumple") or []}
                   for x in elegidos if x["id"] in minis]
-    return {"resultados": resultados, "total": r["total"]}
+    return {"resultados": resultados, "perfectos": len(todo), "casi": len(casi), "total": len(todo) + len(casi),
+            "facetas": facetas(ped, todo if len(todo) >= 12 else todo + casi)}
+
+
+def _redondo(n: float) -> int:
+    return int(round(n / 10_000_000) * 10_000_000)
+
+
+def facetas(ped: Dict[str, Any], base: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Preguntas de un toque para afinar el perfil, cada una con cuántos quedarían. Solo las que
+    sirven: que dejen algo y quiten de verdad (entre 5 % y 90 % de la lista). Sin IA."""
+    n = len(base)
+    if n < 8:
+        return []
+    out: List[Dict[str, Any]] = []
+
+    def sumar(grupo: str, etiqueta: str, cuantos: int, cambio: Dict[str, Any], minimo: Optional[float] = None) -> None:
+        if (max(1, n * 0.05) if minimo is None else minimo) <= cuantos <= n * 0.9:
+            out.append({"grupo": grupo, "etiqueta": etiqueta, "n": cuantos, "cambio": cambio})
+
+    def num(x: Dict[str, Any], k: str) -> Optional[float]:
+        try:
+            return float(x[k]) if x.get(k) is not None else None   # el área llega como Decimal
+        except (TypeError, ValueError):
+            return None
+    if not ped.get("habitaciones_min"):
+        for k in (2, 3, 4):
+            sumar("Habitaciones", f"{k} o más", sum(1 for x in base if (num(x, "habitaciones") or 0) >= k), {"habitaciones_min": k})
+    if not ped.get("banos_min"):
+        for k in (2, 3):
+            sumar("Baños", f"{k} o más", sum(1 for x in base if (num(x, "banos") or 0) >= k), {"banos_min": k})
+    if not ped.get("area_min"):
+        puestos = 0
+        for a in (60, 80, 100, 120, 150, 200, 300):
+            cuantos = sum(1 for x in base if (num(x, "area") or 0) >= a)
+            if n * 0.15 <= cuantos <= n * 0.85 and puestos < 3:
+                sumar("Área", f"Desde {a} m²", cuantos, {"area_min": a})
+                puestos += 1
+    pmax = ped.get("presupuesto_max")
+    if pmax:
+        for f in (0.9, 0.8):
+            tope = _redondo(pmax * f)
+            if tope > (ped.get("presupuesto_min") or 0):
+                sumar("Presupuesto", f"Hasta ${tope // 1_000_000:,} M".replace(",", "."),
+                      sum(1 for x in base if x.get("precio") and x["precio"] <= tope), {"presupuesto_max": tope})
+    # Lo que hoy es «ojalá» y podría ser «sí o sí».
+    obligatorias = list(ped.get("obligatorias") or [])
+    deseables = list(ped.get("deseables") or [])
+    for d in deseables:
+        car = d.get("caracteristica")
+        etq = busqueda._ETIQUETAS_CARACT.get(car, (car or "").replace("_", " "))
+        if not car:
+            continue
+        # Aquí sirve aunque queden pocos: justo eso es lo que el cliente no negocia.
+        sumar("Que sí o sí tenga", etq.capitalize(), sum(1 for x in base if etq in (x.get("cumple") or [])),
+              {"obligatorias": obligatorias + [car], "deseables": [y for y in deseables if y.get("caracteristica") != car]}, minimo=3)
+    return out
 
 
 # ── selección del cliente ──────────────────────────────────────────────────

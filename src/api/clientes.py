@@ -177,7 +177,7 @@ def presentaciones_responder(presentacion_id):
 @clientes_bp.route('/clientes/<int:cliente_id>/buscar', methods=['POST'])
 @require_chat_auth
 def buscar(cliente_id):
-    return _manejar(lambda: _ok(svc.buscar(_uid(), cliente_id, _json().get('limite') or 12)), 'buscar')
+    return _manejar(lambda: _ok(svc.buscar(_uid(), cliente_id, _json().get('limite') or 48)), 'buscar')
 
 
 @clientes_bp.route('/clientes/<int:cliente_id>/inmuebles', methods=['POST'])
