@@ -86,3 +86,22 @@ def test_cupo_diario_se_respeta(monkeypatch):
     monkeypatch.setattr(s.ia, "_llamar", lambda *a, **k: pytest.fail("no debía llamar a la IA"))
     with pytest.raises(s.ia.PaginaIAError):
         s.conversar(1, [{"rol": "agente", "texto": "hazla azul"}], {"config": {"bloques": BLOQUES}})
+
+
+def test_controles_validos_y_descartes():
+    r = s.controles([
+        {"tipo": "paleta", "titulo": "Elige un color", "opciones": ["#1e3a8a", "rojo", "#0F766E", "#B45309"]},
+        {"tipo": "plantillas", "titulo": "Plantilla", "opciones": ["lujo", "neon", "audaz"]},
+        {"tipo": "letras", "titulo": "Letra", "opciones": ["comic"]},  # una sola válida: no sirve
+    ], BLOQUES)
+    assert r == [{"tipo": "paleta", "titulo": "Elige un color", "opciones": ["#1E3A8A", "#0F766E", "#B45309"]},
+                 {"tipo": "plantillas", "titulo": "Plantilla", "opciones": ["lujo", "audaz"]}]
+
+
+def test_control_de_textos_con_destino():
+    r = s.controles([
+        {"tipo": "textos", "titulo": "¿Cuál titular?", "opciones": ["Uno", "Dos", "Tres"], "op": "config", "campo": "titular", "id": "", "ruta": ""},
+        {"tipo": "textos", "titulo": "Banner", "opciones": ["A", "B"], "op": "bloque", "campo": "", "id": "ab12cd34", "ruta": "datos.titulo"},
+        {"tipo": "textos", "titulo": "Malo", "opciones": ["A", "B"], "op": "bloque", "campo": "", "id": "noexiste", "ruta": "datos.titulo"},
+    ], BLOQUES)
+    assert [c["destino"] for c in r] == [{"op": "config", "campo": "titular"}, {"op": "bloque", "id": "ab12cd34", "ruta": "datos.titulo"}]
