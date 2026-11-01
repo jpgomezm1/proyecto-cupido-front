@@ -1989,6 +1989,8 @@ def get_similar_properties(slug: str):
                 'bedrooms': prop.get('bedrooms'),
                 'bathrooms': prop.get('bathrooms'),
                 'parking': prop.get('parking'),
+                # La tarjeta lee cover_image_url (como el inventario); cover_image queda por compatibilidad.
+                'cover_image_url': prop.get('cover_image'),
                 'cover_image': prop.get('cover_image'),
                 'source': prop.get('source'),
             }
