@@ -181,6 +181,72 @@ def zone_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
     }
 
 
+def _paso(ancho: float) -> float:
+    """Un paso «redondo» en millones para los rangos de un histograma (10, 20, 50, 100, 200…)."""
+    for p in (10e6, 20e6, 25e6, 50e6, 100e6, 200e6, 250e6, 500e6, 1e9):
+        if ancho / p <= 8:
+            return p
+    return 2e9
+
+
+def _histograma(valores: List[float], minimo: int = 6) -> List[Dict[str, Any]]:
+    """Rangos redondos entre el percentil 5 y el 95 (lo raro va a los extremos)."""
+    v = sorted(x for x in valores if x)
+    if len(v) < minimo:
+        return []
+    lo, hi = v[int(len(v) * 0.05)], v[min(len(v) - 1, int(len(v) * 0.95))]
+    paso = _paso(max(hi - lo, 1))
+    inicio = int(lo // paso * paso)
+    rangos = []
+    desde = inicio
+    while desde <= hi:
+        rangos.append({"desde": desde, "hasta": desde + paso, "n": 0})
+        desde += paso
+    for x in v:
+        i = min(len(rangos) - 1, max(0, int((x - inicio) // paso)))
+        rangos[i]["n"] += 1
+    return rangos
+
+
+def mercado_para_informe(cur, ciudad: Optional[str], zona: Optional[str], tipo: Optional[str],
+                         precio_ref: Optional[float], dias: int = 90) -> Dict[str, Any]:
+    """Lo que grafica el informe de captación (sin IA): cómo se reparten los precios de lo que se
+    vende en la zona, los presupuestos de los compradores que la piden (y cuántos alcanzan
+    `precio_ref`) y el m² típico de lo publicado en los últimos 6 meses."""
+    conditions, params = _location_filter(ciudad, zona, tipo, "Venta")
+    where = " AND ".join(conditions)
+    filas = fetch_all(cur, f"""
+        SELECT p.precio::float AS precio, x.area::float AS area, date_trunc('month', p.fecha_creacion) AS mes
+        FROM propiedades p {facetas.JOIN} WHERE {where}
+    """, params)
+    precios = [f["precio"] for f in filas]
+    meses: Dict[Any, List[float]] = {}
+    for f in filas:
+        if f["mes"] and f["area"] and 1.5e6 <= f["precio"] / f["area"] <= 40e6:
+            meses.setdefault(f["mes"], []).append(f["precio"] / f["area"])
+    tendencia = []
+    for mes in sorted(meses)[-6:]:
+        xs = sorted(meses[mes])
+        if len(xs) >= 3:
+            tendencia.append({"mes": mes.strftime("%Y-%m"), "m2": round(xs[len(xs) // 2]), "n": len(xs)})
+    like = like_param(zona or ciudad or "")
+    presupuestos = [float(r["p"]) for r in fetch_all(cur, f"""
+        SELECT presupuesto_estimado AS p FROM pedidos
+        WHERE fecha_captura > NOW() - make_interval(days => %s) AND presupuesto_estimado >= 30000000
+          AND {accent_lower_raw('texto_pedido')} LIKE %s
+    """, (dias, like))]
+    alcanzan = sum(1 for b in presupuestos if precio_ref and b >= precio_ref * 0.95) if precio_ref else None
+    return {
+        "precios": _histograma(precios),
+        "posicion_pct": round(100 * sum(1 for x in precios if precio_ref and x < precio_ref) / len(precios)) if precios and precio_ref else None,
+        "presupuestos": _histograma(presupuestos, minimo=4),
+        "compradores": len(presupuestos),
+        "compradores_alcanzan": alcanzan,
+        "tendencia_m2": tendencia,
+        "ventana_dias": dias,
+    }
+
+
 @_foto
 def demand_stats(cur, ciudad: Optional[str] = None, zona: Optional[str] = None,
                  tipo_propiedad: Optional[str] = None, dias: int = 90) -> Dict[str, Any]:

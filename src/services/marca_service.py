@@ -163,7 +163,13 @@ def _datos_informe(cur, base: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         print(f"[INFORME] Sin balance de zona: {e}")
         balance = None
-    return {"inmueble": base, "estimacion": est, "comparables": comparables, "zona": balance}
+    try:
+        ref = (est or {}).get("precio_estimado") or base.get("precio_publicado")
+        mercado = market_service.mercado_para_informe(cur, base.get("ciudad"), base.get("zona"), base.get("tipo"), ref)
+    except Exception as e:  # noqa: BLE001 — el informe sale igual, sin los gráficos
+        print(f"[INFORME] Sin datos para gráficos: {e}")
+        mercado = None
+    return {"inmueble": base, "estimacion": est, "comparables": comparables, "zona": balance, "mercado": mercado}
 
 
 def generar_informe(user_id: int, propiedad_id: Optional[int] = None, datos: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
