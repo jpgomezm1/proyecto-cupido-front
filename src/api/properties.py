@@ -260,7 +260,7 @@ def get_properties():
             # Oportunidad: nuevo (30 días) y bajo el m² de su zona, o bajó de precio en los últimos 30 días.
             where_clause += (" AND ((p.fecha_creacion >= CURRENT_DATE - INTERVAL '30 days' AND p.id IN (" + _BAJO_SU_ZONA + "))"
                              " OR p.id IN (SELECT propiedad_id FROM cambios_precio WHERE aplicado"
-                             " AND created_at >= NOW() - INTERVAL '30 days' AND precio_nuevo < precio_anterior))")
+                             " AND created_at >= NOW() - INTERVAL '30 days' AND precio_nuevo <= precio_anterior * 0.98))")
 
         if below_zone_avg and below_zone_avg.lower() == 'true':
             where_clause += " AND p.id IN (" + _BAJO_SU_ZONA + ")"
