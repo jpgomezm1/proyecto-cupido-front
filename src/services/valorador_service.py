@@ -135,7 +135,7 @@ def _agente_publico(cur, slug: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     u = fetch_one(cur, """
         SELECT id, nombre, marca_nombre, logo_url, foto_url, pagina_slug FROM chat_users
-        WHERE LOWER(pagina_slug) = %s AND pagina_activa AND activo AND telefono_verificado
+        WHERE LOWER(pagina_slug) = %s AND activo AND telefono_verificado
     """, (slug.lower(),))
     if not u:
         raise ValoradorError("agente", "Esta página de valoración no existe o no está publicada.")
@@ -362,17 +362,35 @@ def para_agente(user_id: int, limite: int = 100) -> Dict[str, Any]:
     return {"items": items, "total": len(items), "vigencia_dias": VIGENCIA_DIAS}
 
 
+def _asignar_slug(cur, user_id: int, nombre: Optional[str]) -> Optional[str]:
+    """La dirección del link del agente (getfynder.com/a/<slug>/valorar), sacada de su nombre."""
+    from src.services.pagina_agente_service import _RESERVADOS, _sugerir_slug
+    base = _sugerir_slug(nombre)
+    if len(base) < 3 or base in _RESERVADOS:
+        base = f"agente-{user_id}"
+    for n in range(0, 50):
+        slug = base if n == 0 else f"{base[:36]}-{n + 1}"
+        if not fetch_one(cur, "SELECT 1 FROM chat_users WHERE LOWER(pagina_slug) = %s", (slug,)):
+            cur.execute("UPDATE chat_users SET pagina_slug = %s WHERE id = %s AND pagina_slug IS NULL", (slug, user_id))
+            return slug
+    return None
+
+
 def mi_valorador(user_id: int) -> Dict[str, Any]:
-    """Para la pestaña Mi página: su link y cuánto le ha servido."""
+    """El link del valorador propio del agente y cuánto le ha servido. Solo pide el celular
+    verificado (ya no la página publicada, que se quitó): si no tiene dirección, se la arma."""
     with get_db() as db:
         cur = db.cursor
-        u = fetch_one(cur, "SELECT pagina_slug, pagina_activa FROM chat_users WHERE id = %s", (user_id,))
+        u = fetch_one(cur, "SELECT nombre, pagina_slug, telefono_verificado FROM chat_users WHERE id = %s", (user_id,))
+        slug = (u or {}).get("pagina_slug")
+        if u and u.get("telefono_verificado") and not slug:
+            slug = _asignar_slug(cur, user_id, u.get("nombre"))
+            db.conn.commit()
         n = fetch_one(cur, """
             SELECT COUNT(*) AS valoraciones, COUNT(*) FILTER (WHERE estado = 'activa') AS propietarios
             FROM valoraciones WHERE agente_id = %s
         """, (user_id,)) or {}
-    slug = (u or {}).get("pagina_slug")
-    activa = bool(u and u.get("pagina_activa") and slug)
+    activa = bool(u and u.get("telefono_verificado") and slug)
     return {"activo": activa, "link": f"{_frontend()}/a/{slug}/valorar" if activa else None,
             "valoraciones": int(n.get("valoraciones") or 0), "propietarios": int(n.get("propietarios") or 0)}
 
