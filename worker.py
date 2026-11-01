@@ -28,6 +28,19 @@ if redis_url.startswith('rediss://'):
 else:
     conn = redis.from_url(redis_url)
 
+# Horario de los trabajos programados (nov-2026, costo de Neon): todos corren juntos a las :00 y
+# :30, y de madrugada (de 12 a 6 a. m. de Bogotá) no corre nada. Así la base se apaga entre turnos
+# y toda la noche, en vez de despertar cada 15 minutos. WORKER_HORAS cambia el horario
+# («6-23» por defecto; «0-23» lo deja las 24 horas).
+TZ_WORKER = "America/Bogota"
+HORAS = os.getenv("WORKER_HORAS", "6-23")
+
+
+def turno(minuto: str = "0,30", hora: str = HORAS) -> dict:
+    """Disparador cron de APScheduler: a las :00 y :30 dentro del horario del worker."""
+    return {"trigger": "cron", "minute": minuto, "hour": hora, "timezone": TZ_WORKER}
+
+
 def _reportar(job: str, e: Exception) -> None:
     """Error de un job programado: al log y a Sentry (un print no lo ve nadie)."""
     print(f"[{job}] Error: {e}")
@@ -58,12 +71,9 @@ if __name__ == '__main__':
                 _reportar("REVALIDACION", e)
 
         scheduler = BackgroundScheduler()
-        scheduler.add_job(_revalidar, 'interval',
-                          minutes=int(os.getenv('REVALIDACION_INTERVALO_MIN', '30')),
-                          id='revalidacion', next_run_time=datetime.now(),
-                          max_instances=1, coalesce=True)
+        scheduler.add_job(_revalidar, **turno(), id='revalidacion', max_instances=1, coalesce=True)
         scheduler.start()
-        print("[WORKER] Revalidación de inventario programada")
+        print(f"[WORKER] Revalidación de inventario programada (:00 y :30, {HORAS} h)")
 
     # Criterios de los pedidos nuevos con IA (búsqueda inversa inmueble -> compradores).
     if os.getenv('PEDIDOS_IA_ENABLED', 'true').lower() == 'true':
@@ -77,10 +87,9 @@ if __name__ == '__main__':
                 _reportar("PEDIDOS-IA", e)
 
         sched_pedidos = BackgroundScheduler()
-        sched_pedidos.add_job(_pedidos, 'interval', minutes=15, id='pedidos_ia',
-                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_pedidos.add_job(_pedidos, **turno(), id='pedidos_ia', max_instances=1, coalesce=True)
         sched_pedidos.start()
-        print("[WORKER] Estructuración de pedidos programada (cada 15 min)")
+        print("[WORKER] Estructuración de pedidos programada (:00 y :30)")
 
     # Fichas del buscador v3 para inmuebles nuevos o editados: reglas primero
     # (gratis) e IA solo si falta lo esencial. FICHAS_IA=false las deja solo con reglas.
@@ -96,10 +105,9 @@ if __name__ == '__main__':
                 _reportar("FICHAS", e)
 
         sched_fichas = BackgroundScheduler()
-        sched_fichas.add_job(_fichas, 'interval', minutes=30, id='fichas',
-                             next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_fichas.add_job(_fichas, **turno(), id='fichas', max_instances=1, coalesce=True)
         sched_fichas.start()
-        print("[WORKER] Fichas del buscador programadas (cada 30 min)")
+        print("[WORKER] Fichas del buscador programadas (:00 y :30)")
 
     # Embeddings de los activos que no lo tienen (el puntaje semántico del buscador v3).
     # Solo el texto, sin análisis de fotos: ~USD 0,02 por millón de tokens.
@@ -114,10 +122,9 @@ if __name__ == '__main__':
                 _reportar("EMBEDDINGS", e)
 
         sched_emb = BackgroundScheduler()
-        sched_emb.add_job(_embeddings, 'interval', minutes=30, id='embeddings',
-                          next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_emb.add_job(_embeddings, **turno(), id='embeddings', max_instances=1, coalesce=True)
         sched_emb.start()
-        print("[WORKER] Embeddings pendientes programados (cada 30 min)")
+        print("[WORKER] Embeddings pendientes programados (:00 y :30)")
 
     # Alarma si deja de entrar inventario de los grupos (ago–oct 2026 estuvo caída 9 semanas sin aviso).
     if os.getenv('CAPTURA_ALERTA_ENABLED', 'true').lower() == 'true':
@@ -133,10 +140,9 @@ if __name__ == '__main__':
                 _reportar("CAPTURA", e)
 
         sched_cap = BackgroundScheduler()
-        sched_cap.add_job(_salud_captura, 'interval', minutes=60, id='salud_captura',
-                          next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_cap.add_job(_salud_captura, **turno("0"), id='salud_captura', max_instances=1, coalesce=True)
         sched_cap.start()
-        print("[WORKER] Alarma de captura programada (cada hora)")
+        print("[WORKER] Alarma de captura programada (cada hora en punto)")
 
     # Alertas de cruce: inmuebles nuevos y cambios de precio contra los clientes de
     # cada agente (sin IA: SQL y el puntaje del buscador), y su resumen por correo.
@@ -168,10 +174,9 @@ if __name__ == '__main__':
                 _reportar("ENCARGOS", e)
 
         sched_alertas = BackgroundScheduler()
-        sched_alertas.add_job(_alertas, 'interval', minutes=30, id='alertas',
-                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_alertas.add_job(_alertas, **turno(), id='alertas', max_instances=1, coalesce=True)
         sched_alertas.start()
-        print("[WORKER] Alertas de cruce programadas (cada 30 min)")
+        print("[WORKER] Alertas de cruce programadas (:00 y :30)")
 
     # Correos de recordatorio del plan (por vencer / vencido), idempotentes.
     if os.getenv('CORREOS_RECORDATORIO_ENABLED', 'true').lower() == 'true':
@@ -206,10 +211,9 @@ if __name__ == '__main__':
                     _reportar("CORREOS", e)
 
         sched_correos = BackgroundScheduler()
-        sched_correos.add_job(_recordatorios, 'interval', hours=6, id='correos_plan',
-                              next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_correos.add_job(_recordatorios, **turno("0", "6,12,18"), id='correos_plan', max_instances=1, coalesce=True)
         sched_correos.start()
-        print("[WORKER] Recordatorios de plan programados (cada 6 h)")
+        print("[WORKER] Recordatorios de plan programados (6 a. m., 12 m. y 6 p. m.)")
 
     # Conciliación de pagos de Wompi: los que quedaron pendientes o rechazados.
     if os.getenv('PAGOS_RECONCILIAR_ENABLED', 'true').lower() == 'true':
@@ -231,10 +235,9 @@ if __name__ == '__main__':
                 _reportar("RENOVACION", e)
 
         sched_pagos = BackgroundScheduler()
-        sched_pagos.add_job(_reconciliar, 'interval', minutes=15, id='pagos_reconciliar',
-                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
-        sched_pagos.add_job(_renovar, 'interval', hours=1, id='pagos_renovar',
-                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        # El webhook de Wompi confirma los pagos al instante; esto solo recoge los que se quedaron.
+        sched_pagos.add_job(_reconciliar, **turno(), id='pagos_reconciliar', max_instances=1, coalesce=True)
+        sched_pagos.add_job(_renovar, **turno("0"), id='pagos_renovar', max_instances=1, coalesce=True)
 
         def _conexiones():
             # «Te conectamos» (R20): lo pendiente de más de 48 h devuelve la llave.
@@ -244,10 +247,9 @@ if __name__ == '__main__':
             except Exception as e:  # noqa: BLE001
                 _reportar("CONEXIONES", e)
 
-        sched_pagos.add_job(_conexiones, 'interval', hours=1, id='conexiones_vencer',
-                            next_run_time=datetime.now(), max_instances=1, coalesce=True)
+        sched_pagos.add_job(_conexiones, **turno("0"), id='conexiones_vencer', max_instances=1, coalesce=True)
         sched_pagos.start()
-        print("[WORKER] Conciliación de pagos programada (cada 15 min)")
+        print("[WORKER] Conciliación de pagos programada (:00 y :30)")
 
     # Instagram de Fynder: Buffer → instagram_posts → correos, a las 7 a. m. y 7 p. m. de Bogotá
     # (12:00 y 00:00 UTC). Buffer limita las llamadas diarias a su API: no lo subas de frecuencia.

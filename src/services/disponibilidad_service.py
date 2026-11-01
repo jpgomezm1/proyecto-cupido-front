@@ -489,6 +489,15 @@ def _diagnosticar_fila(prop: Dict[str, Any]) -> Tuple[int, Veredicto]:
     return prop["id"], v
 
 
+def horas_activas() -> int:
+    """Horas al día en que corre el worker («6-23» = 18; «0-23» = 24)."""
+    try:
+        a, b = (int(x) for x in os.getenv("WORKER_HORAS", "6-23").split("-"))
+        return max(1, min(24, b - a + 1))
+    except ValueError:
+        return 24
+
+
 def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[str] = None) -> Dict[str, Any]:
     """
     Revisa las `n` propiedades activas con el intento más viejo (las nunca
@@ -517,7 +526,9 @@ def revalidar_lote(n: Optional[int] = None, hilos: int = 4, url_regex: Optional[
                                OR fecha_ultimo_intento < NOW() - (%s * INTERVAL '1 day'))) AS atrasadas
                     FROM propiedades WHERE activa
                 """, (dias,))
-                n = tamano_lote(cuenta["activas"], dias, intervalo, cuenta["atrasadas"])
+                # Solo corre en el horario del worker (WORKER_HORAS, 18 h al día por defecto):
+                # el intervalo «efectivo» es más largo y el lote crece para dar la vuelta igual.
+                n = tamano_lote(cuenta["activas"], dias, round(intervalo * 24 / horas_activas()), cuenta["atrasadas"])
             props: List[Dict[str, Any]] = fetch_all(db.cursor, f"""
                 SELECT id, url, imagenes_urls FROM propiedades
                 WHERE activa AND url IS NOT NULL AND url <> '' AND {_SQL_SIN_PROPIOS}
