@@ -181,6 +181,8 @@ CAMPOS = {
     "respuesta": ("la respuesta a una pregunta frecuente", 500),
     "testimonio": ("un testimonio de un cliente (corrige la redacción, no inventes hechos)", 300),
     "mensaje_whatsapp": ("el mensaje prellenado con que el cliente le escribe por WhatsApp", 160),
+    "titulo_bloque": ("el título de una sección de su página", 90),
+    "texto_bloque": ("el texto de una sección de su página (párrafo corto, en primera persona)", 900),
 }
 
 
@@ -188,7 +190,7 @@ def mejorar(user_id: int, campo: str, texto: str, pedido: Optional[str] = None, 
     if campo not in CAMPOS:
         raise PaginaIAError("campo_invalido", "Ese texto no se puede mejorar con IA.")
     texto = (texto or "").strip()
-    if not texto and campo not in ("titular", "subtitular", "bio", "mensaje_whatsapp"):
+    if not texto and campo not in ("titular", "subtitular", "bio", "mensaje_whatsapp", "titulo_bloque", "texto_bloque"):
         raise PaginaIAError("vacio", "Escribe algo primero y la IA lo mejora.")
     _cupo(user_id)
     with get_db() as db:
