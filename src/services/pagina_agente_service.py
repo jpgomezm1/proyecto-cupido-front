@@ -12,6 +12,12 @@ portada, titular, secciones en orden (con su interruptor), destacados, cifras,
 testimonios, preguntas frecuentes y redes. `normalizar` valida todo lo que entra;
 lo que no sirve se descarta en silencio y nunca rompe la página.
 
+Bloques (editor tipo Canva): `config.bloques = [{id, tipo, visible, estilo, datos}]` reemplaza
+a `secciones`. La portada y las secciones de siempre van una sola vez y leen sus datos de los
+campos globales (titular, testimonios, preguntas…); los bloques nuevos (texto con imagen, banner,
+galería, video, proceso, servicios) se repiten y traen sus datos. Una configuración sin `bloques`
+se arma desde `secciones`, y la salida sigue trayendo `secciones` para el frontend anterior.
+
 Cifras (`pagina_eventos`): visitas, toques a WhatsApp, inmuebles abiertos y
 valorador, por día. La página pública las registra con `registrar_evento`.
 
@@ -20,6 +26,7 @@ El logo también aparece en las piezas que el agente le envía a su cliente
 """
 
 import re
+import secrets
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +55,22 @@ REDES = {
     "youtube": "https://youtube.com/@{}", "linkedin": "https://linkedin.com/in/{}", "web": None,
 }
 CIFRAS = ("anos", "vendidos", "familias")
+
+# Bloques: los de una sola vez (portada + secciones de siempre) y los que se repiten.
+UNICOS = ("portada",) + SECCIONES
+REPETIBLES = ("texto_imagen", "banner", "galeria", "video", "proceso", "servicios")
+MAX_BLOQUES = 30
+FONDOS_BLOQUE = ("pagina", "marca", "oscuro", "imagen")
+ESPACIOS = ("normal", "amplio", "compacto")
+ACCIONES = ("whatsapp", "valorar", "inmuebles", "link")
+ICONOS = ("casa", "llave", "edificio", "mapa", "grafica", "apreton", "documento", "camara", "estrella",
+          "escudo", "dinero", "lupa", "corazon", "reloj")
+_ID_BLOQUE = re.compile(r"^[a-z0-9]{4,12}$")
+_VIDEO = (
+    ("youtube", re.compile(r"^https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")),
+    ("vimeo", re.compile(r"^https?://(?:www\.|player\.)?vimeo\.com/(?:video/)?(\d{5,12})")),
+    ("instagram", re.compile(r"^https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]{5,40})")),
+)
 EVENTOS_PUBLICOS = ("visita", "whatsapp", "inmueble", "valorar")
 TZ = "America/Bogota"
 
@@ -147,7 +170,137 @@ def normalizar(c: Any) -> Dict[str, Any]:
     ][:8]
     redes = c.get("redes") if isinstance(c.get("redes"), dict) else {}
     out["redes"] = {r: url for r in REDES if (url := _red(r, redes.get(r)))}
+
+    crudos = c.get("bloques") if isinstance(c.get("bloques"), list) else None
+    out["bloques"] = _bloques(crudos) if crudos is not None else _bloques_desde_secciones(out["secciones"])
+    # El frontend anterior lee `secciones`: se deriva del orden de los bloques (las que no están, ocultas).
+    en_bloques = [b for b in out["bloques"] if b["tipo"] in SECCIONES]
+    puestas = {b["tipo"] for b in en_bloques}
+    out["secciones"] = ([{"id": b["tipo"], "visible": b["visible"]} for b in en_bloques]
+                        + [{"id": t, "visible": False} for t in SECCIONES if t not in puestas])
     return out
+
+
+# ── bloques ─────────────────────────────────────────────────────────────────
+
+def _img(v: Any) -> Optional[str]:
+    u = _texto(v, 500)
+    return u if u and _URL_IMG.match(u) else None
+
+
+def _boton(v: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(v, dict) or v.get("accion") not in ACCIONES:
+        return None
+    texto = _texto(v.get("texto"), 40) or "Escríbeme"
+    if v["accion"] == "link":
+        u = _texto(v.get("url"), 300)
+        if u and u.startswith("http://"):
+            u = "https://" + u[7:]
+        if not u or not _URL_IMG.match(u):
+            return None
+        return {"texto": texto, "accion": "link", "url": u}
+    return {"texto": texto, "accion": v["accion"]}
+
+
+def video_de(url: Any) -> Optional[Dict[str, str]]:
+    """Link de YouTube, Vimeo o Instagram → {proveedor, vid}; cualquier otro, None."""
+    u = _texto(url, 300)
+    for proveedor, rx in _VIDEO:
+        m = rx.match(u or "")
+        if m:
+            return {"proveedor": proveedor, "vid": m.group(1)}
+    return None
+
+
+def _items(lista: Any, tope: int, campos: Dict[str, int], requerido: str) -> List[Dict[str, Any]]:
+    out = []
+    for x in [y for y in (lista if isinstance(lista, list) else []) if isinstance(y, dict)]:
+        item = {k: _texto(x.get(k), n) for k, n in campos.items()}
+        if item.get(requerido):
+            item["_crudo"] = x
+            out.append(item)
+    return out[:tope]
+
+
+def _datos(tipo: str, d: Any) -> Dict[str, Any]:
+    d = d if isinstance(d, dict) else {}
+    base = {"titulo": _texto(d.get("titulo"), 90), "eyebrow": _texto(d.get("eyebrow"), 40)}
+    if tipo == "portada":
+        return {}  # titular, subtitular e imagen viven en la configuración global
+    if tipo in SECCIONES:
+        return base
+    if tipo == "texto_imagen":
+        return {**base, "texto": _texto(d.get("texto"), 900), "imagen_url": _img(d.get("imagen_url")),
+                "lado": "der" if d.get("lado") == "der" else "izq", "boton": _boton(d.get("boton"))}
+    if tipo == "banner":
+        return {**base, "texto": _texto(d.get("texto"), 240), "imagen_url": _img(d.get("imagen_url")),
+                "boton": _boton(d.get("boton"))}
+    if tipo == "galeria":
+        imgs = [{"url": u, "pie": _texto(x.get("pie"), 80)} for x in (d.get("imagenes") or [])
+                if isinstance(x, dict) and (u := _img(x.get("url")))][:12]
+        return {**base, "imagenes": imgs, "columnas": d["columnas"] if d.get("columnas") in (2, 3, 4) else 3}
+    if tipo == "video":
+        v = d.get("video") if isinstance(d.get("video"), dict) else None
+        if (v and v.get("proveedor") in {p for p, _ in _VIDEO} and isinstance(v.get("vid"), str)
+                and re.match(r"^[A-Za-z0-9_-]{5,40}$", v["vid"])):
+            video = {"proveedor": v["proveedor"], "vid": v["vid"]}
+        else:
+            video = video_de(d.get("url"))
+        return {**base, "texto": _texto(d.get("texto"), 240), "video": video}
+    if tipo == "proceso":
+        pasos = _items(d.get("pasos"), 6, {"titulo": 60, "texto": 240}, "titulo")
+        return {**base, "pasos": [{k: v for k, v in x.items() if k != "_crudo"} for x in pasos]}
+    if tipo == "servicios":
+        items = _items(d.get("items"), 6, {"titulo": 60, "texto": 240}, "titulo")
+        return {**base, "items": [{"titulo": x["titulo"], "texto": x["texto"],
+                                   "icono": x["_crudo"].get("icono") if x["_crudo"].get("icono") in ICONOS else "casa"}
+                                  for x in items]}
+    return base
+
+
+def _estilo(e: Any) -> Dict[str, Any]:
+    e = e if isinstance(e, dict) else {}
+    fondo = e.get("fondo") if e.get("fondo") in FONDOS_BLOQUE else "pagina"
+    imagen = _img(e.get("imagen_url"))
+    if fondo == "imagen" and not imagen:
+        fondo = "pagina"
+    return {"fondo": fondo, "imagen_url": imagen if fondo == "imagen" else None,
+            "espacio": e.get("espacio") if e.get("espacio") in ESPACIOS else "normal"}
+
+
+def nuevo_id() -> str:
+    return secrets.token_hex(4)
+
+
+def _bloques(crudos: List[Any]) -> List[Dict[str, Any]]:
+    """Valida la lista que manda el editor: tipos conocidos, únicos una sola vez, ids sin repetir, tope 30.
+    La portada siempre existe y va primero."""
+    out, unicos, ids = [], set(), set()
+    for b in crudos:
+        if not isinstance(b, dict) or b.get("tipo") not in UNICOS + REPETIBLES:
+            continue
+        tipo = b["tipo"]
+        if tipo in UNICOS:
+            if tipo in unicos:
+                continue
+            unicos.add(tipo)
+        bid = b.get("id")
+        if not (isinstance(bid, str) and _ID_BLOQUE.match(bid)) or bid in ids:
+            bid = nuevo_id()
+        ids.add(bid)
+        out.append({"id": bid, "tipo": tipo, "visible": b.get("visible") is not False,
+                    "estilo": _estilo(b.get("estilo")), "datos": _datos(tipo, b.get("datos"))})
+    portada = next((b for b in out if b["tipo"] == "portada"), None)
+    resto = [b for b in out if b["tipo"] != "portada"][:MAX_BLOQUES - 1]
+    if not portada:
+        portada = {"id": "portada", "tipo": "portada", "visible": True, "estilo": _estilo(None), "datos": {}}
+    return [portada] + resto
+
+
+def _bloques_desde_secciones(secciones: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Configuración anterior al editor por bloques: la portada y las secciones en su orden (las ocultas, ocultas)."""
+    return _bloques([{"id": "portada", "tipo": "portada"}]
+                    + [{"id": s["id"].replace("_", "")[:12], "tipo": s["id"], "visible": s["visible"]} for s in secciones])
 
 
 # ── el agente ───────────────────────────────────────────────────────────────
