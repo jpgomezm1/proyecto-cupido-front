@@ -10,6 +10,7 @@ Los docstrings de cada tool son la interfaz que ve Claude: describen QUÉ hace y
 CUÁNDO usarla.
 """
 
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -117,9 +118,13 @@ _base = public_base_url()
 # host público (derivado de MCP_PUBLIC_URL) + localhost para dev.
 _netloc = urlparse(_base).netloc or "localhost:8767"
 _bare = _netloc.split(":")[0]
+# MCP_HOSTS_EXTRA: otros hosts que siguen sirviendo, p. ej. el de Heroku después de pasar a
+# mcp.getfynder.com (quien conectó con la URL vieja no se cae).
+_extra = [h.strip() for h in os.getenv("MCP_HOSTS_EXTRA", "").split(",") if h.strip()]
 _allowed_hosts = list({
     _netloc, _bare, f"{_bare}:*",
     "localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]:*",
+    *_extra, *[f"{h}:*" for h in _extra],
 })
 
 mcp = FastMCP(
@@ -308,43 +313,20 @@ def get_property(id_or_slug: str) -> Dict[str, Any]:
 # MERCADO: ZONA, DEMANDA Y BALANCE
 # =========================================================================
 
-@mcp.tool(title="Oferta de una zona", annotations=_LECTURA)
-def get_zone_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
-                   tipo_propiedad: Optional[str] = None,
-                   tipo_negocio: str = "Venta") -> Dict[str, Any]:
-    """
-    Estadísticas de OFERTA de una zona: inventario activo, distribución de
-    precios (percentiles), precio/m² mediano, área y habitaciones promedio,
-    fotos promedio y antigüedad del inventario.
-
-    Úsala para responder "¿cómo está el mercado en El Poblado?" o "¿cuál es el
-    precio/m² típico de apartamentos en Laureles?".
-    """
-    return ms.get_zone_stats(ciudad, zona, tipo_propiedad, tipo_negocio)
-
-
-@mcp.tool(title="Demanda de una zona", annotations=_LECTURA)
-def get_demand_stats(ciudad: Optional[str] = None, zona: Optional[str] = None,
-                     tipo_propiedad: Optional[str] = None, dias: int = 90) -> Dict[str, Any]:
-    """
-    Estadísticas de DEMANDA de una zona en los últimos `dias`: cuántos
-    compradores están buscando (pedidos + búsquedas) y su presupuesto típico.
-
-    Úsala para "¿hay demanda para apartaestudios en El Poblado?".
-    """
-    return ms.get_demand_stats(ciudad, zona, tipo_propiedad, dias)
-
-
-@mcp.tool(title="Balance oferta vs demanda", annotations=_LECTURA)
+@mcp.tool(title="Cómo está una zona: oferta, demanda y balance", annotations=_LECTURA)
 def get_supply_demand_balance(ciudad: Optional[str] = None, zona: Optional[str] = None,
                               tipo_propiedad: Optional[str] = None,
                               tipo_negocio: str = "Venta", dias: int = 90) -> Dict[str, Any]:
     """
-    Balance OFERTA vs DEMANDA de una zona: ratio y clasificación
-    (caliente / equilibrado / frío). Un ratio alto significa más compradores
-    que inventario (buen momento para captar/vender ahí).
+    Todo lo de una zona en una sola consulta:
+    - OFERTA (`detalle_oferta`): inventario activo, rango de precios, precio/m²
+      mediano, área y habitaciones típicas, cuánto llevan publicados.
+    - DEMANDA (`detalle_demanda`): cuántos compradores buscan ahí y su presupuesto.
+    - BALANCE: ratio y clasificación (caliente / equilibrado / frío). Un ratio alto
+      es más compradores que inventario: buen momento para captar o vender.
 
-    Úsala para "¿está caliente o fría la zona X?" o para decidir dónde captar.
+    Úsala para "¿cómo está el mercado en El Poblado?", "¿cuál es el m² en
+    Laureles?", "¿hay demanda para apartaestudios?" o "¿dónde capto?".
     """
     return ms.get_supply_demand_balance(ciudad, zona, tipo_propiedad, tipo_negocio, dias)
 
@@ -438,34 +420,6 @@ def diagnose_property(property_id: str) -> Dict[str, Any]:
     return ds.diagnose_public(property_id)
 
 
-@mcp.tool(title="Compradores para una propiedad", annotations=_LECTURA)
-def find_buyers_for_property(property_id: str, dias: int = 120,
-                             limit: int = 15) -> Dict[str, Any]:
-    """
-    Encuentra la DEMANDA activa (pedidos recientes) que podría encajar con una
-    propiedad: matchea por zona y presupuesto, y muestra qué buscan y su
-    presupuesto. Sirve para saber si hay mercado para el inmueble.
-
-    Cada pedido trae `desbloqueable`: si es true, el agente puede obtener el
-    contacto de quien lo hizo con `ver_contacto_pedido` (usa 1 llave). Si
-    es false, quien lo hizo aún no es usuario de Fynder: ofrece `solicitar_visita`.
-
-    Úsala para "¿hay compradores buscando algo como esto?" tras un diagnóstico.
-    """
-    res = ds.find_buyers_public(property_id, dias, limit)
-    compradores = res.get("compradores") if isinstance(res, dict) else None
-    if compradores:
-        vistos = suscripciones.ids_desbloqueados(
-            current_agent().user_id, "pedido", [c["pedido_id"] for c in compradores])
-        for c in compradores:
-            c["contacto_desbloqueado"] = c["pedido_id"] in vistos
-    return res
-
-
-# =========================================================================
-# CAZADOR: DÓNDE CAPTAR
-# =========================================================================
-
 @mcp.tool(title="Dónde captar", annotations=_LECTURA)
 def donde_captar(ciudad: Optional[str] = None, tipo_propiedad: str = "apartamento",
                  dias: int = 90) -> Dict[str, Any]:
@@ -548,8 +502,8 @@ def compradores_para_inmueble(entrada: str, limit: int = 10) -> Dict[str, Any]:
 
     Cada pedido trae `desbloqueable`: si es true, el contacto de quien lo hizo
     se obtiene con `ver_contacto_pedido` (usa 1 llave). Si es false, ofrece
-    `solicitar_visita`. Para un inmueble que ya está en Fynder también sirve
-    `find_buyers_for_property`.
+    `solicitar_visita`. Para un inmueble que ya está en Fynder, pásale su código
+    o su link de Fynder.
     """
     from src.services import compradores_service as cs
     return cs.buscar_compradores_public(entrada, current_agent().user_id, limit=min(max(limit, 1), 25))
@@ -643,41 +597,22 @@ def crear_listing(precio: int, area_construida: float, tipo_propiedad: str,
                   tipo_negocio: str = "Venta",
                   imagenes_urls: Optional[List[str]] = None) -> Dict[str, Any]:
     """
-    Publica una propiedad NUEVA en Fynder (listing nativo del agente autenticado).
+    Publica una propiedad NUEVA del agente en Fynder. Úsala cuando diga "publica / crea /
+    sube un inmueble".
 
-    ANTES DE LLAMAR ESTA TOOL, reúne con el agente los REQUISITOS MÍNIMOS. Si
-    falta algo, PREGÚNTALE — no inventes ni publiques a medias:
-    - OBLIGATORIOS (el agente los da; tú no puedes saberlos): precio en pesos
-      (ej. 600000000), area_construida en m², tipo_propiedad, y ubicación
-      (ciudad y/o zona).
-    - MUY RECOMENDADOS: habitaciones, baños, parqueaderos, estrato. Pídeselos.
-    - FOTOS: son OBLIGATORIAS para publicar. Como no se suben por el chat,
-      adviértele desde el principio que va a necesitar fotos y que se las pedirás
-      con un link al final.
+    Antes, pídele lo que falte (no inventes): OBLIGATORIO precio en pesos, área en m²,
+    tipo y ciudad o zona; RECOMENDADO habitaciones, baños, parqueaderos y estrato. Avísale
+    desde el inicio que necesitará FOTOS (no se suben por el chat).
 
-    TÚ redactas el `titulo` y la `descripcion` (sin llamar a otra IA):
-    - `titulo`: atractivo, corto, con el gancho principal (máx ~70 caracteres).
-    - `descripcion`: VENDEDORA y COMPLETA, de 3 a 4 párrafos (apunta a 700-1200
-      caracteres, NO la dejes corta). Cubre: (1) apertura con lo mejor del
-      inmueble y su ubicación; (2) distribución y espacios (habitaciones, cocina,
-      balcón, iluminación, acabados); (3) amenidades del edificio y del entorno
-      (colegios, transporte, comercio si aplica); (4) cierre que invite a la
-      visita. Español colombiano, cálido y profesional. No inventes datos que el
-      agente no dio.
-    - `amenidades`: separadas por '|' (ej. "Piscina|Gimnasio|Zona infantil").
+    Tú redactas `titulo` (corto, con gancho, ~70 caracteres) y `descripcion` vendedora de
+    3-4 párrafos (700-1200 caracteres): lo mejor y la ubicación, los espacios, las
+    amenidades y el entorno, y un cierre que invite a la visita. Sin datos que el agente no
+    dio. Amenidades separadas por '|'.
 
-    SIEMPRE, después de crear, MUÉSTRALE al agente el TÍTULO y la DESCRIPCIÓN
-    completos que generaste (no un resumen) y pregúntale si quiere ajustarlos.
-    Si pide cambios (más largo, otro tono, resaltar algo), reescríbela y aplícala
-    con propose_description_update_tool + apply_change.
-
-    CÓMO FUNCIONA LA PUBLICACIÓN: si creas el listing SIN fotos, queda como
-    BORRADOR (no aparece en búsquedas). En la respuesta viene `link_subir_fotos`:
-    DÁSELO SIEMPRE al agente y explícale que la propiedad se PUBLICA SOLA en
-    cuanto suba al menos una foto por ese link. Revisa `estado_publicacion` y
-    `requiere_fotos` en la respuesta y comunícaselo.
-
-    Úsala cuando el agente diga "publica/crea/sube una propiedad/listing".
+    Después: muéstrale título y descripción COMPLETOS y pregúntale si los ajusta (cambios con
+    propose_description_update_tool + apply_change). Sin fotos queda en BORRADOR: dale
+    SIEMPRE `link_subir_fotos` y explícale que se publica sola al subir la primera foto
+    (revisa `estado_publicacion` y `requiere_fotos`).
     """
     agent = current_agent()
     if not agent.has_inventory_scope:
@@ -1002,7 +937,7 @@ def ver_contacto(codigo: str, confirmar: bool = False) -> Dict[str, Any]:
 def ver_contacto_pedido(pedido_id: int, confirmar: bool = False) -> Dict[str, Any]:
     """
     Devuelve el CONTACTO de quien hizo un pedido (un comprador buscando algo),
-    para los pedidos que `find_buyers_for_property` marca `desbloqueable=true`.
+    para los pedidos que `compradores_para_inmueble` marca `desbloqueable=true`.
     Usa 1 llave. Mismo flujo de dos pasos que `ver_contacto`: primero sin
     confirmar (costo y llaves disponibles), luego con `confirmar=true`.
 

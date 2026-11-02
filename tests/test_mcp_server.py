@@ -10,9 +10,9 @@ from src.mcp_server import server as srv
 
 EXPECTED_TOOLS = {
     "search_properties", "get_property",
-    "get_zone_stats", "get_demand_stats", "get_supply_demand_balance",
+    "get_supply_demand_balance",
     "find_comparables", "compare_properties", "estimate_price",
-    "diagnose_property", "find_buyers_for_property", "compradores_para_inmueble", "list_my_properties",
+    "diagnose_property", "compradores_para_inmueble", "list_my_properties",
     # Lote 1: cerrador / cazador / calificador
     "donde_captar", "capacidad_de_compra", "ficha_venta",
     "termometro_de_interes", "mis_listings_calientes",
@@ -54,7 +54,7 @@ def test_auth_gating_without_token(monkeypatch):
     monkeypatch.delenv("FYNDER_MCP_TOKEN", raising=False)
     registros = []
     monkeypatch.setattr(srv.uso, "registrar", lambda *a, **k: registros.append(a))
-    tool = srv.mcp._tool_manager.get_tool("get_zone_stats")
+    tool = srv.mcp._tool_manager.get_tool("get_supply_demand_balance")
     out = asyncio.run(tool.run({}))
     assert out["error"] == "no_autorizado"
     assert registros[0][1] is None and registros[0][3] == "no_autorizado"
@@ -72,7 +72,7 @@ def test_tools_are_async_and_keep_signature():
 
 
 def test_annotations_distinguish_reads_from_writes():
-    assert _tool("get_zone_stats").annotations.readOnlyHint is True
+    assert _tool("get_supply_demand_balance").annotations.readOnlyHint is True
     assert _tool("propose_price_update_tool").annotations.readOnlyHint is True
     assert _tool("crear_listing").annotations.readOnlyHint is False
     visita = _tool("solicitar_visita").annotations
@@ -96,15 +96,15 @@ def test_wrapper_binds_agent_sanitizes_and_logs(monkeypatch):
         visto["agente"] = ic.current_agent()
         return {"zona": "Laureles", "telefono": "3001112233", "nota": "cel 3001112233"}
 
-    monkeypatch.setattr(srv.ms, "get_zone_stats", fake_zone_stats)
-    out = asyncio.run(_tool("get_zone_stats").run({"zona": "Laureles"}))
+    monkeypatch.setattr(srv.ms, "get_supply_demand_balance", fake_zone_stats)
+    out = asyncio.run(_tool("get_supply_demand_balance").run({"zona": "Laureles"}))
 
     assert visto["agente"] is agente            # identidad ligada a la llamada
     assert ic.current_agent() is not agente     # y liberada al terminar
     assert "telefono" not in out                # sanitize aplicado
     assert "3001112233" not in out["nota"]
     nombre, user_id, _ms, error, args = registros[0]
-    assert (nombre, user_id, error) == ("get_zone_stats", 7, None)
+    assert (nombre, user_id, error) == ("get_supply_demand_balance", 7, None)
     assert "zona" in list(args)
 
 
@@ -134,9 +134,9 @@ def test_contacto_revelado_sale_solo_por_ver_contacto(monkeypatch):
     assert out["contacto_desbloqueado"]["telefono"] == "+573005556677"
 
     # Una tool normal que (por error) devuelve un ContactoRevelado no lo entrega.
-    monkeypatch.setattr(srv.ms, "get_zone_stats",
+    monkeypatch.setattr(srv.ms, "get_supply_demand_balance",
                         lambda *a: {"fuga": ContactoRevelado("+573005556677", "Ana")})
-    out = asyncio.run(_tool("get_zone_stats").run({}))
+    out = asyncio.run(_tool("get_supply_demand_balance").run({}))
     assert out["fuga"] is None
 
 
