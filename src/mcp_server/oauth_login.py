@@ -129,6 +129,7 @@ def oauth_login_routes():
 _CSS = """
 body{ display:flex; flex-direction:column; }
 main{ flex:1; display:flex; align-items:center; padding:12px 0 8px; }
+h1,.titulo{ font-family:'Poppins','Inter',sans-serif; }
 .findy{ display:flex; justify-content:center; margin-bottom:12px; }
 .findy img{ height:56px; width:56px; object-fit:contain; }
 .card h1{ text-align:center; font-size:22px; }
@@ -137,13 +138,52 @@ main{ flex:1; display:flex; align-items:center; padding:12px 0 8px; }
 .destino{ text-align:center; font-size:14px; margin:14px 0 4px; }
 .destino span{ color:var(--muted); }
 .seguro{ text-align:center; color:var(--muted); font-size:12.5px; margin-top:16px; line-height:1.55; }
+.nueva{ text-align:center; font-size:14px; margin-top:18px; padding-top:16px; border-top:1px solid var(--border); }
+/* Las dos apps conectándose */
+.enlace{ display:flex; align-items:center; justify-content:center; gap:10px; margin:16px 0 6px; }
+.enlace .app{ display:flex; align-items:center; gap:8px; border:1px solid var(--border); background:var(--surface-2);
+              border-radius:999px; padding:6px 12px 6px 6px; font-size:13.5px; font-weight:600; }
+.enlace .app img{ width:26px; height:26px; border-radius:8px; }
+.enlace .app .ini{ width:26px; height:26px; border-radius:8px; display:grid; place-items:center; background:#D97757;
+                   color:#fff; font-weight:800; font-size:13px; }
+.enlace .linea{ width:28px; height:2px; background:linear-gradient(90deg,transparent,var(--brand),transparent); }
+/* Columna de la izquierda (solo en computador) */
+.duo{ display:grid; gap:28px; width:100%; align-items:center; }
+.lado{ display:none; }
+@media (min-width:900px){
+  .wrap-login{ max-width:1040px; }
+  .duo{ grid-template-columns:minmax(0,1.05fr) minmax(0,420px); gap:56px; }
+  .lado{ display:block; }
+}
+.lado .findy3d{ height:150px; width:auto; filter:drop-shadow(0 18px 30px rgba(0,0,0,.45)); }
+.lado .titulo{ font-size:38px; line-height:1.08; letter-spacing:-.02em; font-weight:700; margin-top:14px; }
+.lado .titulo em{ font-style:normal; color:var(--brand); }
+.lado .lead{ margin-top:12px; max-width:440px; }
+.pedidos{ list-style:none; margin-top:22px; display:grid; gap:10px; max-width:460px; }
+.pedidos li{ border:1px solid var(--border); background:var(--surface-1); border-radius:14px; padding:12px 14px;
+             font-size:14px; color:var(--text); }
+.pedidos li b{ display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--brand); margin-bottom:3px; }
+.premio{ display:inline-flex; align-items:center; gap:8px; margin-top:18px; font-size:13.5px; font-weight:600;
+         color:var(--brand-hi); background:var(--brand-soft); border-radius:999px; padding:7px 13px; }
 """
 
 _WA_CLAVE = brand.wa_link("Hola, olvidé mi clave de Fynder y necesito recuperarla.")
 
 _LOGIN_BODY = """
-<div class="wrap-sm">__HEADER__
+<div class="wrap wrap-login">__HEADER__
 <main>
+ <div class="duo">
+  <section class="lado" aria-label="Qué ganas al conectar">
+    <img class="findy3d" src="__FINDY3D__" alt="" aria-hidden="true">
+    <p class="titulo">Fynder, dentro de <em>tu IA</em></p>
+    <p class="lead">Pídele a Claude o a ChatGPT lo que necesitas con tus clientes y responde con el inventario, los compradores y el mercado de Fynder.</p>
+    <ul class="pedidos">
+      <li><b>Para tu cliente</b>«Búscale un apto en Laureles de 3 habitaciones hasta $600 millones»</li>
+      <li><b>Para tu inmueble</b>«¿Quién está buscando algo como mi apartamento de 90 m² en Envigado?»</li>
+      <li><b>Para captar</b>«¿A cuánto capto una casa en Loma de las Brujas?»</li>
+    </ul>
+    <p class="premio">★ Ganas 300 Fyns al conectar, y 5 veces más Fyns por usar Fynder desde tu IA</p>
+  </section>
   <form class="card" method="post" action="/oauth/login" style="width:100%">
     <div class="findy"><img src="__FINDY__" alt="Findy, el asistente de Fynder"></div>
     <h1>Conecta Fynder con tu IA</h1>
@@ -166,7 +206,9 @@ _LOGIN_BODY = """
     <p class="olvido">¿Olvidaste tu clave? <a href="__WA_CLAVE__" target="_blank" rel="noopener noreferrer">Escríbenos por WhatsApp</a></p>
     <p class="seguro">Conexión segura. Al autorizar, tu asistente de IA podrá consultar Fynder en tu nombre.
       Puedes revocar el acceso cuando quieras.</p>
+    <p class="nueva">¿Aún no tienes cuenta? <a href="__URL_REGISTRO__" target="_blank" rel="noopener">Créala gratis</a> y vuelve aquí para conectar.</p>
   </form>
+ </div>
 </main>
 __FOOTER__</div>
 """
@@ -191,7 +233,10 @@ def _render_login(rid: str, error: str = "", email: str = "", destino: Optional[
     err_html = (f'<div class="alert-error" id="login-error" role="alert">{html.escape(error)}</div>'
                 if error else "")
     d = destino or {"nombre": "Una aplicación", "host": "desconocido", "conocido": False}
+    inicial = html.escape((d["nombre"] or "?")[:1].upper())
     destino_html = (
+        f'<div class="enlace" aria-hidden="true"><span class="app"><span class="ini">{inicial}</span>{html.escape(d["nombre"])}</span>'
+        f'<span class="linea"></span><span class="app"><img src="/favicon.png" alt="">Fynder</span></div>'
         f'<p class="destino"><b>{html.escape(d["nombre"])}</b> quiere acceder a tu cuenta de Fynder'
         f' <span>({html.escape(d["host"])})</span></p>')
     if not d["conocido"]:
@@ -202,6 +247,8 @@ def _render_login(rid: str, error: str = "", email: str = "", destino: Optional[
             .replace("__HEADER__", brand.header())
             .replace("__FOOTER__", brand.footer())
             .replace("__FINDY__", brand.FINDY)
+            .replace("__FINDY3D__", brand.findy_3d("enchufe"))
+            .replace("__URL_REGISTRO__", html.escape(f"{brand.frontend_url()}/registro?desde=mcp"))
             .replace("__WA_CLAVE__", html.escape(_WA_CLAVE))
             .replace("__URL_TERMINOS__", html.escape(url_terminos()))
             .replace("__DESCRIBED__", 'aria-describedby="login-error" aria-invalid="true"' if error else "")

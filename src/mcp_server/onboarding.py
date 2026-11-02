@@ -17,7 +17,7 @@ import html
 import os
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 from src.mcp_server import brand
@@ -68,9 +68,17 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "fynder-mcp"})
 
 
-async def favicon(request: Request) -> RedirectResponse:
-    """Ícono del conector/servidor: redirige al logo de Findy."""
-    return RedirectResponse(url=FINDY_ICON, status_code=302)
+_ESTATICOS = os.path.join(os.path.dirname(__file__), "static")
+_ICONOS = {"/favicon.ico": ("favicon.ico", "image/x-icon"), "/favicon.png": ("favicon.png", "image/png"),
+           "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"), "/icon.png": ("fynder-icon-512.png", "image/png")}
+
+
+async def favicon(request: Request) -> FileResponse:
+    """Íconos del conector/servidor: Findy sobre el fondo de la marca (static/, 512 px y tamaños menores).
+    Claude busca el favicon en la raíz al agregar el conector; `icon.png` es el que declara el servidor."""
+    archivo, tipo = _ICONOS[request.url.path]
+    return FileResponse(os.path.join(_ESTATICOS, archivo), media_type=tipo,
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _resumen_planes() -> str:
@@ -105,8 +113,7 @@ def onboarding_routes():
         Route("/connect", home, methods=["GET"]),
         Route("/connect/token", token_endpoint, methods=["POST"]),
         Route("/salud", health, methods=["GET"]),
-        Route("/favicon.ico", favicon, methods=["GET"]),
-        Route("/icon.png", favicon, methods=["GET"]),
+        *[Route(ruta, favicon, methods=["GET"]) for ruta in _ICONOS],
     ]
 
 

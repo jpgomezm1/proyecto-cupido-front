@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import anyio
 import httpx
+from mcp.types import Icon
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.auth.settings import (
     AuthSettings, ClientRegistrationOptions, RevocationOptions,
@@ -124,6 +125,9 @@ _allowed_hosts = list({
 mcp = FastMCP(
     name="Fynder",
     instructions=_INSTRUCTIONS,
+    # Cómo se presenta el conector: el sitio de Fynder y su ícono (Findy), servido por este mismo servidor.
+    website_url="https://getfynder.com",
+    icons=[Icon(src=f"{_base}/icon.png", mimeType="image/png", sizes=["512x512"])],
     # Streamable HTTP sin estado en memoria: cada request es independiente, así
     # funciona con múltiples workers/dynos (Heroku corre 2 workers por defecto).
     # Sin esto, la sesión creada en un worker no la encuentra otro -> 404

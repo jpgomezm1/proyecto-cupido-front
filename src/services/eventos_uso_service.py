@@ -19,7 +19,7 @@ EVENTOS = {
     "cuenta_creada", "celular_verificado",
 }
 # De dónde llegó una cuenta nueva (?desde= en el registro).
-ORIGENES_REGISTRO = {"compartido", "landing", "pagina_agente", "informe", "instagram"}
+ORIGENES_REGISTRO = {"compartido", "landing", "pagina_agente", "informe", "instagram", "mcp"}
 _MAX_LOTE = 30
 
 
